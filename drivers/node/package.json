@@ -1,0 +1,21 @@
+{
+  "name": "rochedb",
+  "version": "0.1.0",
+  "description": "Native Node.js and Bun wire driver for RocheDB",
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=18",
+    "bun": ">=1.2"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "test:bun": "bun test test-bun/*.test.ts"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ]
+}

@@ -1,0 +1,432 @@
+## rochedb_capi — C ABI 層（設計書 §13）
+##
+## ビルド:  nim c --app:lib -d:release -o:lib/librochedb.so src/rochedb_capi.nim
+## ヘッダ:  include/rochedb.h（手書き・本ファイルと1:1対応）
+##
+## 規約:
+##   - ハンドルは不透明ポインタ。ARC 管理の ref を GC_ref/GC_unref で寿命固定。
+##   - roche_id は 24 バイトの値渡し struct（ヘッダと ABI 一致必須）。
+##   - 例外は境界を越えない: すべて捕捉し、エラーはリターンコード / nil で返す。
+##   - roche_get が返すバッファは呼び出し側が roche_free で解放する。
+
+import std/json
+import rochedb
+
+type
+  RocheCId {.exportc: "roche_id", bycopy.} = object
+    parent: uint64
+    epoch: uint32
+    seq: uint32
+    t_write: cdouble
+
+  RocheCHit {.exportc: "roche_hit", bycopy.} = object
+    id: RocheCId
+    score: cdouble
+    payload: pointer
+    payload_len: csize_t
+
+  RocheCRetrieveResult {.exportc: "roche_retrieve_result", bycopy.} = object
+    len: csize_t
+    hits: ptr RocheCHit
+    total_vectors: cint
+    scanned: cint
+    skipped_vectors: cint
+    returned: cint
+    rings_touched: cint
+    payload_bytes: cint
+    estimated_tokens: cint
+    fanout_nodes: cint
+    candidate_reduction: cdouble
+
+  RocheCValue {.exportc: "roche_value", bycopy.} = object
+    data: pointer
+    len: csize_t
+
+  RocheCBatchResult {.exportc: "roche_batch_result", bycopy.} = object
+    len: csize_t
+    values: ptr RocheCValue
+
+const
+  RocheOk = cint(0)
+  RocheErr = cint(-1)
+  RocheAbiVersion = cint(1)
+
+var lastError {.threadvar.}: string
+
+proc NimMain() {.cdecl, importc.}
+
+proc clearError() =
+  lastError = ""
+
+proc setError(msg: string) =
+  lastError = msg
+
+proc setError(e: ref CatchableError) =
+  if e == nil:
+    setError("unknown error")
+  else:
+    setError(e.msg)
+
+proc ensureHandle(h: pointer): RocheDb =
+  if h == nil:
+    raise newException(ValueError, "db handle is nil")
+  cast[RocheDb](h)
+
+proc cstringToString(s: cstring, name: string, allowNil = true): string =
+  if s == nil:
+    if allowNil:
+      return ""
+    raise newException(ValueError, name & " is nil")
+  $s
+
+proc copyStringToShared(s: string): pointer =
+  result = allocShared0(s.len + 1)
+  if s.len > 0:
+    copyMem(result, unsafeAddr s[0], s.len)
+
+proc toC(id: RocheId): RocheCId =
+  let (p, e, s, t) = id.toRaw
+  RocheCId(parent: p, epoch: e, seq: s, t_write: t)
+
+proc fromC(id: RocheCId): RocheId =
+  fromRaw(id.parent, id.epoch, id.seq, id.t_write)
+
+proc optStr(s: cstring): string =
+  if s == nil:
+    ""
+  else:
+    $s
+
+proc roche_abi_version(): cint {.exportc, cdecl, dynlib.} =
+  RocheAbiVersion
+
+proc roche_last_error(): cstring {.exportc, cdecl, dynlib.} =
+  lastError.cstring
+
+proc roche_init() {.exportc, cdecl, dynlib.} =
+  ## 最初に一度呼ぶ（Nim ランタイム初期化）。
+  NimMain()
+
+proc roche_open(nodes: cint): pointer {.exportc, cdecl, dynlib.} =
+  try:
+    clearError()
+    let db = rochedb.open(int(nodes))
+    GC_ref(db)
+    return cast[pointer](db)
+  except CatchableError as e:
+    setError(e)
+    return nil
+
+proc roche_open_dir(nodes: cint, dir: cstring): pointer {.exportc, cdecl, dynlib.} =
+  ## 永続化つきで開く（設計書 §16）。
+  try:
+    clearError()
+    let db = rochedb.open(int(nodes), dataDir = cstringToString(dir, "dir"))
+    GC_ref(db)
+    return cast[pointer](db)
+  except CatchableError as e:
+    setError(e)
+    return nil
+
+proc roche_connect(peers: cstring): pointer {.exportc, cdecl, dynlib.} =
+  ## クラスタへ接続（設計書 §14）。peers = "host:port,host:port,..."
+  try:
+    clearError()
+    let db = rochedb.connect(cstringToString(peers, "peers", allowNil = false))
+    GC_ref(db)
+    return cast[pointer](db)
+  except CatchableError as e:
+    setError(e)
+    return nil
+
+proc roche_connect_auth(peers, username, password, authToken, secretKey,
+                        galaxy: cstring): pointer {.exportc, cdecl, dynlib.} =
+  ## 認証つきクラスタ接続。NULL は空文字として扱う。
+  try:
+    clearError()
+    let db = rochedb.connect(optStr(peers),
+                             username = optStr(username),
+                             password = optStr(password),
+                             authToken = optStr(authToken),
+                             secretKey = optStr(secretKey),
+                             galaxy = optStr(galaxy))
+    GC_ref(db)
+    return cast[pointer](db)
+  except CatchableError as e:
+    setError(e)
+    return nil
+
+proc roche_close(h: pointer) {.exportc, cdecl, dynlib.} =
+  if h != nil:
+    let db = cast[RocheDb](h)
+    try:
+      db.close()
+    except CatchableError as e:
+      setError(e)
+    GC_unref(db)
+
+proc roche_now(h: pointer): cdouble {.exportc, cdecl, dynlib.} =
+  try:
+    clearError()
+    ensureHandle(h).now
+  except CatchableError as e:
+    setError(e)
+    -1.0
+
+proc roche_advance(h: pointer, dt: cdouble) {.exportc, cdecl, dynlib.} =
+  try:
+    clearError()
+    ensureHandle(h).advance(dt)
+  except CatchableError as e:
+    setError(e)
+
+proc roche_ring_configure(h: pointer, ring: cstring,
+                          period: cdouble): cint {.exportc, cdecl, dynlib.} =
+  try:
+    clearError()
+    ensureHandle(h).configureRing(cstringToString(ring, "ring", allowNil = false), period)
+    RocheOk
+  except CatchableError as e:
+    setError(e)
+    RocheErr
+
+proc roche_set_galaxy_description(h: pointer, description: cstring): cint
+                                  {.exportc, cdecl, dynlib.} =
+  try:
+    clearError()
+    ensureHandle(h).setGalaxyDescription(optStr(description))
+    RocheOk
+  except CatchableError as e:
+    setError(e)
+    RocheErr
+
+proc roche_set_ring_description(h: pointer, ring, description: cstring): cint
+                                {.exportc, cdecl, dynlib.} =
+  try:
+    clearError()
+    ensureHandle(h).setRingDescription(cstringToString(ring, "ring", allowNil = false),
+                                       optStr(description))
+    RocheOk
+  except CatchableError as e:
+    setError(e)
+    RocheErr
+
+proc roche_put(h: pointer, ring: cstring, data: pointer, len: csize_t,
+               outId: ptr RocheCId): cint {.exportc, cdecl, dynlib.} =
+  try:
+    clearError()
+    if outId == nil:
+      raise newException(ValueError, "out_id is nil")
+    if len > 0 and data == nil:
+      raise newException(ValueError, "data is nil")
+    var payload = newString(int(len))
+    if len > 0:
+      copyMem(addr payload[0], data, int(len))
+    outId[] = ensureHandle(h).put(payload, cstringToString(ring, "ring", allowNil = false)).toC
+    RocheOk
+  except CatchableError as e:
+    setError(e)
+    RocheErr
+
+proc roche_put_vec(h: pointer, ring: cstring, data: pointer, len: csize_t,
+                   vec: ptr cfloat, vecLen: csize_t,
+                   outId: ptr RocheCId): cint {.exportc, cdecl, dynlib.} =
+  try:
+    clearError()
+    if outId == nil:
+      raise newException(ValueError, "out_id is nil")
+    if len > 0 and data == nil:
+      raise newException(ValueError, "data is nil")
+    if vecLen > 0 and vec == nil:
+      raise newException(ValueError, "vec is nil")
+    var payload = newString(int(len))
+    if len > 0:
+      copyMem(addr payload[0], data, int(len))
+    var values = newSeq[float32](int(vecLen))
+    let rawVec = cast[ptr UncheckedArray[cfloat]](vec)
+    for i in 0 ..< int(vecLen):
+      values[i] = float32(rawVec[i])
+    outId[] = ensureHandle(h).put(payload, cstringToString(ring, "ring", allowNil = false),
+                                  vec = values).toC
+    RocheOk
+  except CatchableError as e:
+    setError(e)
+    RocheErr
+
+proc roche_get(h: pointer, id: RocheCId,
+               outLen: ptr csize_t): pointer {.exportc, cdecl, dynlib.} =
+  ## 見つからなければ nil。返るバッファは roche_free で解放すること。
+  try:
+    clearError()
+    if outLen == nil:
+      raise newException(ValueError, "out_len is nil")
+    let db = ensureHandle(h)
+    let s = db.get(fromC(id))   # 見つからなければ KeyError → nil
+    outLen[] = csize_t(s.len)
+    result = copyStringToShared(s)   # +1: NUL 終端（文字列として扱う C 側の便宜）
+  except CatchableError as e:
+    setError(e)
+    return nil
+
+proc roche_free(p: pointer) {.exportc, cdecl, dynlib.} =
+  if p != nil:
+    deallocShared(p)
+
+proc copyPayloadToShared(s: string): RocheCValue =
+  result.len = csize_t(s.len)
+  result.data = copyStringToShared(s)
+
+proc roche_batch_get(h: pointer, ids: ptr RocheCId,
+                     idsLen: csize_t): ptr RocheCBatchResult
+                     {.exportc, cdecl, dynlib.} =
+  try:
+    clearError()
+    if idsLen > 0 and ids == nil:
+      raise newException(ValueError, "ids is nil")
+    let db = ensureHandle(h)
+    var nimIds = newSeq[RocheId](int(idsLen))
+    let rawIds = cast[ptr UncheckedArray[RocheCId]](ids)
+    for i in 0 ..< int(idsLen):
+      nimIds[i] = fromC(rawIds[i])
+    let values = db.batchGet(nimIds)
+    result = cast[ptr RocheCBatchResult](allocShared0(sizeof(RocheCBatchResult)))
+    result.len = csize_t(values.len)
+    if values.len > 0:
+      let valueBytes = values.len * sizeof(RocheCValue)
+      result.values = cast[ptr RocheCValue](allocShared0(valueBytes))
+      let rawValues = cast[ptr UncheckedArray[RocheCValue]](result.values)
+      for i, value in values:
+        rawValues[i] = copyPayloadToShared(value)
+  except CatchableError as e:
+    setError(e)
+    return nil
+
+proc roche_batch_get_free(r: ptr RocheCBatchResult) {.exportc, cdecl, dynlib.} =
+  if r == nil:
+    return
+  if r.values != nil:
+    let rawValues = cast[ptr UncheckedArray[RocheCValue]](r.values)
+    for i in 0 ..< int(r.len):
+      if rawValues[i].data != nil:
+        deallocShared(rawValues[i].data)
+    deallocShared(r.values)
+  deallocShared(r)
+
+proc roche_query(h: pointer, id: RocheCId, selection: cstring,
+                 outLen: ptr csize_t): pointer {.exportc, cdecl, dynlib.} =
+  ## 選択取得（GraphQL 風, 設計書 §15）。JSON 文字列の複製バッファを返す
+  ## （roche_free で解放）。見つからない/エラー時は nil。
+  try:
+    clearError()
+    if outLen == nil:
+      raise newException(ValueError, "out_len is nil")
+    let db = ensureHandle(h)
+    let s = $db.query(fromC(id), cstringToString(selection, "selection", allowNil = false))
+    outLen[] = csize_t(s.len)
+    result = copyStringToShared(s)
+  except CatchableError as e:
+    setError(e)
+    return nil
+
+proc vecFromC(vec: ptr cfloat, vecLen: csize_t): seq[float32] =
+  if vecLen == 0:
+    return @[]
+  if vec == nil:
+    raise newException(ValueError, "vec is nil")
+  result = newSeq[float32](int(vecLen))
+  let rawVec = cast[ptr UncheckedArray[cfloat]](vec)
+  for i in 0 ..< int(vecLen):
+    result[i] = float32(rawVec[i])
+
+proc roche_retrieve(h: pointer, vec: ptr cfloat, vecLen: csize_t, ring: cstring,
+                    budget, topRings, focus: cint): ptr RocheCRetrieveResult
+                    {.exportc, cdecl, dynlib.} =
+  try:
+    clearError()
+    let db = ensureHandle(h)
+    let q = vecFromC(vec, vecLen)
+    let rr = db.retrieveWithStats(q, ring = optStr(ring),
+                                  budget = int(budget),
+                                  topRings = int(topRings),
+                                  focus = int(focus))
+    result = cast[ptr RocheCRetrieveResult](allocShared0(sizeof(RocheCRetrieveResult)))
+    result.len = csize_t(rr.hits.len)
+    result.total_vectors = cint(rr.stats.totalVectors)
+    result.scanned = cint(rr.stats.scanned)
+    result.skipped_vectors = cint(rr.stats.skippedVectors)
+    result.returned = cint(rr.stats.returned)
+    result.rings_touched = cint(rr.stats.ringsTouched)
+    result.payload_bytes = cint(rr.stats.payloadBytes)
+    result.estimated_tokens = cint(rr.stats.estimatedTokens)
+    result.fanout_nodes = cint(rr.stats.fanoutNodes)
+    result.candidate_reduction = cdouble(rr.stats.candidateReduction)
+    if rr.hits.len > 0:
+      let hitBytes = rr.hits.len * sizeof(RocheCHit)
+      result.hits = cast[ptr RocheCHit](allocShared0(hitBytes))
+      let rawHits = cast[ptr UncheckedArray[RocheCHit]](result.hits)
+      for i, hit in rr.hits:
+        rawHits[i].id = hit.id.toC
+        rawHits[i].score = cdouble(hit.score)
+        rawHits[i].payload_len = csize_t(hit.payload.len)
+        rawHits[i].payload = allocShared0(hit.payload.len + 1)
+        if hit.payload.len > 0:
+          copyMem(rawHits[i].payload, unsafeAddr hit.payload[0], hit.payload.len)
+  except CatchableError as e:
+    setError(e)
+    return nil
+
+proc roche_retrieve_free(r: ptr RocheCRetrieveResult) {.exportc, cdecl, dynlib.} =
+  if r == nil:
+    return
+  if r.hits != nil:
+    let rawHits = cast[ptr UncheckedArray[RocheCHit]](r.hits)
+    for i in 0 ..< int(r.len):
+      if rawHits[i].payload != nil:
+        deallocShared(rawHits[i].payload)
+    deallocShared(r.hits)
+  deallocShared(r)
+
+proc roche_atlas(h: pointer, queryVec: ptr cfloat, queryVecLen: csize_t,
+                 maxCentroidDims: cint, outLen: ptr csize_t): pointer
+                 {.exportc, cdecl, dynlib.} =
+  try:
+    clearError()
+    if outLen == nil:
+      raise newException(ValueError, "out_len is nil")
+    let db = ensureHandle(h)
+    let q = vecFromC(queryVec, queryVecLen)
+    let maxDims = if maxCentroidDims < 0: 0 else: int(maxCentroidDims)
+    let s = $db.atlas(q, maxCentroidDims = maxDims)
+    outLen[] = csize_t(s.len)
+    result = copyStringToShared(s)
+  except CatchableError as e:
+    setError(e)
+    return nil
+
+proc roche_locate(h: pointer, id: RocheCId,
+                  at: cdouble): cint {.exportc, cdecl, dynlib.} =
+  ## at < 0 で「現在」。失敗時 -1。
+  try:
+    clearError()
+    cint(ensureHandle(h).locate(fromC(id), at))
+  except CatchableError as e:
+    setError(e)
+    RocheErr
+
+proc roche_next_visit(h: pointer, id: RocheCId,
+                      node: cint): cdouble {.exportc, cdecl, dynlib.} =
+  try:
+    clearError()
+    ensureHandle(h).nextVisit(fromC(id), int(node))
+  except CatchableError as e:
+    setError(e)
+    -1.0
+
+proc roche_next_join(h: pointer, a, b: RocheCId): cdouble {.exportc, cdecl, dynlib.} =
+  ## 会合しない場合は -1。
+  try:
+    clearError()
+    ensureHandle(h).nextJoin(fromC(a), fromC(b))
+  except CatchableError as e:
+    setError(e)
+    -1.0

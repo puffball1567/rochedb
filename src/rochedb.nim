@@ -1,0 +1,2245 @@
+## RocheDB — 公開 API（設計書 §13–§16）
+##
+## 学習コスト最小の表面。まずこの3語だけで使い始められる:
+##
+## ```nim
+## var db = rochedb.open()          # 組み込み（単一プロセス）
+## let id = db.put("hello")
+## echo db.get(id)
+## ```
+##
+## そのままの API でスケールアウトできる（サーバは roched を並べるだけ）:
+##
+## ```nim
+## var db = connect("10.0.0.1:7301,10.0.0.2:7301,10.0.0.3:7301")
+## let id = db.put(%*{"title": "..", "author": {"name": ".."}}, ring = "docs")
+## echo db.query(id, "{ title author { name } }")   # 必要な形だけ取得（サーバ側で射影）
+## echo db.locate(id)                # 今どのノードか — どのモードでも問い合わせゼロ
+## echo db.locate(id, at = 120.0)    # 未来の所在も計算できる（ephemeris）
+## ```
+##
+## 永続化は open/サーバ起動時にディレクトリを渡すだけ:
+## `rochedb.open(dataDir = "/var/lib/roche")` / `roched --data=DIR`
+
+import std/[algorithm, tables, hashes, json, times, strutils, os]
+import roche/[core, store, select, wire, field, vector_backend, faiss_backend,
+              planner_backend]
+
+export vector_backend
+export faiss_backend
+export planner_backend
+
+type
+  RocheDurability* = StoreDurability
+
+  RocheId* = object
+    ## 不透明ID。put が返し、get/query/locate に渡す。中身に触る必要はない。
+    ## （内部的には自己記述の軌道要素 = 設計書 §2.2。この ID だけで所在計算が閉じる）
+    parent: uint64
+    epoch: uint32
+    seq: uint32
+    tWrite: float
+
+  RingInfo = object
+    period: float
+    headAngle: float
+
+  Mode = enum
+    mEmbedded, mCluster
+
+  RetrievalTuning* = object
+    ## 内部 tuning knob。通常は SearchProfile を使う。
+    budget*: int
+    focus*: int
+    topRings*: int
+    branchBudget*: int
+    maxDepth*: int
+    includeChildren*: bool
+    note*: string
+
+  SearchScope* = enum
+    ssTight        ## 指定 ring 中心。短く速い
+    ssNear         ## 近い周辺 ring まで
+    ssWide         ## 広めに関連 ring を見る
+    ssAll          ## recall 優先でかなり広く見る
+
+  SearchDepth* = enum
+    sdShallow      ## 子階層へ降りない
+    sdNormal       ## 標準。現状は shallow と同じ
+    sdDeep         ## 子 ring も辿る
+    sdVeryDeep     ## 深い階層まで辿る
+
+  ResultAmount* = enum
+    raFew          ## 少数だけ返す
+    raNormal       ## 標準量
+    raMany         ## 多めに返す
+    raAllUseful    ## 有用そうなものを多めに残す
+
+  SearchProfile* = object
+    ## 人間向けの retrieval tuning profile。
+    ## RDB の optimizer hint を、RocheDB では自然な語彙で表す。
+    amount*: ResultAmount
+    scope*: SearchScope
+    depth*: SearchDepth
+    note*: string
+
+  WarpStatus* = enum
+    wsPending       ## 登録済み。まだ処理されていない
+    wsRunning       ## step 処理中または途中まで処理済み
+    wsDone          ## 指定 ring をすべて処理済み
+    wsFailed        ## 処理中に失敗した。retryAt 以降に再試行できる
+    wsDeadLetter    ## retry budget を使い切った
+
+  WarpJob* = object
+    ## ring-scoped delayed batch update。
+    ## JOIN ではなく、指定 ring 群を登録順に少しずつ走査して条件一致 document に patch を落とす。
+    id*: uint64
+    rings*: seq[string]
+    whereField*: string
+    equals*: JsonNode
+    patch*: JsonNode
+    status*: WarpStatus
+    ringIndex*: int
+    cursor*: string
+    scanned*: int
+    matched*: int
+    updated*: int
+    attempts*: int
+    maxAttempts*: int
+    retryAt*: float
+    acknowledged*: bool
+    error*: string
+
+  RocheDb* = ref object
+    ## DB ハンドル。所有は木構造（循環なし）— ARC 制約（設計書 §13.3）。
+    mode: Mode
+    tbl: ArcTable
+    rings: Table[uint64, RingInfo]
+    ringNames: Table[string, uint64]
+    ringKeyNames: Table[uint64, string]
+    ringDescriptions: Table[uint64, string]
+    ringChildren: Table[uint64, seq[uint64]]
+    retrievalTunings: Table[string, RetrievalTuning]
+    searchProfiles: Table[string, SearchProfile]
+    lastRingName: string        # 1エントリキャッシュ（putのホットパス最適化, §16.2）
+    lastRingKey: uint64
+    # embedded
+    clock: float
+    st: Store
+    vectorBackend: VectorBackend
+    plannerBackend: PlannerBackend
+    # cluster
+    client: ClusterClient
+    galaxy: string
+    galaxyDescription: string
+    # delayed maintenance jobs
+    nextWarpId: uint64
+    warpJobs: seq[WarpJob]
+
+  GalaxyRouter* = ref object
+    galaxies: Table[string, RocheDb]
+
+  RocheTx* = ref object
+    ## embedded は単一 Store atomic transaction。
+    ## cluster は node0 landing zone への atomic intent commit。
+    db: RocheDb
+    tx: StoreTxn
+    clusterTxId: uint64
+    clusterOps: seq[TxWireOp]
+    closed: bool
+
+  RocheHit* = object
+    ## retrieve の候補。score は cosine similarity（高いほど近い）。
+    id*: RocheId
+    score*: float
+    payload*: string
+
+  RocheRecord* = object
+    ## ORM / driver が listByRing で扱う薄い record。
+    id*: RocheId
+    payload*: string
+
+  WarpStepResult* = object
+    job*: WarpJob
+    scanned*: int
+    matched*: int
+    updated*: int
+
+  RocheListPage* = object
+    ## cursor pagination の結果。nextCursor が空なら次ページなし。
+    items*: seq[RocheRecord]
+    nextCursor*: string
+
+  RetrieveStats* = object
+    totalVectors*: int
+    scanned*: int
+    skippedVectors*: int
+    returned*: int
+    ringsTouched*: int
+    payloadBytes*: int
+    estimatedTokens*: int
+    fanoutNodes*: int
+    candidateReduction*: float
+
+  RetrievalPlan* = object
+    ## SQL の実行計画に相当する retrieval tuning surface。
+    ## 物理配置は変えず、この計画だけを変えて消費量/recall を調整する。
+    strategy*: string
+    profile*: string
+    baseRing*: string
+    amount*: string
+    scope*: string
+    depth*: string
+    ringScoped*: bool
+    budget*: int
+    focus*: int
+    topRings*: int
+    effectiveTopRings*: int
+    branchBudget*: int
+    maxDepth*: int
+    includeChildren*: bool
+    reason*: string
+    selectedRings*: seq[string]
+    prunedRings*: seq[string]
+    ringFeatures*: seq[RingPlanCandidate]
+
+  RingMetric* = object
+    ringKey*: uint64
+    count*: int
+    coherence*: float
+
+  RocheRingSummary* = object
+    ringKey*: uint64
+    count*: int
+    centroid*: seq[float32]
+    score*: float
+    coherence*: float
+    massG*: float
+
+  RetrievalEnvelopeOptions* = object
+    ## RAG / MCP adapter に渡す retrieval envelope の補助メタデータ。
+    provider*: string
+    galaxy*: string
+    ring*: string
+    backend*: string
+    mode*: string
+    requestId*: string
+    correlationId*: string
+    sourceType*: string
+    resourceKind*: string
+    resourceScope*: string
+    retentionClass*: string
+    contextReusable*: bool
+    dataLabel*: string
+    plan*: RetrievalPlan
+
+  CompactStats* = StoreCompactStats
+  BackupStats* = StoreBackupStats
+
+  DumpStats* = object
+    bytes*: BiggestInt
+    records*: int
+    rings*: int
+    documents*: int
+    destination*: string
+
+  ImportStats* = object
+    read*: int
+    imported*: int
+    skipped*: int
+    errors*: int
+    rings*: int
+    source*: string
+    defaultRing*: string
+
+const
+  durBuffered* = store.durBuffered
+  durStrong* = store.durStrong
+  DefaultPeriod = 60.0
+  RetrievalEnvelopeSchema* = "rochedb.retrieval.v1"
+  RetrievalEnvelopeVersion* = 1
+  AtlasSchema* = "rochedb.atlas.v1"
+  AtlasVersion* = 1
+
+proc parentRingName(name: string): string
+proc addRingChild(db: RocheDb, parent, child: uint64)
+proc ringNameOf(db: RocheDb, key: uint64): string
+proc ringKey(db: RocheDb, name: string, persist = true): uint64
+proc ringKeyForRead(db: RocheDb, ring: string): uint64
+proc put*(db: RocheDb, payload: string, ring: string = "default",
+          vec: seq[float32] = @[]): RocheId
+
+proc defaultRetrievalTuning*(): RetrievalTuning =
+  RetrievalTuning(budget: 8, focus: 0, topRings: 0, branchBudget: 0,
+                  maxDepth: 0, includeChildren: false, note: "default")
+
+proc defaultSearchProfile*(): SearchProfile =
+  SearchProfile(amount: raNormal, scope: ssTight, depth: sdNormal,
+                note: "default")
+
+proc tuningFromSearchProfile*(profile: SearchProfile): RetrievalTuning =
+  case profile.amount
+  of raFew:
+    result.budget = 3
+  of raNormal:
+    result.budget = 8
+  of raMany:
+    result.budget = 16
+  of raAllUseful:
+    result.budget = 32
+
+  case profile.scope
+  of ssTight:
+    result.focus = 0
+    result.topRings = 0
+  of ssNear:
+    result.focus = 15
+    result.topRings = 0
+  of ssWide:
+    result.focus = 45
+    result.topRings = 0
+  of ssAll:
+    result.focus = 90
+    result.topRings = 0
+
+  case profile.depth
+  of sdShallow:
+    result.includeChildren = false
+    result.maxDepth = 0
+    result.branchBudget = 0
+  of sdNormal:
+    result.includeChildren = false
+    result.maxDepth = 0
+    result.branchBudget = 0
+  of sdDeep:
+    result.includeChildren = true
+    result.maxDepth = 2
+    result.branchBudget = 4
+  of sdVeryDeep:
+    result.includeChildren = true
+    result.maxDepth = 4
+    result.branchBudget = 8
+  result.note = profile.note
+
+# ---------------------------------------------------------------- 開閉と時計
+
+proc open*(nodes: int = 8, dataDir: string = "",
+           durability: RocheDurability = durBuffered): RocheDb =
+  ## 組み込みモードで開く。dataDir を渡すと追記ログに永続化され、
+  ## 再オープン時に中身と時計が復元される。
+  result = RocheDb(mode: mEmbedded,
+                   tbl: ArcTable(epoch: 1, nNodes: uint16(nodes)),
+                   st: openStore(dataDir, durability = durability),
+                   vectorBackend: newExactVectorBackend(),
+                   plannerBackend: newHeuristicPlannerBackend())
+  result.clock = result.st.maxTWrite   # 再開時: 時計を巻き戻さない
+  for key, meta in result.st.ringMeta:
+    result.rings[key] = RingInfo(period: meta.period, headAngle: meta.head)
+  for key, name in result.st.ringNames:
+    result.ringNames[name] = key
+    result.ringKeyNames[key] = name
+  for key, desc in result.st.ringDescriptions:
+    result.ringDescriptions[key] = desc
+  result.galaxyDescription = result.st.galaxyDescription
+  for _, blob in result.st.warpJobs:
+    let raw = parseJson(blob)
+    var rings: seq[string] = @[]
+    for item in raw["rings"]:
+      rings.add item.getStr()
+    let status =
+      case raw{"status"}.getStr("wsPending")
+      of "wsPending": wsPending
+      of "wsRunning": wsRunning
+      of "wsDone": wsDone
+      of "wsFailed": wsFailed
+      of "wsDeadLetter": wsDeadLetter
+      else: wsPending
+    let job = WarpJob(
+      id: raw["id"].getInt().uint64,
+      rings: rings,
+      whereField: raw["whereField"].getStr(),
+      equals: raw["equals"],
+      patch: raw["patch"],
+      status: status,
+      ringIndex: raw{"ringIndex"}.getInt(),
+      cursor: raw{"cursor"}.getStr(),
+      scanned: raw{"scanned"}.getInt(),
+      matched: raw{"matched"}.getInt(),
+      updated: raw{"updated"}.getInt(),
+      attempts: raw{"attempts"}.getInt(),
+      maxAttempts: raw{"maxAttempts"}.getInt(8),
+      retryAt: raw{"retryAt"}.getFloat(),
+      acknowledged: raw{"acknowledged"}.getBool(),
+      error: raw{"error"}.getStr())
+    result.warpJobs.add job
+    result.nextWarpId = max(result.nextWarpId, job.id)
+  for key, name in result.st.ringNames:
+    let parentName = parentRingName(name)
+    if parentName.len > 0 and parentName in result.ringNames:
+      result.addRingChild(result.ringNames[parentName], key)
+  for _, p in result.st.items:
+    result.vectorBackend.upsert p
+
+proc connect*(peers: string, username: string = "", password: string = "",
+              authToken: string = "", secretKey: string = "",
+              galaxy: string = ""): RocheDb =
+  ## クラスタモードで開く。peers = "host:port,host:port,..."（roched の並び順）。
+  ## 時計は wall clock。API は open() と同じに使える。
+  let ps = parsePeers(peers)
+  RocheDb(mode: mCluster,
+          tbl: ArcTable(epoch: 1, nNodes: uint16(ps.len)),
+          client: newClusterClient(ps, username = username,
+                                   password = password,
+                                   authToken = authToken,
+                                   secretKey = secretKey,
+                                   galaxy = galaxy),
+          plannerBackend: newHeuristicPlannerBackend(),
+          galaxy: galaxy)
+
+proc openGalaxyRouter*(): GalaxyRouter =
+  GalaxyRouter()
+
+proc close*(db: RocheDb)
+
+proc addGalaxy*(r: GalaxyRouter, name, peers: string,
+                username: string = "", password: string = "",
+                authToken: string = "", secretKey: string = "") =
+  r.galaxies[name] = connect(peers, username = username, password = password,
+                             authToken = authToken, secretKey = secretKey,
+                             galaxy = name)
+
+proc galaxy*(r: GalaxyRouter, name: string): RocheDb =
+  r.galaxies[name]
+
+proc close*(r: GalaxyRouter) =
+  for _, db in r.galaxies:
+    db.close()
+  r.galaxies.clear()
+
+proc close*(db: RocheDb) =
+  ## 後始末（永続化のフラッシュ・接続クローズ）。
+  case db.mode
+  of mEmbedded: db.st.close()
+  of mCluster: db.client.close()
+
+proc setGalaxyDescription*(db: RocheDb, description: string) =
+  ## Atlas に出す galaxy の説明。payload 本文ではなく探索前の案内文として使う。
+  db.galaxyDescription = description
+  if db.mode == mEmbedded:
+    db.st.putGalaxyDescription(description)
+
+proc getGalaxyDescription*(db: RocheDb): string =
+  db.galaxyDescription
+
+proc setRingDescription*(db: RocheDb, ring, description: string) =
+  ## Atlas に出す ring の説明。ring が未作成なら軽いメタデータとして作成する。
+  let key = db.ringKey(ring)
+  if description.len == 0:
+    db.ringDescriptions.del key
+  else:
+    db.ringDescriptions[key] = description
+  if db.mode == mEmbedded:
+    db.st.putRingDescription(key, description)
+
+proc getRingDescription*(db: RocheDb, ring: string): string =
+  let key = db.ringKeyForRead(ring)
+  if key == 0'u64:
+    ""
+  else:
+    db.ringDescriptions.getOrDefault(key, "")
+
+proc compact*(db: RocheDb): CompactStats =
+  ## 組み込み永続 Store の WAL を生存レコードだけに再構築する。
+  ## cluster 接続では各 roched 側の管理操作として実行する。
+  if db.mode != mEmbedded:
+    raise newException(ValueError, "cluster connection cannot compact remote stores")
+  db.st.compact()
+
+proc backup*(db: RocheDb, dstDir: string): BackupStats =
+  ## 現在の embedded Store 状態を compact 済み WAL として dstDir に退避する。
+  if db.mode != mEmbedded:
+    raise newException(ValueError, "cluster connection cannot backup remote stores")
+  db.st.backup(dstDir)
+
+proc backupEncrypted*(db: RocheDb, dstDir, passphrase: string): BackupStats =
+  ## 現在の embedded Store 状態を encrypted compact snapshot として dstDir に退避する。
+  if db.mode != mEmbedded:
+    raise newException(ValueError, "cluster connection cannot backup remote stores")
+  db.st.backupEncrypted(dstDir, passphrase)
+
+proc restoreBackup*(backupDir, dataDir: string, overwrite = false): BackupStats =
+  ## backupDir の WAL を dataDir へ復元する。dataDir が既存の場合は overwrite が必要。
+  store.restoreBackup(backupDir, dataDir, overwrite = overwrite)
+
+proc restoreEncryptedBackup*(backupDir, dataDir, passphrase: string,
+                             overwrite = false): BackupStats =
+  ## backupDir の encrypted backup を dataDir へ復元する。
+  store.restoreEncryptedBackup(backupDir, dataDir, passphrase,
+                               overwrite = overwrite)
+
+proc writeDumpLine(outFile: File, node: JsonNode): BiggestInt =
+  let line = $node
+  outFile.write(line)
+  outFile.write("\n")
+  line.len + 1
+
+proc dump*(db: RocheDb, path: string = "", includeVectors = true): DumpStats =
+  ## embedded DB を JSON Lines として dump する。
+  ## backup/restore は復旧用、dump は監査・移行・デバッグ用の可読 export。
+  if db.mode != mEmbedded:
+    raise newException(ValueError, "cluster connection cannot dump remote stores")
+
+  var outFile: File
+  let toStdout = path.len == 0 or path == "-"
+  if toStdout:
+    outFile = stdout
+    result.destination = "stdout"
+  else:
+    let parent = parentDir(path)
+    if parent.len > 0:
+      createDir(parent)
+    outFile = open(path, fmWrite)
+    result.destination = path
+
+  try:
+    result.bytes += writeDumpLine(outFile, %*{
+      "type": "meta",
+      "format": "rochedb.dump.v1",
+      "galaxy": db.st.galaxy,
+      "epoch": db.tbl.epoch,
+      "nodes": db.tbl.nNodes,
+      "documents": db.st.items.len,
+      "rings": db.rings.len
+    })
+    inc result.records
+    for ringKey, info in db.rings:
+      result.bytes += writeDumpLine(outFile, %*{
+        "type": "ring",
+        "key": $ringKey,
+        "name": db.ringNameOf(ringKey),
+        "period": info.period,
+        "head": info.headAngle
+      })
+      inc result.records
+      inc result.rings
+    for _, p in db.st.items:
+      var doc = %*{
+        "type": "document",
+        "id": $(RocheId(parent: p.parent, epoch: db.tbl.epoch,
+                       seq: p.seq, tWrite: p.tWrite)),
+        "parent": $p.parent,
+        "seq": p.seq,
+        "epoch": db.tbl.epoch,
+        "tWrite": p.tWrite,
+        "ring": db.ringNameOf(p.parent),
+        "period": p.period,
+        "head": p.head,
+        "payload": p.payload
+      }
+      if includeVectors:
+        doc["vec"] = %p.vec
+      result.bytes += writeDumpLine(outFile, doc)
+      inc result.records
+      inc result.documents
+  finally:
+    if not toStdout:
+      outFile.close()
+
+proc jsonPath(node: JsonNode, path: string): JsonNode =
+  if path.len == 0:
+    return node
+  result = node
+  for part in path.split('.'):
+    if result.isNil or result.kind != JObject or not result.hasKey(part):
+      return nil
+    result = result[part]
+
+proc pathString(node: JsonNode, path: string): string =
+  let v = jsonPath(node, path)
+  if v.isNil:
+    return ""
+  case v.kind
+  of JString:
+    v.getStr()
+  of JInt:
+    $v.getInt()
+  of JFloat:
+    $v.getFloat()
+  of JBool:
+    $v.getBool()
+  else:
+    ""
+
+proc pathPayload(node: JsonNode, path: string): string =
+  let v = jsonPath(node, path)
+  if v.isNil:
+    return ""
+  if v.kind == JString: v.getStr() else: $v
+
+proc pathVector(node: JsonNode, path: string): seq[float32] =
+  if path.len == 0:
+    return @[]
+  let v = jsonPath(node, path)
+  if v.isNil or v.kind != JArray:
+    return @[]
+  for item in v:
+    case item.kind
+    of JInt:
+      result.add float32(item.getInt())
+    of JFloat:
+      result.add float32(item.getFloat())
+    else:
+      return @[]
+
+proc importJsonl*(db: RocheDb, path: string, defaultRing = "imported",
+                  ringField = "", ringPrefix = "", payloadField = "",
+                  vecField = "", maxRecords = 0): ImportStats =
+  ## JSON Lines を読み込み、ringField の値で ring に割り振りながら保存する。
+  ## MongoDB export のような 1 行 1 JSON ドキュメントの移行入口。
+  if db.mode != mEmbedded:
+    raise newException(ValueError, "cluster connection cannot import JSONL directly")
+  if path.len == 0:
+    raise newException(ValueError, "import path is empty")
+  result.source = path
+  result.defaultRing = defaultRing
+  var seenRings = initTable[string, bool]()
+  for line in lines(path):
+    if maxRecords > 0 and result.read >= maxRecords:
+      break
+    inc result.read
+    let trimmed = line.strip()
+    if trimmed.len == 0:
+      inc result.skipped
+      continue
+    try:
+      let node = parseJson(trimmed)
+      var ring =
+        if ringField.len > 0: pathString(node, ringField) else: ""
+      if ring.len == 0:
+        ring = defaultRing
+      if ringPrefix.len > 0:
+        ring = ringPrefix & ring
+      let payload = pathPayload(node, payloadField)
+      if payload.len == 0:
+        inc result.skipped
+        continue
+      discard db.put(payload, ring = ring, vec = pathVector(node, vecField))
+      seenRings[ring] = true
+      inc result.imported
+    except CatchableError:
+      inc result.errors
+  result.rings = seenRings.len
+
+proc clampTopRings*(topRings: int): int
+
+proc configureVectorBackend*(db: RocheDb, kind: VectorBackendKind) =
+  ## 組み込みモードの vector backend を選ぶ。
+  ## vbExact は依存なしの全走査。vbFaiss は production 想定の dynamic backend。
+  doAssert db.mode == mEmbedded, "configureVectorBackend は組み込みモード専用"
+  case kind
+  of vbExact:
+    db.vectorBackend = newExactVectorBackend()
+    for _, p in db.st.items:
+      db.vectorBackend.upsert p
+  of vbFaiss:
+    db.vectorBackend = newFaissVectorBackend()
+    for _, p in db.st.items:
+      db.vectorBackend.upsert p
+
+proc configurePlannerBackend*(db: RocheDb, kind: PlannerBackendKind) =
+  ## retrieval planner backend を選ぶ。
+  ## RocheDB core は deterministic heuristic planner を使う。
+  case kind
+  of pbHeuristic:
+    db.plannerBackend = newHeuristicPlannerBackend()
+
+proc sanitizeRetrievalTuning(t: RetrievalTuning): RetrievalTuning =
+  result = t
+  result.budget = max(1, t.budget)
+  result.focus = max(0, min(100, t.focus))
+  result.topRings = clampTopRings(t.topRings)
+  result.branchBudget = max(0, t.branchBudget)
+  result.maxDepth = max(0, t.maxDepth)
+
+proc configureRetrievalTuning*(db: RocheDb, profile: string,
+                               tuning: RetrievalTuning) =
+  ## SQL tuning profile のように retrieval 既定値を名前付きで登録する。
+  ## 例: "latency", "recall", "rag-low-token"。
+  if profile.len == 0:
+    raise newException(ValueError, "retrieval tuning profile name is empty")
+  db.retrievalTunings[profile] = sanitizeRetrievalTuning(tuning)
+
+proc configureSearchProfile*(db: RocheDb, name: string,
+                             profile: SearchProfile) =
+  ## 人間向けの検索 profile を登録する。
+  ## 例: amount=raFew, scope=ssTight, depth=sdShallow。
+  if name.len == 0:
+    raise newException(ValueError, "search profile name is empty")
+  db.searchProfiles[name] = profile
+  db.configureRetrievalTuning(name, profile.tuningFromSearchProfile())
+
+proc retrievalTuning*(db: RocheDb, profile = "default"): RetrievalTuning =
+  if profile in db.retrievalTunings:
+    db.retrievalTunings[profile]
+  else:
+    defaultRetrievalTuning()
+
+proc nowT(db: RocheDb): float {.inline.} =
+  case db.mode
+  of mEmbedded: db.clock
+  of mCluster: epochTime()
+
+proc now*(db: RocheDb): float =
+  ## DB 時計の現在時刻 [s]。組み込み=手動クロック、クラスタ=実時間。
+  db.nowT
+
+proc advance*(db: RocheDb, dt: float) =
+  ## 時計を dt 秒進める（組み込みモード専用。クラスタは実時間で回る）。
+  doAssert db.mode == mEmbedded, "advance は組み込みモード専用（クラスタは実時間）"
+  db.clock += dt
+
+# ---------------------------------------------------------------- 内部
+
+proc parentRingName(name: string): string =
+  let pos = name.rfind('/')
+  if pos <= 0: "" else: name[0 ..< pos]
+
+proc addRingChild(db: RocheDb, parent, child: uint64) =
+  var children = db.ringChildren.getOrDefault(parent, @[])
+  if child notin children:
+    children.add child
+    db.ringChildren[parent] = children
+
+proc ringKey(db: RocheDb, name: string, persist = true): uint64 =
+  if name == "halo":
+    result = HaloKey
+    if result notin db.rings:
+      db.rings[result] = RingInfo(period: HaloPeriod, headAngle: 0.0)
+    if persist and db.mode == mEmbedded and result notin db.st.ringMeta:
+      db.st.putRingMeta(result, db.rings[result].period, db.rings[result].headAngle)
+    if persist and db.mode == mEmbedded:
+      db.st.putRingName(result, name)
+    db.ringNames[name] = result
+    db.ringKeyNames[result] = name
+    db.lastRingName = name
+    db.lastRingKey = result
+    return
+  if name == db.lastRingName:
+    result = db.lastRingKey
+    if persist and db.mode == mEmbedded and result in db.rings and
+        result notin db.st.ringMeta:
+      db.st.putRingMeta(result, db.rings[result].period, db.rings[result].headAngle)
+    return
+  if name in db.ringNames:
+    result = db.ringNames[name]
+  else:
+    result = uint64(hash(name)) or 1'u64   # 0 を避ける
+    db.ringNames[name] = result
+    db.ringKeyNames[result] = name
+    if db.mode == mEmbedded and persist:
+      db.st.putRingName(result, name)
+    if result notin db.rings:
+      # ヘッド角は名前から決定論的に散らす（環ごとに書き込み先ノードが分散する）
+      let info = RingInfo(period: DefaultPeriod,
+                          headAngle: float(result mod 628) / 100.0)
+      db.rings[result] = info
+      if db.mode == mEmbedded and persist:
+        db.st.putRingMeta(result, info.period, info.headAngle)
+    elif persist and db.mode == mEmbedded and result notin db.st.ringMeta:
+      db.st.putRingMeta(result, db.rings[result].period, db.rings[result].headAngle)
+  let parentName = parentRingName(name)
+  if parentName.len > 0:
+    let parentKey = db.ringKey(parentName, persist)
+    db.addRingChild(parentKey, result)
+  db.lastRingName = name
+  db.lastRingKey = result
+
+proc orbitOf(db: RocheDb, id: RocheId): Orbit =
+  let ri = db.rings[id.parent]
+  OrbitalId(parent: id.parent, epoch: id.epoch, tWrite: id.tWrite, seq: id.seq)
+    .ringOrbit(ri.period, ri.headAngle)
+
+# ---------------------------------------------------------------- 設定と書き込み
+
+proc configureRing*(db: RocheDb, ring: string, period: float) =
+  ## 環の公転周期を設定（省略時 60s）。JOIN したい2環は 1:2 等の整数比にすると
+  ## 会合が規則化される（設計書 §8）。put より先に呼ぶこと（周期は ID の意味を変える）。
+  let key = db.ringKey(ring)
+  db.rings[key].period = period
+  if db.mode == mEmbedded:
+    db.st.putRingMeta(key, period, db.rings[key].headAngle)
+
+proc put*(db: RocheDb, payload: string, ring: string = "default",
+          vec: seq[float32] = @[]): RocheId =
+  ## 書き込み。環は初回利用時に自動作成。
+  ## 返る ID を持っていれば、所在は誰にも問い合わせずいつでも計算できる。
+  let key = db.ringKey(ring)
+  let ri = db.rings[key]
+  let normVec = vec.normalize()
+  case db.mode
+  of mEmbedded:
+    let seq = db.st.nextSeq(key)
+    result = RocheId(parent: key, epoch: db.tbl.epoch, seq: seq, tWrite: db.clock)
+    let p = Particle(parent: key, seq: seq, period: ri.period,
+                     head: ri.headAngle, tWrite: db.clock, payload: payload,
+                     vec: normVec)
+    db.st.upsert p
+    db.vectorBackend.upsert p
+  of mCluster:
+    # 書き込み先 = 環ヘッド角の所有ノード（決定論的 write leader, §7 の最小版）
+    let node = int(db.tbl.owner(ri.headAngle))
+    let (seq, tWrite) = db.client.putReq(node, key, ri.period, ri.headAngle, payload, normVec)
+    result = RocheId(parent: key, epoch: db.tbl.epoch, seq: seq, tWrite: tWrite)
+
+proc put*(db: RocheDb, doc: JsonNode, ring: string = "default",
+          vec: seq[float32] = @[]): RocheId =
+  ## 構造化ドキュメントの書き込み。query（選択取得）の対象になる。
+  db.put($doc, ring, vec)
+
+# ---------------------------------------------------------------- トランザクション
+
+proc beginTransaction*(db: RocheDb): RocheTx =
+  ## transaction を開始する。
+  ## embedded: 単一 Store atomic transaction。
+  ## cluster: node0 landing zone に commit intent を置き、各 owner へ非同期 apply。
+  case db.mode
+  of mEmbedded:
+    RocheTx(db: db, tx: db.st.beginTxn())
+  of mCluster:
+    RocheTx(db: db, clusterTxId: db.client.txBeginReq(0))
+
+proc put*(tx: RocheTx, payload: string, ring: string = "default",
+          vec: seq[float32] = @[]): RocheId =
+  ## transaction 内の書き込み。commit まで DB 本体には見えない。
+  doAssert not tx.closed, "transaction is closed"
+  let key = tx.db.ringKey(ring, persist = false)
+  let ri = tx.db.rings[key]
+  let normVec = vec.normalize()
+  case tx.db.mode
+  of mEmbedded:
+    if key notin tx.db.st.ringMeta:
+      tx.tx.putRingMeta(key, ri.period, ri.headAngle)
+    let seq = tx.db.st.nextSeq(key)
+    result = RocheId(parent: key, epoch: tx.db.tbl.epoch, seq: seq, tWrite: tx.db.clock)
+    tx.tx.upsert Particle(parent: key, seq: seq, period: ri.period,
+                          head: ri.headAngle, tWrite: tx.db.clock,
+                          payload: payload, vec: normVec)
+  of mCluster:
+    let (seq, tWrite) = tx.db.client.txReserveReq(0, tx.clusterTxId, key,
+                                                  ri.period, ri.headAngle)
+    result = RocheId(parent: key, epoch: tx.db.tbl.epoch, seq: seq, tWrite: tWrite)
+    tx.clusterOps.add TxWireOp(parent: key, seq: seq, period: ri.period,
+                               head: ri.headAngle, tWrite: tWrite,
+                               payload: payload, vec: normVec)
+
+proc put*(tx: RocheTx, doc: JsonNode, ring: string = "default",
+          vec: seq[float32] = @[]): RocheId =
+  tx.put($doc, ring, vec)
+
+proc remove*(tx: RocheTx, id: RocheId) =
+  ## transaction 内の削除。commit まで DB 本体には反映されない。
+  doAssert not tx.closed, "transaction is closed"
+  case tx.db.mode
+  of mEmbedded:
+    tx.tx.remove(id.parent, id.seq)
+  of mCluster:
+    let ri = tx.db.rings[id.parent]
+    tx.clusterOps.add TxWireOp(delete: true, parent: id.parent, seq: id.seq,
+                               period: ri.period, head: ri.headAngle,
+                               tWrite: id.tWrite)
+
+proc update*(tx: RocheTx, id: RocheId, payload: string,
+             vec: seq[float32] = @[]) =
+  ## transaction 内の置換更新。commit まで DB 本体には反映されない。
+  doAssert not tx.closed, "transaction is closed"
+  let normVec = vec.normalize()
+  case tx.db.mode
+  of mEmbedded:
+    let k = (id.parent, id.seq)
+    if k notin tx.db.st.items:
+      raise newException(KeyError, "id が見つからない")
+    var p = tx.db.st.items[k]
+    p.payload = payload
+    p.tWrite = tx.db.clock
+    if vec.len > 0:
+      p.vec = normVec
+    tx.tx.upsert p
+  of mCluster:
+    let ri = tx.db.rings[id.parent]
+    tx.clusterOps.add TxWireOp(parent: id.parent, seq: id.seq,
+                               period: ri.period, head: ri.headAngle,
+                               tWrite: id.tWrite, payload: payload,
+                               vec: normVec)
+
+proc update*(tx: RocheTx, id: RocheId, doc: JsonNode,
+             vec: seq[float32] = @[]) =
+  tx.update(id, $doc, vec)
+
+proc commit*(tx: RocheTx) =
+  doAssert not tx.closed, "transaction is closed"
+  case tx.db.mode
+  of mEmbedded:
+    tx.tx.commit()
+    tx.db.vectorBackend.clear()
+    for _, p in tx.db.st.items:
+      tx.db.vectorBackend.upsert p
+  of mCluster:
+    tx.db.client.txCommitReq(0, tx.clusterTxId, tx.clusterOps)
+  tx.closed = true
+
+proc rollback*(tx: RocheTx) =
+  if not tx.closed:
+    if tx.db.mode == mEmbedded:
+      tx.tx.rollback()
+    tx.closed = true
+
+proc transaction*(db: RocheDb, body: proc(tx: RocheTx)) =
+  ## 例外が出なければ commit、出たら rollback して例外を再送出する。
+  let tx = db.beginTransaction()
+  try:
+    body(tx)
+    tx.commit()
+  except CatchableError:
+    tx.rollback()
+    raise
+
+# ---------------------------------------------------------------- 読み出し
+
+proc fetchCluster(db: RocheDb, id: RocheId, selection: string, fwdDepth = 0): string =
+  ## 現在の所有ノードから取得。取りこぼしのフォールバック順:
+  ##   primary → 1つ手前（尾流コピー, §6.1）→ もう一度 primary
+  ## 最後の再試行は「手前を見ている間に粒子が前方へハンドオフされた」TOCTOU
+  ## レースを閉じる（移動は常に前方向なので、primary 再訪で必ず追いつく）。
+  let ri = db.rings[id.parent]
+  let n = int(db.tbl.nNodes)
+  let primary = int(db.tbl.node(db.orbitOf(id), epochTime()))
+  proc landingRead(): tuple[hit: bool, deleted: bool, value: string] =
+    let r = db.client.txGetIdReq(0, WireId(parent: id.parent, epoch: id.epoch,
+      seq: id.seq, tWrite: id.tWrite, period: ri.period, head: ri.headAngle),
+      selection)
+    if r.found:
+      return (true, false, r.value)
+    if r.deleted:
+      return (false, true, "")
+    (false, false, "")
+  let pending = landingRead()
+  if pending.deleted:
+    raise newException(KeyError, "id は cluster tx landing intent で削除済み")
+  if pending.hit:
+    return pending.value
+  for node in [primary, (primary + n - 1) mod n, primary]:
+    var r: tuple[found: bool, node: int, value: string, forwarded: bool,
+                 newParent: uint64, newSeq: uint32, newTWrite: float]
+    try:
+      r =
+        if selection.len == 0:
+          db.client.getReq(node, id.parent, id.seq, ri.period, ri.headAngle, id.tWrite)
+        else:
+          db.client.queryReq(node, id.parent, id.seq, ri.period, ri.headAngle,
+                             id.tWrite, selection)
+    except IOError, OSError:
+      let pendingRetry = landingRead()
+      if pendingRetry.deleted:
+        raise newException(KeyError, "id は cluster tx landing intent で削除済み")
+      if pendingRetry.hit:
+        return pendingRetry.value
+      continue
+    if r.found:
+      return r.value
+    if r.forwarded:
+      if fwdDepth >= 1:
+        raise newException(KeyError, "FWD chain が長すぎる")
+      if r.newParent notin db.rings:
+        raise newException(KeyError, "FWD 先の環メタがない（parent=" & $r.newParent & "）")
+      return db.fetchCluster(RocheId(parent: r.newParent, epoch: id.epoch,
+                                     seq: r.newSeq, tWrite: r.newTWrite),
+                             selection, fwdDepth + 1)
+    let pendingRetry = landingRead()
+    if pendingRetry.deleted:
+      raise newException(KeyError, "id は cluster tx landing intent で削除済み")
+    if pendingRetry.hit:
+      return pendingRetry.value
+  raise newException(KeyError, "id が見つからない（parent=" & $id.parent &
+                     " seq=" & $id.seq & "）")
+
+proc get*(db: RocheDb, id: RocheId): string =
+  ## 読み出し。クラスタでは所在を計算して当該ノードに直接取りに行く（1 RTT）。
+  case db.mode
+  of mEmbedded:
+    db.st.items[(id.parent, id.seq)].payload
+  of mCluster:
+    db.fetchCluster(id, "")
+
+proc batchGet*(db: RocheDb, ids: seq[RocheId]): seq[string] =
+  ## 複数 ID をまとめて取得する。cluster では同一 node 行きをまとめて 1 request にする。
+  case db.mode
+  of mEmbedded:
+    for id in ids:
+      result.add db.get(id)
+  of mCluster:
+    var byNode = initTable[int, seq[tuple[idx: int, id: RocheId]]]()
+    let t = epochTime()
+    result = newSeq[string](ids.len)
+    var resolved = newSeq[bool](ids.len)
+    for i, id in ids:
+      let ri = db.rings[id.parent]
+      let pending = db.client.txGetIdReq(0, WireId(parent: id.parent,
+        epoch: id.epoch, seq: id.seq, tWrite: id.tWrite, period: ri.period,
+        head: ri.headAngle))
+      if pending.deleted:
+        raise newException(KeyError, "id は cluster tx landing intent で削除済み")
+      if pending.found:
+        result[i] = pending.value
+        resolved[i] = true
+        continue
+      let node = int(db.tbl.node(db.orbitOf(id), t))
+      byNode.mgetOrPut(node, @[]).add (idx: i, id: id)
+    for node, entries in byNode:
+      var req: seq[tuple[parent: uint64, seq: uint32, period: float,
+                         head: float, tWrite: float]] = @[]
+      for e in entries:
+        let ri = db.rings[e.id.parent]
+        req.add (parent: e.id.parent, seq: e.id.seq, period: ri.period,
+                 head: ri.headAngle, tWrite: e.id.tWrite)
+      let values = db.client.batchGetReq(node, req)
+      for i, value in values:
+        let idx = entries[i].idx
+        if not resolved[idx]:
+          result[idx] = value
+
+proc exists*(db: RocheDb, id: RocheId): bool =
+  ## ORM / driver 向けの存在確認。cluster では get による確認。
+  case db.mode
+  of mEmbedded:
+    db.st.contains(id.parent, id.seq)
+  of mCluster:
+    try:
+      discard db.get(id)
+      true
+    except KeyError, IOError, OSError:
+      false
+
+proc remove*(db: RocheDb, id: RocheId) =
+  ## ID 指定削除。cluster では landing intent 経由で owner へ非同期 apply。
+  case db.mode
+  of mEmbedded:
+    if not db.st.contains(id.parent, id.seq):
+      raise newException(KeyError, "id が見つからない")
+    db.st.remove(id.parent, id.seq)
+    db.vectorBackend.remove(id.parent, id.seq)
+  of mCluster:
+    let ri = db.rings[id.parent]
+    let txid = db.client.txBeginReq(0)
+    db.client.txCommitReq(0, txid, @[
+      TxWireOp(delete: true, parent: id.parent, seq: id.seq,
+               period: ri.period, head: ri.headAngle, tWrite: id.tWrite)
+    ])
+
+proc deleteById*(db: RocheDb, id: RocheId) =
+  ## ORM で直感的に使うための alias。
+  db.remove(id)
+
+proc update*(db: RocheDb, id: RocheId, payload: string,
+             vec: seq[float32] = @[]) =
+  ## payload を置換する。vec を省略した場合は既存 vec を保持する。
+  case db.mode
+  of mEmbedded:
+    let k = (id.parent, id.seq)
+    if k notin db.st.items:
+      raise newException(KeyError, "id が見つからない")
+    var p = db.st.items[k]
+    p.payload = payload
+    p.tWrite = db.clock
+    if vec.len > 0:
+      p.vec = vec.normalize()
+    db.st.upsert p
+    db.vectorBackend.upsert p
+  of mCluster:
+    let ri = db.rings[id.parent]
+    let txid = db.client.txBeginReq(0)
+    db.client.txCommitReq(0, txid, @[
+      TxWireOp(parent: id.parent, seq: id.seq, period: ri.period,
+               head: ri.headAngle, tWrite: id.tWrite,
+               payload: payload, vec: vec.normalize())
+    ])
+
+proc update*(db: RocheDb, id: RocheId, doc: JsonNode,
+             vec: seq[float32] = @[]) =
+  db.update(id, $doc, vec)
+
+proc mergePatch(dst: var JsonNode, patch: JsonNode) =
+  if patch.kind != JObject or dst.kind != JObject:
+    dst = patch
+    return
+  for key, value in patch:
+    if value.kind == JNull:
+      if dst.hasKey(key):
+        dst.delete key
+    elif dst.hasKey(key) and dst[key].kind == JObject and value.kind == JObject:
+      var child = dst[key]
+      child.mergePatch(value)
+      dst[key] = child
+    else:
+      dst[key] = value
+
+proc patch*(db: RocheDb, id: RocheId, patchDoc: JsonNode): JsonNode =
+  ## JSON object の merge patch。payload は JSON document であること。
+  var doc = parseJson(db.get(id))
+  doc.mergePatch(patchDoc)
+  db.update(id, doc)
+  doc
+
+proc countByRing*(db: RocheDb, ring: string): int =
+  ## ring 内の live record 数。cluster v1 は全ノード集計。
+  if ring notin db.ringNames:
+    return 0
+  let key = db.ringNames[ring]
+  case db.mode
+  of mEmbedded:
+    for itemKey in db.st.itemsByRing.getOrDefault(key, @[]):
+      if itemKey in db.st.items:
+        inc result
+  of mCluster:
+    for node in 0 ..< db.client.peers.len:
+      result += db.client.countRingReq(node, key)
+
+proc listByRing*(db: RocheDb, ring: string, limit = 100,
+                 cursor = ""): RocheListPage =
+  ## ring 内を seq 昇順で cursor pagination する。cursor は前回の nextCursor。
+  ## cluster v1 は全ノードから集めて merge する。
+  if limit <= 0 or ring notin db.ringNames:
+    return
+  let key = db.ringNames[ring]
+  let afterSeq =
+    if cursor.len == 0: -1'i64
+    else: int64(parseBiggestInt(cursor))
+  if db.mode == mCluster:
+    var rows: seq[WireListItem] = @[]
+    for node in 0 ..< db.client.peers.len:
+      let part = db.client.listRingReq(node, key, limit, cursor)
+      rows.add part.items
+    rows.sort(proc(a, b: WireListItem): int = cmp(a.seq, b.seq))
+    for row in rows:
+      if row.seq.int64 <= afterSeq:
+        continue
+      if result.items.len >= limit:
+        result.nextCursor = $(result.items[^1].id.seq)
+        break
+      result.items.add RocheRecord(
+        id: RocheId(parent: row.parent, epoch: db.tbl.epoch, seq: row.seq,
+                    tWrite: row.tWrite),
+        payload: row.payload)
+    return
+  var emitted = 0
+  var lastSeq = -1'i64
+  for itemKey in db.st.itemsByRing.getOrDefault(key, @[]):
+    if itemKey[1].int64 <= afterSeq:
+      continue
+    if itemKey notin db.st.items:
+      continue
+    if emitted >= limit:
+      result.nextCursor = $lastSeq
+      break
+    let p = db.st.items[itemKey]
+    result.items.add RocheRecord(
+      id: RocheId(parent: p.parent, epoch: db.tbl.epoch, seq: p.seq,
+                  tWrite: p.tWrite),
+      payload: p.payload)
+    lastSeq = itemKey[1].int64
+    inc emitted
+
+proc batchPut*(db: RocheDb, payloads: seq[string], ring: string = "default",
+               vecs: seq[seq[float32]] = @[]): seq[RocheId] =
+  ## 複数 payload を同じ ring に保存する。vecs が空なら vector なし。
+  for i, payload in payloads:
+    let vec = if i < vecs.len: vecs[i] else: @[]
+    result.add db.put(payload, ring = ring, vec = vec)
+
+proc batchPut*(db: RocheDb, docs: seq[JsonNode], ring: string = "default",
+               vecs: seq[seq[float32]] = @[]): seq[RocheId] =
+  for i, doc in docs:
+    let vec = if i < vecs.len: vecs[i] else: @[]
+    result.add db.put(doc, ring = ring, vec = vec)
+
+proc findWarpJob(db: RocheDb, jobId: uint64): int =
+  for i, job in db.warpJobs:
+    if job.id == jobId:
+      return i
+  -1
+
+proc jsonField(doc: JsonNode, path: string): JsonNode =
+  var cur = doc
+  for part in path.split('.'):
+    if part.len == 0 or cur.isNil or cur.kind != JObject or not cur.hasKey(part):
+      return nil
+    cur = cur[part]
+  cur
+
+proc warpRetryDelaySeconds(attempts: int): float =
+  ## Core fallback only. FlowBrigade adapter can replace this policy.
+  let capped = min(max(attempts, 1), 8)
+  min(30.0, 0.2 * float(1 shl (capped - 1)))
+
+proc warpJobJson(job: WarpJob): JsonNode =
+  result = %*{
+    "id": job.id,
+    "rings": job.rings,
+    "whereField": job.whereField,
+    "equals": job.equals,
+    "patch": job.patch,
+    "status": $job.status,
+    "ringIndex": job.ringIndex,
+    "cursor": job.cursor,
+    "scanned": job.scanned,
+    "matched": job.matched,
+    "updated": job.updated,
+    "attempts": job.attempts,
+    "maxAttempts": job.maxAttempts,
+    "retryAt": job.retryAt,
+    "acknowledged": job.acknowledged,
+    "error": job.error
+  }
+
+proc persistWarpJob(db: RocheDb, job: WarpJob) =
+  if db.mode == mEmbedded and not db.st.isNil:
+    db.st.putWarpJob(job.id, $job.warpJobJson())
+
+proc enqueueWarp*(db: RocheDb, rings: seq[string], whereField: string,
+                  equals: JsonNode, patchDoc: JsonNode,
+                  maxAttempts = 8): uint64 =
+  ## 非同期 warp を登録する。
+  ## 指定 ring 群を登録順に走査し、whereField == equals の JSON document に patchDoc を落とす。
+  if rings.len == 0:
+    raise newException(ValueError, "warp rings must not be empty")
+  if whereField.len == 0:
+    raise newException(ValueError, "warp whereField must not be empty")
+  if patchDoc.isNil or patchDoc.kind != JObject:
+    raise newException(ValueError, "warp patch must be a JSON object")
+  if maxAttempts <= 0:
+    raise newException(ValueError, "warp maxAttempts must be positive")
+  inc db.nextWarpId
+  result = db.nextWarpId
+  let job = WarpJob(id: result, rings: rings, whereField: whereField,
+                    equals: equals, patch: patchDoc,
+                    status: wsPending, maxAttempts: maxAttempts)
+  db.warpJobs.add job
+  db.persistWarpJob(job)
+
+proc warpStatus*(db: RocheDb, jobId: uint64): WarpJob =
+  let idx = db.findWarpJob(jobId)
+  if idx < 0:
+    raise newException(KeyError, "warp job not found")
+  db.warpJobs[idx]
+
+proc ackWarp*(db: RocheDb, jobId: uint64): WarpJob =
+  ## 反映確認済みにする。将来の galaxy ack / queue compaction のための薄い境界。
+  let idx = db.findWarpJob(jobId)
+  if idx < 0:
+    raise newException(KeyError, "warp job not found")
+  var job = db.warpJobs[idx]
+  if job.status != wsDone:
+    raise newException(ValueError, "only done warp jobs can be acknowledged")
+  job.acknowledged = true
+  db.warpJobs[idx] = job
+  db.persistWarpJob(job)
+  job
+
+proc pruneAckedWarpJobs*(db: RocheDb): int =
+  ## ack 済み warp job を queue から取り除く。永続 Store では WD tombstone を追記する。
+  for i in countdown(db.warpJobs.len - 1, 0):
+    if db.warpJobs[i].acknowledged:
+      let jobId = db.warpJobs[i].id
+      db.warpJobs.delete(i)
+      if db.mode == mEmbedded and not db.st.isNil:
+        db.st.deleteWarpJob(jobId)
+      inc result
+
+proc warpStep*(db: RocheDb, jobId: uint64, maxRecords = 100,
+               now = -1.0): WarpJob =
+  ## warp job を少しだけ進める。1回で走査する上限は maxRecords。
+  ## 大きな ring でも同期 JOIN のように全件を握らず、呼び出し側が刻んで進められる。
+  if maxRecords <= 0:
+    raise newException(ValueError, "maxRecords must be positive")
+  let idx = db.findWarpJob(jobId)
+  if idx < 0:
+    raise newException(KeyError, "warp job not found")
+  var job = db.warpJobs[idx]
+  let current = if now >= 0.0: now else: epochTime()
+  if job.status in {wsDone, wsDeadLetter}:
+    return job
+  if job.status == wsFailed and job.retryAt > current:
+    return job
+
+  job.status = wsRunning
+  job.error = ""
+  var remaining = maxRecords
+  var updates: seq[tuple[id: RocheId, doc: JsonNode]] = @[]
+  try:
+    while remaining > 0 and job.ringIndex < job.rings.len:
+      let page = db.listByRing(job.rings[job.ringIndex], limit = remaining,
+                               cursor = job.cursor)
+      for rec in page.items:
+        inc job.scanned
+        dec remaining
+        var doc: JsonNode
+        try:
+          doc = parseJson(rec.payload)
+        except JsonParsingError:
+          continue
+        let found = doc.jsonField(job.whereField)
+        if not found.isNil and found == job.equals:
+          inc job.matched
+          let before = $doc
+          doc.mergePatch(job.patch)
+          if $doc != before:
+            updates.add (rec.id, doc)
+      if page.nextCursor.len > 0:
+        job.cursor = page.nextCursor
+      else:
+        inc job.ringIndex
+        job.cursor = ""
+
+    if updates.len > 0:
+      db.transaction(proc(tx: RocheTx) =
+        for item in updates:
+          tx.update(item.id, item.doc)
+      )
+      job.updated += updates.len
+    if job.ringIndex >= job.rings.len:
+      job.status = wsDone
+  except CatchableError as e:
+    inc job.attempts
+    job.error = e.msg
+    if job.attempts >= job.maxAttempts:
+      job.status = wsDeadLetter
+    else:
+      job.status = wsFailed
+      job.retryAt = current + warpRetryDelaySeconds(job.attempts)
+
+  db.warpJobs[idx] = job
+  db.persistWarpJob(job)
+  job
+
+proc warpDrain*(db: RocheDb, jobId: uint64, maxSteps = 1000,
+                maxRecordsPerStep = 100): WarpJob =
+  ## テスト・バッチ用途。通常運用では scheduler が warpStep を刻んで呼ぶ。
+  if maxSteps <= 0:
+    raise newException(ValueError, "maxSteps must be positive")
+  for _ in 0 ..< maxSteps:
+    result = db.warpStep(jobId, maxRecords = maxRecordsPerStep)
+    if result.status in {wsDone, wsDeadLetter}:
+      return
+    if result.status == wsFailed:
+      return
+  result = db.warpStatus(jobId)
+
+proc batchRemove*(db: RocheDb, ids: seq[RocheId]) =
+  ## 複数 ID を削除する。v1 は embedded 専用。
+  doAssert db.mode == mEmbedded, "batchRemove は embedded mode 専用"
+  for id in ids:
+    db.remove(id)
+
+proc batchDelete*(db: RocheDb, ids: seq[RocheId]) =
+  db.batchRemove(ids)
+
+proc query*(db: RocheDb, id: RocheId, selection: string): JsonNode =
+  ## 選択取得（GraphQL 風, 設計書 §15）。payload は JSON であること。
+  ##   db.query(id, "{ title author { name } }")
+  ## クラスタではサーバ側で射影され、選択した分だけがネットワークを流れる。
+  case db.mode
+  of mEmbedded:
+    applySelection(parseSelection(selection),
+                   parseJson(db.st.items[(id.parent, id.seq)].payload))
+  of mCluster:
+    parseJson(db.fetchCluster(id, selection))
+
+proc contains*(db: RocheDb, id: RocheId): bool =
+  ## `id in db` と書ける（組み込みモード）。
+  db.exists(id)
+
+# ---------------------------------------------------------------- 局所探索 / RAG 候補取得
+
+proc ringKeyForRead(db: RocheDb, ring: string): uint64 =
+  if ring == "halo":
+    return HaloKey
+  if ring in db.ringNames:
+    return db.ringNames[ring]
+  uint64(hash(ring)) or 1'u64
+
+proc ringMetrics*(db: RocheDb): seq[RingMetric]
+proc ringSummaries*(db: RocheDb, queryVec: seq[float32] = @[]): seq[RocheRingSummary]
+
+proc `$`*(id: RocheId): string =
+  $id.parent & ":" & $id.seq
+
+proc focusToTopRings*(focus: int): int =
+  ## ユーザー向けの探索幅 1..100 を、内部 topRings 2..500 に写像する。
+  ## 値が高いほど広く探す。1 ring にはしない（recall の歯止め）。
+  let f = max(1, min(100, focus))
+  max(2, min(500, 2 + ((f - 1) * 498 + 98) div 99))
+
+proc clampTopRings*(topRings: int): int =
+  ## 0 は ring 絞り込み無効。正数指定時は recall の歯止めとして 2..500 に収める。
+  if topRings <= 0: 0 else: max(2, min(500, topRings))
+
+proc ringNameOf(db: RocheDb, key: uint64): string =
+  db.ringKeyNames.getOrDefault(key, $key)
+
+proc descendantRingKeys(db: RocheDb, root: uint64, maxDepth, branchBudget: int): seq[uint64] =
+  result.add root
+  if maxDepth <= 0:
+    return
+  var queue: seq[tuple[key: uint64, depth: int]] = @[(key: root, depth: 0)]
+  var idx = 0
+  while idx < queue.len:
+    let current = queue[idx]
+    inc idx
+    if current.depth >= maxDepth:
+      continue
+    var children = db.ringChildren.getOrDefault(current.key, @[])
+    if branchBudget > 0 and children.len > branchBudget:
+      children.setLen(branchBudget)
+    for child in children:
+      result.add child
+      queue.add (key: child, depth: current.depth + 1)
+
+proc addUniqueRingKey(keys: var seq[uint64], key: uint64) =
+  if key notin keys:
+    keys.add key
+
+proc siblingRingKeys(db: RocheDb, root: uint64, siblingBudget: int): seq[uint64] =
+  let name = db.ringNameOf(root)
+  let parentName = parentRingName(name)
+  if parentName.len == 0 or parentName notin db.ringNames:
+    return @[]
+  let parentKey = db.ringNames[parentName]
+  var siblings = db.ringChildren.getOrDefault(parentKey, @[])
+  for sibling in siblings:
+    if sibling != root:
+      result.add sibling
+      if siblingBudget > 0 and result.len >= siblingBudget:
+        break
+
+proc scopeSiblingBudget(plan: RetrievalPlan): int =
+  case plan.scope
+  of "ssNear": 2
+  of "ssWide": max(4, plan.branchBudget)
+  of "ssAll": 0
+  else: -1
+
+proc ringSummaryTable(db: RocheDb, queryVec: seq[float32],
+                      ringKeys: seq[uint64]): Table[uint64, RocheRingSummary] =
+  let q = queryVec.normalize()
+  case db.mode
+  of mEmbedded:
+    for ring in ringKeys:
+      var centroid: seq[float32] = @[]
+      var n = 0
+      for k in db.st.itemsByRing.getOrDefault(ring, @[]):
+        if k notin db.st.items:
+          continue
+        let p = db.st.items[k]
+        if p.vec.len == 0:
+          continue
+        if centroid.len == 0:
+          centroid = newSeq[float32](p.vec.len)
+        if centroid.len != p.vec.len:
+          continue
+        for i in 0 ..< p.vec.len:
+          centroid[i] = float32((float(centroid[i]) * float(n) +
+                                 float(p.vec[i])) / float(n + 1))
+        inc n
+        centroid = centroid.normalize()
+      let score = if q.len > 0 and q.len == centroid.len:
+                    1.0 - cosineDistance(q, centroid)
+                  else:
+                    0.0
+      var meanDist = 0.0
+      var distN = 0
+      if centroid.len > 0:
+        for k in db.st.itemsByRing.getOrDefault(ring, @[]):
+          if k notin db.st.items:
+            continue
+          let p = db.st.items[k]
+          if p.vec.len != centroid.len:
+            continue
+          meanDist += cosineDistance(p.vec, centroid)
+          inc distN
+      if distN > 0:
+        meanDist /= float(distN)
+      let coherence = if distN > 0: max(0.0, min(1.0, 1.0 - meanDist)) else: 0.0
+      result[ring] = RocheRingSummary(ringKey: ring, count: n,
+                                      centroid: centroid, score: score,
+                                      coherence: coherence,
+                                      massG: float(n) * coherence)
+  of mCluster:
+    let wanted = block:
+      var t = initTable[uint64, bool]()
+      for ring in ringKeys:
+        t[ring] = true
+      t
+    for rs in db.ringSummaries(q):
+      if rs.ringKey in wanted:
+        result[rs.ringKey] = rs
+
+proc expandPlan(db: RocheDb, plan: RetrievalPlan,
+                queryVec: seq[float32] = @[],
+                computeFeatures = true): RetrievalPlan =
+  result = plan
+  if plan.baseRing.len == 0:
+    return
+  let root = db.ringKeyForRead(plan.baseRing)
+  var keys =
+    if plan.includeChildren:
+      db.descendantRingKeys(root, plan.maxDepth, plan.branchBudget)
+    else:
+      @[root]
+  let siblingBudget = plan.scopeSiblingBudget()
+  if siblingBudget >= 0:
+    for sibling in db.siblingRingKeys(root, siblingBudget):
+      keys.addUniqueRingKey sibling
+      if plan.includeChildren:
+        for child in db.descendantRingKeys(sibling, plan.maxDepth, plan.branchBudget):
+          keys.addUniqueRingKey child
+
+  let summaryByRing =
+    if computeFeatures:
+      db.ringSummaryTable(queryVec, keys)
+    else:
+      initTable[uint64, RocheRingSummary]()
+  var candidates: seq[RingPlanCandidate] = @[]
+  for key in keys:
+    let summary = summaryByRing.getOrDefault(
+      key,
+      RocheRingSummary(ringKey: key, count: 0, centroid: @[], score: 0.0))
+    let utility = summary.coherence * (1.0 - 1.0 / float(summary.count + 1))
+    candidates.add RingPlanCandidate(
+      key: key,
+      name: db.ringNameOf(key),
+      score: summary.score,
+      centroidScore: summary.score,
+      ringCount: summary.count,
+      utility: utility,
+      isBase: key == root,
+      isSibling: key != root and parentRingName(db.ringNameOf(key)) == parentRingName(plan.baseRing),
+      isDescendant: key != root and db.ringNameOf(key).startsWith(plan.baseRing & "/"))
+
+  let selection = db.plannerBackend.selectRings(candidates)
+  result.ringFeatures = selection.selected & selection.pruned
+  result.selectedRings = @[]
+  result.prunedRings = @[]
+  for c in selection.selected:
+    result.selectedRings.add c.name
+  for c in selection.pruned:
+    result.prunedRings.add c.name
+
+proc retrievalPlan*(ring: string = "", budget = 8, topRings = 0, focus = 0,
+                    includeChildren = false, maxDepth = 0,
+                    branchBudget = 0, profile = "",
+                    amount = raNormal, scope = ssTight,
+                    depth = sdNormal): RetrievalPlan =
+  ## 物理配置を変えない retrieval 実行計画。SQL tuning の knob に相当する。
+  result.profile = profile
+  result.baseRing = ring
+  result.amount = $amount
+  result.scope = $scope
+  result.depth = $depth
+  result.ringScoped = ring.len > 0
+  result.budget = max(0, budget)
+  result.focus = max(0, min(100, focus))
+  result.topRings = topRings
+  result.effectiveTopRings =
+    if focus > 0: focusToTopRings(focus) else: clampTopRings(topRings)
+  result.includeChildren = includeChildren
+  result.maxDepth = max(0, maxDepth)
+  result.branchBudget = max(0, branchBudget)
+  if ring.len > 0:
+    result.strategy = if includeChildren: "hierarchical-ring" else: "ring-scoped"
+    result.selectedRings = @[ring]
+    result.reason = "explicit ring scope"
+  elif result.effectiveTopRings > 0:
+    result.strategy = "top-rings"
+    result.reason = "focus/topRings selected"
+  else:
+    result.strategy = "global"
+    result.reason = "no ring scope"
+
+proc ringCandidateJson(c: RingPlanCandidate): JsonNode =
+  %*{
+    "ring": c.name,
+    "key": $c.key,
+    "score": c.score,
+    "centroidScore": c.centroidScore,
+    "ringCount": c.ringCount,
+    "utility": c.utility,
+    "isBase": c.isBase,
+    "isSibling": c.isSibling,
+    "isDescendant": c.isDescendant
+  }
+
+proc planJson*(plan: RetrievalPlan): JsonNode =
+  var features = newJArray()
+  for c in plan.ringFeatures:
+    features.add c.ringCandidateJson()
+  %*{
+    "strategy": plan.strategy,
+    "profile": plan.profile,
+    "baseRing": plan.baseRing,
+    "amount": plan.amount,
+    "scope": plan.scope,
+    "depth": plan.depth,
+    "ringScoped": plan.ringScoped,
+    "budget": plan.budget,
+    "focus": plan.focus,
+    "topRings": plan.topRings,
+    "effectiveTopRings": plan.effectiveTopRings,
+    "branchBudget": plan.branchBudget,
+    "maxDepth": plan.maxDepth,
+    "includeChildren": plan.includeChildren,
+    "reason": plan.reason,
+    "selectedRings": plan.selectedRings,
+    "prunedRings": plan.prunedRings,
+    "ringFeatures": features
+  }
+
+proc tunedRetrievalPlan*(db: RocheDb, ring: string = "", profile = "default",
+                         budget = 0, topRings = -1, focus = -1,
+                         includeChildren = false, maxDepth = -1,
+                         branchBudget = -1): RetrievalPlan =
+  ## 登録済み tuning profile を使って実行計画を作る。
+  ## 引数に正の値を渡した項目は profile より優先される。
+  let t = db.retrievalTuning(profile)
+  let sp = db.searchProfiles.getOrDefault(profile, defaultSearchProfile())
+  db.expandPlan(retrievalPlan(
+    ring = ring,
+    budget = if budget > 0: budget else: t.budget,
+    topRings = if topRings >= 0: topRings else: t.topRings,
+    focus = if focus >= 0: focus else: t.focus,
+    includeChildren = includeChildren or t.includeChildren,
+    maxDepth = if maxDepth >= 0: maxDepth else: t.maxDepth,
+    branchBudget = if branchBudget >= 0: branchBudget else: t.branchBudget,
+    profile = profile,
+    amount = sp.amount,
+    scope = sp.scope,
+    depth = sp.depth), computeFeatures = false)
+
+proc searchPlan*(ring: string = "", amount = raNormal, scope = ssTight,
+                 depth = sdNormal,
+                 profile = ""): RetrievalPlan =
+  ## 人間向け語彙から実行計画を作る。
+  let tuning = tuningFromSearchProfile(SearchProfile(amount: amount,
+                                                     scope: scope,
+                                                     depth: depth))
+  retrievalPlan(ring = ring, budget = tuning.budget,
+                topRings = tuning.topRings, focus = tuning.focus,
+                includeChildren = tuning.includeChildren,
+                maxDepth = tuning.maxDepth,
+                branchBudget = tuning.branchBudget,
+                profile = profile, amount = amount, scope = scope,
+                depth = depth)
+
+proc ringSummaries*(db: RocheDb, queryVec: seq[float32] = @[]): seq[RocheRingSummary] =
+  ## クラスタ/組み込みの環 summary。queryVec を渡すと近い順に score 付きで返す。
+  let q = queryVec.normalize()
+  case db.mode
+  of mEmbedded:
+    var merged = initTable[uint64, tuple[c: seq[float32], n: int]]()
+    for _, p in db.st.items:
+      if p.vec.len == 0:
+        continue
+      var e = merged.getOrDefault(p.parent, (c: newSeq[float32](p.vec.len), n: 0))
+      if e.c.len != p.vec.len:
+        continue
+      for i in 0 ..< p.vec.len:
+        e.c[i] = float32((float(e.c[i]) * float(e.n) + float(p.vec[i])) / float(e.n + 1))
+      inc e.n
+      e.c = e.c.normalize()
+      merged[p.parent] = e
+    for ring, e in merged:
+      let score = if q.len > 0 and q.len == e.c.len: 1.0 - cosineDistance(q, e.c) else: 0.0
+      var meanDist = 0.0
+      var distN = 0
+      for _, p in db.st.items:
+        if p.parent == ring and p.vec.len == e.c.len:
+          meanDist += cosineDistance(p.vec, e.c)
+          inc distN
+      if distN > 0:
+        meanDist /= float(distN)
+      let coherence = if distN > 0: max(0.0, min(1.0, 1.0 - meanDist)) else: 0.0
+      result.add RocheRingSummary(ringKey: ring, count: e.n,
+                                  centroid: e.c, score: score,
+                                  coherence: coherence,
+                                  massG: float(e.n) * coherence)
+  of mCluster:
+    var merged = initTable[uint64, tuple[c: seq[float32], n: int]]()
+    for node in 0 ..< db.client.peers.len:
+      for rs in db.client.ringsReq(node):
+        if rs.centroid.len == 0:
+          continue
+        var e = merged.getOrDefault(rs.ringKey,
+                                    (c: newSeq[float32](rs.centroid.len), n: 0))
+        if e.c.len != rs.centroid.len:
+          continue
+        for i in 0 ..< rs.centroid.len:
+          e.c[i] = float32((float(e.c[i]) * float(e.n) +
+                            float(rs.centroid[i]) * float(rs.count)) /
+                           float(e.n + rs.count))
+        e.n += rs.count
+        e.c = e.c.normalize()
+        merged[rs.ringKey] = e
+    for ring, e in merged:
+      let score = if q.len > 0 and q.len == e.c.len: 1.0 - cosineDistance(q, e.c) else: 0.0
+      result.add RocheRingSummary(ringKey: ring, count: e.n,
+                                  centroid: e.c, score: score,
+                                  coherence: 0.0,
+                                  massG: 0.0)
+  result.sort(proc(a, b: RocheRingSummary): int =
+    let byScore = cmp(b.score, a.score)
+    if byScore != 0: byScore else: cmp(b.count, a.count))
+
+proc ringDepth(name: string): int =
+  if name.len == 0:
+    return 0
+  result = 1
+  for ch in name:
+    if ch == '/':
+      inc result
+
+proc centroidPreview(vec: seq[float32], maxDims: int): JsonNode =
+  result = newJArray()
+  let n = min(vec.len, max(0, maxDims))
+  for i in 0 ..< n:
+    result.add %vec[i]
+
+proc atlas*(db: RocheDb, queryVec: seq[float32] = @[],
+            maxCentroidDims = 8): JsonNode =
+  ## LLM / agent が最初に読む全体地図。
+  ## payload 本文は返さず、galaxy・ring 階層・件数・coherence・massG・centroid の
+  ## preview だけを返す。全体 corpus を読む前の orientation step に使う。
+  var summaryByRing = initTable[uint64, RocheRingSummary]()
+  for rs in db.ringSummaries(queryVec):
+    summaryByRing[rs.ringKey] = rs
+
+  var docCounts = initTable[uint64, int]()
+  if db.mode == mEmbedded:
+    for _, p in db.st.items:
+      docCounts[p.parent] = docCounts.getOrDefault(p.parent, 0) + 1
+
+  var ringKeys: seq[uint64] = @[]
+  for key in db.rings.keys:
+    ringKeys.addUniqueRingKey(key)
+  for key in db.ringKeyNames.keys:
+    ringKeys.addUniqueRingKey(key)
+  for key in summaryByRing.keys:
+    ringKeys.addUniqueRingKey(key)
+  ringKeys.sort(proc(a, b: uint64): int = cmp(db.ringNameOf(a), db.ringNameOf(b)))
+
+  var rings = newJArray()
+  var totalDocs = 0
+  var vectorDocs = 0
+  for key in ringKeys:
+    let name = db.ringNameOf(key)
+    let parentName = parentRingName(name)
+    let parentKey =
+      if parentName.len > 0 and parentName in db.ringNames:
+        db.ringNames[parentName]
+      else:
+        0'u64
+    let ri = db.rings.getOrDefault(key, RingInfo(period: DefaultPeriod,
+                                                headAngle: 0.0))
+    let rs = summaryByRing.getOrDefault(key, RocheRingSummary(ringKey: key))
+    let docs =
+      if key in docCounts: docCounts[key]
+      else: rs.count
+    totalDocs += docs
+    vectorDocs += rs.count
+
+    var children = newJArray()
+    for child in db.ringChildren.getOrDefault(key, @[]):
+      children.add %db.ringNameOf(child)
+
+    rings.add %*{
+      "name": name,
+      "key": $key,
+      "description": db.ringDescriptions.getOrDefault(key, ""),
+      "parent": parentName,
+      "parentKey": (if parentKey == 0'u64: "" else: $parentKey),
+      "children": children,
+      "depth": ringDepth(name),
+      "documents": docs,
+      "vectorDocuments": rs.count,
+      "coherence": rs.coherence,
+      "massG": rs.massG,
+      "score": rs.score,
+      "period": ri.period,
+      "head": ri.headAngle,
+      "centroidDims": rs.centroid.len,
+      "centroidPreview": centroidPreview(rs.centroid, maxCentroidDims)
+    }
+
+  result = %*{
+    "schema": AtlasSchema,
+    "version": AtlasVersion,
+    "galaxyMap": {
+      "galaxy": db.galaxy,
+      "description": db.galaxyDescription,
+      "mode": (case db.mode
+               of mEmbedded: "embedded"
+               of mCluster: "cluster"),
+      "nodes": int(db.tbl.nNodes),
+      "rings": ringKeys.len,
+      "documents": totalDocs,
+      "vectorDocuments": vectorDocs,
+      "purpose": "orientation-before-retrieval"
+    },
+    "ringMap": rings,
+    "usage": {
+      "write": "put documents into human/app/import-rule rings",
+      "read": "select rings from this atlas, then retrieve/query only the needed scope",
+      "memory": "reduce scanned candidates before ANN/rerank/LLM stages"
+    }
+  }
+
+proc fillReturnedPayloadStats(stats: var RetrieveStats; hits: seq[RocheHit]) =
+  stats.returned = hits.len
+  stats.payloadBytes = 0
+  for h in hits:
+    stats.payloadBytes += h.payload.len
+  stats.estimatedTokens = (stats.payloadBytes + 3) div 4
+
+proc retrieveWithStats*(db: RocheDb, queryVec: seq[float32], ring: string = "",
+                        budget = 8, topRings = 0, focus = 0,
+                        includeChildren = false, maxDepth = 0,
+                        branchBudget = 0, profile = "",
+                        amount = raNormal, scope = ssTight,
+                        depth = sdNormal):
+                        tuple[hits: seq[RocheHit], stats: RetrieveStats,
+                              plan: RetrievalPlan] =
+  ## 埋め込み近傍と探索統計を一回の探索で返す。
+  ## RAG/MCP 経路では retrieve + retrieveStats の二重探索を避けるためこれを使う。
+  let q = queryVec.normalize()
+  if q.len == 0 or budget <= 0:
+    return
+  let needsPlanFeatures = ring.len > 0 and (includeChildren or scope != ssTight)
+  result.plan = db.expandPlan(retrievalPlan(ring = ring, budget = budget,
+                                            topRings = topRings, focus = focus,
+                                            includeChildren = includeChildren,
+                                            maxDepth = maxDepth,
+                                            branchBudget = branchBudget,
+                                            profile = profile,
+                                            amount = amount,
+                                            scope = scope, depth = depth), q,
+                              computeFeatures = needsPlanFeatures)
+  let ringKeys =
+    if ring.len > 0:
+      var keys: seq[uint64] = @[]
+      for name in result.plan.selectedRings:
+        keys.add db.ringKeyForRead(name)
+      keys
+    else:
+      @[]
+  let ringFilter = if ringKeys.len == 1: ringKeys[0] else: 0'u64
+  case db.mode
+  of mEmbedded:
+    let rr =
+      if ringKeys.len > 1:
+        db.vectorBackend.searchMany(db.st, q, ringKeys, budget)
+      else:
+        db.vectorBackend.search(db.st, q, ring.len > 0, ringFilter, budget)
+    for h in rr.hits:
+      result.hits.add RocheHit(id: RocheId(parent: h.parent, epoch: db.tbl.epoch,
+                                           seq: h.seq, tWrite: h.tWrite),
+                               score: h.score, payload: h.payload)
+    result.stats.totalVectors = rr.totalVectors
+    result.stats.scanned = rr.scanned
+    result.stats.skippedVectors = rr.skippedVectors
+    result.stats.ringsTouched = rr.ringsTouched
+    result.stats.fanoutNodes = 1
+    result.stats.fillReturnedPayloadStats(result.hits)
+  of mCluster:
+    var countedNodes = initTable[int, bool]()
+    if ringKeys.len > 0:
+      for ringKey in ringKeys:
+        for node in 0 ..< db.client.peers.len:
+          let rr = db.client.retrieveReq(node, true, ringKey, q, budget)
+          inc result.stats.fanoutNodes
+          if node notin countedNodes:
+            result.stats.totalVectors += rr.totalVectors
+            countedNodes[node] = true
+          result.stats.scanned += rr.scanned
+          result.stats.ringsTouched += rr.ringsTouched
+          for h in rr.hits:
+            result.hits.add RocheHit(id: RocheId(parent: h.parent, epoch: db.tbl.epoch,
+                                                 seq: h.seq, tWrite: h.tWrite),
+                                     score: h.score, payload: h.payload)
+    elif result.plan.effectiveTopRings <= 0:
+      for node in 0 ..< db.client.peers.len:
+        let rr = db.client.retrieveReq(node, ring.len > 0, ringFilter, q, budget)
+        inc result.stats.fanoutNodes
+        if node notin countedNodes:
+          result.stats.totalVectors += rr.totalVectors
+          countedNodes[node] = true
+        result.stats.scanned += rr.scanned
+        result.stats.ringsTouched += rr.ringsTouched
+        for h in rr.hits:
+          result.hits.add RocheHit(id: RocheId(parent: h.parent, epoch: db.tbl.epoch,
+                                               seq: h.seq, tWrite: h.tWrite),
+                                   score: h.score, payload: h.payload)
+    else:
+      var rings = db.ringSummaries(q)
+      if rings.len > result.plan.effectiveTopRings:
+        rings.setLen(result.plan.effectiveTopRings)
+      for rs in rings:
+        for node in 0 ..< db.client.peers.len:
+          let rr = db.client.retrieveReq(node, true, rs.ringKey, q, budget)
+          inc result.stats.fanoutNodes
+          if node notin countedNodes:
+            result.stats.totalVectors += rr.totalVectors
+            countedNodes[node] = true
+          result.stats.scanned += rr.scanned
+          result.stats.ringsTouched += rr.ringsTouched
+          for h in rr.hits:
+            result.hits.add RocheHit(id: RocheId(parent: h.parent, epoch: db.tbl.epoch,
+                                                 seq: h.seq, tWrite: h.tWrite),
+                                     score: h.score, payload: h.payload)
+  result.hits.sort(proc(a, b: RocheHit): int = cmp(b.score, a.score))
+  if result.hits.len > budget:
+    result.hits.setLen(budget)
+  result.stats.skippedVectors = max(0, result.stats.totalVectors - result.stats.scanned)
+  result.stats.fillReturnedPayloadStats(result.hits)
+  if result.stats.totalVectors > 0:
+    result.stats.candidateReduction =
+      1.0 - float(result.stats.scanned) / float(result.stats.totalVectors)
+
+proc retrieve*(db: RocheDb, queryVec: seq[float32], ring: string = "",
+               budget = 8, topRings = 0, focus = 0): seq[RocheHit] =
+  ## 埋め込み近傍を取得する。ring を指定すると、その環だけを探索する。
+  ## cluster v1 は全ノード fan-out でローカル候補を集めてマージする。
+  db.retrieveWithStats(queryVec, ring = ring, budget = budget,
+                       topRings = topRings, focus = focus).hits
+
+proc retrieveStats*(db: RocheDb, queryVec: seq[float32], ring: string = "",
+                    budget = 8, topRings = 0, focus = 0): RetrieveStats =
+  ## retrieve の探索幅を測るための軽量 stats。
+  db.retrieveWithStats(queryVec, ring = ring, budget = budget,
+                       topRings = topRings, focus = focus).stats
+
+proc retrieveTunedWithStats*(db: RocheDb, queryVec: seq[float32],
+                             ring: string = "", profile = "default"):
+                             tuple[hits: seq[RocheHit], stats: RetrieveStats,
+                                   plan: RetrievalPlan] =
+  ## tuning profile を使って retrieve する。
+  ## RDB の optimizer profile / hint を切り替えるのに近い API。
+  result.plan = db.tunedRetrievalPlan(ring = ring, profile = profile)
+  let sp = db.searchProfiles.getOrDefault(profile, defaultSearchProfile())
+  let rr = db.retrieveWithStats(queryVec, ring = ring,
+                                budget = result.plan.budget,
+                                topRings = result.plan.topRings,
+                                focus = result.plan.focus,
+                                includeChildren = result.plan.includeChildren,
+                                maxDepth = result.plan.maxDepth,
+                                branchBudget = result.plan.branchBudget,
+                                profile = profile,
+                                amount = sp.amount,
+                                scope = sp.scope,
+                                depth = sp.depth)
+  result.hits = rr.hits
+  result.stats = rr.stats
+  result.plan = rr.plan
+
+proc retrieveTuned*(db: RocheDb, queryVec: seq[float32],
+                    ring: string = "", profile = "default"): seq[RocheHit] =
+  db.retrieveTunedWithStats(queryVec, ring = ring, profile = profile).hits
+
+proc defaultRetrievalEnvelopeOptions*(db: RocheDb, ring = ""): RetrievalEnvelopeOptions =
+  ## Shelfer などの外部 runtime が使う安定 envelope の既定値。
+  result.provider = "rochedb"
+  result.galaxy = db.galaxy
+  result.ring = ring
+  result.backend =
+    case db.mode
+    of mEmbedded: $db.vectorBackend.kind
+    of mCluster: "cluster"
+  result.mode = "vector"
+  result.sourceType = "document"
+  result.resourceKind = "rag"
+  result.resourceScope = if ring.len > 0: "topic" else: "persistent"
+  result.retentionClass = "normal"
+  result.contextReusable = true
+  result.dataLabel = ""
+  result.plan = retrievalPlan(ring = ring)
+
+proc retrievalEnvelope*(
+    hits: seq[RocheHit];
+    stats: RetrieveStats;
+    opts: RetrievalEnvelopeOptions;
+    budget = 8;
+    ringScoped = false): JsonNode =
+  ## retrieve 結果を RocheDB 依存の薄い JSON 契約に変換する。
+  ## RocheDB core は Shelfer に依存せず、Shelfer adapter はこの envelope を消費する。
+  var chunks = newJArray()
+  for h in hits:
+    let payloadBytes = h.payload.len
+    chunks.add %*{
+      "id": $h.id,
+      "payload": h.payload,
+      "score": h.score,
+      "estimatedTokens": (payloadBytes + 3) div 4,
+      "ring": opts.ring,
+      "sourceUri": "rochedb://" & opts.galaxy & "/" & opts.ring & "/" & $h.id
+    }
+
+  result = %*{
+    "schema": RetrievalEnvelopeSchema,
+    "version": RetrievalEnvelopeVersion,
+    "source": {
+      "provider": opts.provider,
+      "galaxy": opts.galaxy,
+      "ring": opts.ring,
+      "backend": opts.backend,
+      "sourceType": opts.sourceType
+    },
+    "query": {
+      "mode": opts.mode,
+      "budget": budget,
+      "ringScoped": ringScoped
+    },
+    "plan": opts.plan.planJson(),
+    "chunks": chunks,
+    "stats": {
+      "totalVectors": stats.totalVectors,
+      "scanned": stats.scanned,
+      "skippedVectors": stats.skippedVectors,
+      "returned": stats.returned,
+      "ringsTouched": stats.ringsTouched,
+      "fanoutNodes": stats.fanoutNodes,
+      "payloadBytes": stats.payloadBytes,
+      "estimatedTokens": stats.estimatedTokens,
+      "candidateReduction": stats.candidateReduction
+    },
+    "policyHints": {
+      "resourceKind": opts.resourceKind,
+      "resourceScope": opts.resourceScope,
+      "retentionClass": opts.retentionClass,
+      "contextReusable": opts.contextReusable,
+      "dataLabel": opts.dataLabel
+    }
+  }
+  if opts.requestId.len > 0 or opts.correlationId.len > 0:
+    result["trace"] = %*{
+      "requestId": opts.requestId,
+      "correlationId": opts.correlationId
+    }
+
+proc retrievalEnvelope*(db: RocheDb, queryVec: seq[float32], ring: string = "",
+                        budget = 8, topRings = 0, focus = 0): JsonNode =
+  ## 便利版。retrieve と retrieveStats をまとめて envelope 化する。
+  let rr = db.retrieveWithStats(queryVec, ring = ring, budget = budget,
+                                topRings = topRings, focus = focus)
+  var opts = db.defaultRetrievalEnvelopeOptions(ring)
+  opts.plan = db.expandPlan(rr.plan, queryVec.normalize(), computeFeatures = true)
+  retrievalEnvelope(rr.hits, rr.stats, opts,
+                    budget = budget, ringScoped = ring.len > 0)
+
+proc retrievalEnvelopeTuned*(db: RocheDb, queryVec: seq[float32],
+                             ring: string = "", profile = "default"): JsonNode =
+  ## tuning profile を使って retrieval envelope を作る。
+  let rr = db.retrieveTunedWithStats(queryVec, ring = ring, profile = profile)
+  var opts = db.defaultRetrievalEnvelopeOptions(ring)
+  opts.plan = db.expandPlan(rr.plan, queryVec.normalize(), computeFeatures = true)
+  retrievalEnvelope(rr.hits, rr.stats, opts,
+                    budget = rr.plan.budget, ringScoped = ring.len > 0)
+
+proc retrievalEnvelopeValidationErrors*(env: JsonNode): seq[string] =
+  ## RocheDB retrieval envelope v1 の互換性チェック。
+  ## 外部 adapter はこの結果が空であることを受け入れ条件にできる。
+  if env == nil or env.kind != JObject:
+    return @["envelope must be a JSON object"]
+
+  template requireObject(key: string) =
+    if not env.hasKey(key) or env[key].kind != JObject:
+      result.add key & " must be an object"
+
+  template requireArray(key: string) =
+    if not env.hasKey(key) or env[key].kind != JArray:
+      result.add key & " must be an array"
+
+  if env{"schema"}.getStr("") != RetrievalEnvelopeSchema:
+    result.add "schema must be " & RetrievalEnvelopeSchema
+  if env{"version"}.getInt(0) != RetrievalEnvelopeVersion:
+    result.add "version must be " & $RetrievalEnvelopeVersion
+
+  requireObject("source")
+  requireObject("query")
+  requireObject("plan")
+  requireArray("chunks")
+  requireObject("stats")
+  requireObject("policyHints")
+
+  if env.hasKey("source") and env["source"].kind == JObject:
+    let source = env["source"]
+    for key in ["provider", "backend", "sourceType"]:
+      if source{key}.getStr("").len == 0:
+        result.add "source." & key & " must be a non-empty string"
+
+  if env.hasKey("query") and env["query"].kind == JObject:
+    let query = env["query"]
+    if query{"mode"}.getStr("").len == 0:
+      result.add "query.mode must be a non-empty string"
+    if query{"budget"}.getInt(-1) < 0:
+      result.add "query.budget must be >= 0"
+    if not query.hasKey("ringScoped") or query["ringScoped"].kind != JBool:
+      result.add "query.ringScoped must be a boolean"
+
+  if env.hasKey("plan") and env["plan"].kind == JObject:
+    let plan = env["plan"]
+    for key in ["strategy", "reason", "amount", "scope", "depth"]:
+      if plan{key}.getStr("").len == 0:
+        result.add "plan." & key & " must be a non-empty string"
+    for key in ["budget", "focus", "effectiveTopRings", "branchBudget", "maxDepth"]:
+      if plan{key}.getInt(-1) < 0:
+        result.add "plan." & key & " must be >= 0"
+    if not plan.hasKey("ringScoped") or plan["ringScoped"].kind != JBool:
+      result.add "plan.ringScoped must be a boolean"
+    if not plan.hasKey("includeChildren") or plan["includeChildren"].kind != JBool:
+      result.add "plan.includeChildren must be a boolean"
+
+  if env.hasKey("chunks") and env["chunks"].kind == JArray:
+    var i = 0
+    for chunk in env["chunks"].items:
+      if chunk.kind != JObject:
+        result.add "chunks[" & $i & "] must be an object"
+        inc i
+        continue
+      for key in ["id", "payload", "ring", "sourceUri"]:
+        if not chunk.hasKey(key) or chunk[key].kind != JString:
+          result.add "chunks[" & $i & "]." & key & " must be a string"
+      if not chunk.hasKey("score") or chunk["score"].kind notin {JInt, JFloat}:
+        result.add "chunks[" & $i & "].score must be numeric"
+      if chunk{"estimatedTokens"}.getInt(-1) < 0:
+        result.add "chunks[" & $i & "].estimatedTokens must be >= 0"
+      inc i
+
+  if env.hasKey("stats") and env["stats"].kind == JObject:
+    let stats = env["stats"]
+    for key in ["totalVectors", "scanned", "skippedVectors", "returned",
+                "ringsTouched", "fanoutNodes", "payloadBytes", "estimatedTokens"]:
+      if stats{key}.getInt(-1) < 0:
+        result.add "stats." & key & " must be >= 0"
+    if not stats.hasKey("candidateReduction") or
+        stats["candidateReduction"].kind notin {JInt, JFloat}:
+      result.add "stats.candidateReduction must be numeric"
+
+  if env.hasKey("policyHints") and env["policyHints"].kind == JObject:
+    let hints = env["policyHints"]
+    for key in ["resourceKind", "resourceScope", "retentionClass"]:
+      if hints{key}.getStr("").len == 0:
+        result.add "policyHints." & key & " must be a non-empty string"
+    if not hints.hasKey("contextReusable") or hints["contextReusable"].kind != JBool:
+      result.add "policyHints.contextReusable must be a boolean"
+
+proc isValidRetrievalEnvelope*(env: JsonNode): bool =
+  retrievalEnvelopeValidationErrors(env).len == 0
+
+proc ringMetrics*(db: RocheDb): seq[RingMetric] =
+  ## 環ごとの意味的一貫性。coherence は 0..1 目安で、高いほど vec がまとまっている。
+  doAssert db.mode == mEmbedded, "ringMetrics v1 は組み込みモード専用"
+  var sums = initTable[uint64, tuple[c: seq[float32], n: int]]()
+  for _, p in db.st.items:
+    if p.vec.len == 0:
+      continue
+    var e = sums.getOrDefault(p.parent, (c: newSeq[float32](p.vec.len), n: 0))
+    if e.c.len != p.vec.len:
+      continue
+    for i in 0 ..< p.vec.len:
+      e.c[i] = float32((float(e.c[i]) * float(e.n) + float(p.vec[i])) / float(e.n + 1))
+    inc e.n
+    e.c = e.c.normalize()
+    sums[p.parent] = e
+
+  for ring, e in sums:
+    if e.n == 0:
+      continue
+    var meanDist = 0.0
+    for _, p in db.st.items:
+      if p.parent == ring and p.vec.len == e.c.len:
+        meanDist += cosineDistance(p.vec, e.c)
+    meanDist /= float(e.n)
+    result.add RingMetric(ringKey: ring, count: e.n,
+                          coherence: max(0.0, min(1.0, 1.0 - meanDist)))
+  result.sort(proc(a, b: RingMetric): int = cmp(b.count, a.count))
+
+# ---------------------------------------------------------------- 所在（RocheDB の核）
+
+proc locate*(db: RocheDb, id: RocheId, at: float = -1.0): int =
+  ## その ID が「どのノードにあるか」。at 省略で現在、未来時刻も渡せる。
+  ## どちらのモードでも問い合わせゼロ・ローカル計算のみ（概念書 2章）。
+  let t = if at < 0.0: db.nowT else: at
+  int(db.tbl.node(db.orbitOf(id), t))
+
+proc nextVisit*(db: RocheDb, id: RocheId, node: int): float =
+  ## その ID が指定ノードに次に到着する時刻（プリフェッチ・バッチの予定表）。
+  db.orbitOf(id).nextArrival(db.tbl.arcStart(NodeId(node)), db.nowT)
+
+proc nextJoin*(db: RocheDb, a, b: RocheId): float =
+  ## 2つの ID が次に同一ノードに同居する時刻（= ローカル JOIN できる瞬間）。
+  ## 同周期で位相が合わない場合は -1（configureRing で 1:2 等の整数比に）。
+  let oa = db.orbitOf(a)
+  let ob = db.orbitOf(b)
+  let t0 = db.nowT
+  if oa.period == ob.period:
+    return if db.tbl.node(oa, t0) == db.tbl.node(ob, t0): t0 else: -1.0
+  let horizon = synodicPeriod(oa.period, ob.period) * 1.5
+  for t in conjunctions(oa, ob, t0, horizon):
+    if t >= t0: return t
+  -1.0
+
+# ---------------------------------------------------------------- 運用
+
+proc stats*(db: RocheDb): seq[tuple[node, count: int]] =
+  ## ノードごとの保持件数（クラスタ運用の観察用）。
+  case db.mode
+  of mEmbedded:
+    result.add (node: 0, count: db.st.count)
+  of mCluster:
+    for i in 0 ..< db.client.peers.len:
+      result.add db.client.statsReq(i)
+
+proc health*(db: RocheDb): seq[string] =
+  ## ノード health の簡易文字列表現。クラスタ readiness/liveness の土台。
+  case db.mode
+  of mEmbedded:
+    result.add "node=0 items=" & $db.st.count & " pendingTx=" & $db.st.clusterTxPending
+  of mCluster:
+    for i in 0 ..< db.client.peers.len:
+      result.add db.client.healthReq(i)
+
+proc metrics*(db: RocheDb): seq[string] =
+  ## 管理・監視用の簡易 metrics。Prometheus 形式化は次段階。
+  case db.mode
+  of mEmbedded:
+    result.add "node 0 items " & $db.st.count &
+               " rings " & $db.st.ringMeta.len &
+               " forwarders " & $db.st.forwarders.len &
+               " clusterTxCommitted " & $db.st.clusterTxCommitted &
+               " clusterTxApplied " & $db.st.clusterTxApplied &
+               " clusterTxPending " & $db.st.clusterTxPending
+  of mCluster:
+    for i in 0 ..< db.client.peers.len:
+      result.add db.client.metricsReq(i)
+
+proc shutdownCluster*(db: RocheDb): seq[string] =
+  ## 運用・テスト用の graceful shutdown。認証導入までは信頼ネットワーク前提。
+  doAssert db.mode == mCluster, "shutdownCluster はクラスタモード専用"
+  for i in countdown(db.client.peers.high, 0):
+    result.add db.client.shutdownReq(i)
+
+# ---------------------------------------------------------------- C ABI 用の内部変換
+
+proc toRaw*(id: RocheId): tuple[parent: uint64, epoch: uint32, seq: uint32, tWrite: float] =
+  ## 内部用（C ABI 変換）。アプリケーションコードでは使わないこと。
+  (id.parent, id.epoch, id.seq, id.tWrite)
+
+proc fromRaw*(parent: uint64, epoch: uint32, seq: uint32, tWrite: float): RocheId =
+  ## 内部用（C ABI 変換）。アプリケーションコードでは使わないこと。
+  RocheId(parent: parent, epoch: epoch, seq: seq, tWrite: tWrite)

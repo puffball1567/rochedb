@@ -1,0 +1,5 @@
+module CRocheDB [system] {
+  header "../../../../include/rochedb.h"
+  link "rochedb"
+  export *
+}

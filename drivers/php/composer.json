@@ -1,0 +1,15 @@
+{
+  "name": "rochedb/rochedb",
+  "description": "PHP FFI driver for RocheDB",
+  "type": "library",
+  "license": "Apache-2.0",
+  "require": {
+    "php": ">=8.2",
+    "ext-ffi": "*"
+  },
+  "autoload": {
+    "psr-4": {
+      "RocheDB\\": "src/"
+    }
+  }
+}
