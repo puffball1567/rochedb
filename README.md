@@ -50,6 +50,7 @@ corpus size toward semantic working-set size.
 - Halo capture design: [docs/rochedb-halo-capture.md](docs/rochedb-halo-capture.md)
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
 - Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+- Contribution policy: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## Quickstart: Embedded Mode
 

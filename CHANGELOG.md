@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.3
+
+### Added
+
+- Added `CONTRIBUTING.md` with a pre-1.0 contribution policy focused on
+  real-world verification reports, operational evidence, benchmark results,
+  recovery reports, and small documentation fixes.
+
 ## v0.1.2
 
 ### Changed
