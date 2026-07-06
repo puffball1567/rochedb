@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.5
+
+### Changed
+
+- Added README installation steps before the embedded-mode quickstart so new
+  users can set up the repository before writing code.
+
 ## v0.1.4
 
 ### Changed
