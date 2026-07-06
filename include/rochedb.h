@@ -97,7 +97,10 @@ int    roche_set_ring_description(void *db, const char *ring, const char *descri
 /* 書き込み。out_id に不透明IDが入る。以後この ID だけで所在計算が閉じる。 */
 int    roche_put(void *db, const char *ring,
                  const void *data, size_t len, roche_id *out_id);
-/* vector 付き書き込み。vec は float32 配列、vec_len は要素数。 */
+/* vector 付き書き込み。vec は呼び出しプロセスの通常の float32 配列、
+ * vec_len は要素数。C ABI 境界では host-native float を受け取る。
+ * TCP wire protocol は別契約で、vector bytes は canonical little-endian
+ * IEEE-754 float32 として送受信する。 */
 int    roche_put_vec(void *db, const char *ring,
                      const void *data, size_t len,
                      const float *vec, size_t vec_len,

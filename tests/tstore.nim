@@ -62,6 +62,31 @@ suite "store persistence":
     st5.close()
     removeDir(dir)
 
+  test "Universe sync event は UJ/UA/UD レコードで復元される":
+    let dir = createTempDir("roche-store", "universe-sync")
+    var st = openStore(dir)
+    st.putUniverseSyncEvent(7'u64, """{"id":7,"eventKey":"tokyo|social|posts|p1","ring":"posts"}""")
+    st.markUniverseSyncEventApplied("tokyo|social|posts|p1")
+    st.close()
+
+    var st2 = openStore(dir)
+    check st2.universeSyncEvents[7'u64].contains("\"ring\":\"posts\"")
+    check st2.isUniverseSyncEventApplied("tokyo|social|posts|p1")
+    discard st2.compact()
+    st2.close()
+
+    var st3 = openStore(dir)
+    check 7'u64 in st3.universeSyncEvents
+    check st3.isUniverseSyncEventApplied("tokyo|social|posts|p1")
+    st3.deleteUniverseSyncEvent(7'u64)
+    st3.close()
+
+    var st4 = openStore(dir)
+    check 7'u64 notin st4.universeSyncEvents
+    check st4.isUniverseSyncEventApplied("tokyo|social|posts|p1")
+    st4.close()
+    removeDir(dir)
+
   test "transaction commit は atomic に復元される":
     let dir = createTempDir("roche-store", "tx")
     var st = openStore(dir)

@@ -83,3 +83,8 @@ drivers/kotlin/docker-test.sh
 Drivers do not reimplement RocheDB placement rules. They pass a ring name and
 let RocheDB issue the ID. This keeps language drivers stable as long as the wire
 protocol / C ABI contract remains compatible.
+
+Native wire drivers must treat vector bytes as canonical little-endian IEEE-754
+`float32` values and should check `WIREVER` before assuming command
+compatibility. C ABI wrappers receive host-native `float` arrays because they
+run in-process. See [protocol-compatibility.md](./protocol-compatibility.md).

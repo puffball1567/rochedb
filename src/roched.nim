@@ -55,6 +55,12 @@ type
     authzDenied: uint64
     connectionsAccepted: uint64
     activeConnections: int
+    universeApplyApplied: uint64
+    universeApplySkipped: uint64
+    universeApplyErrors: uint64
+    universeApplyForwarded: uint64
+    universeApplyLastOk: float
+    universeApplyLastError: float
 
 type LocalHit = object
   parent: uint64
@@ -211,6 +217,45 @@ proc drainTxCommitOps(sock: Socket, nOps: int) =
     let payloadLen = parseInt(h[data + 5])
     let vecDim = parseInt(h[data + 6])
     sock.drainBytes(checkedFrameBytes(payloadLen, vecDim, extra = 1))
+
+proc jsonFloat32Seq(node: JsonNode): seq[float32] =
+  if node.isNil or node.kind != JArray:
+    return @[]
+  for item in node.items:
+    case item.kind
+    of JInt:
+      result.add float32(item.getInt())
+    of JFloat:
+      result.add float32(item.getFloat())
+    else:
+      discard
+
+proc applyUniverseEvent(sv: Server, event: JsonNode, now: float): bool =
+  if event.kind != JObject:
+    raise newException(ValueError, "universe event must be an object")
+  let eventKey = event{"eventKey"}.getStr()
+  let ringName = event{"ring"}.getStr()
+  let op = event{"op"}.getStr("put")
+  if eventKey.len == 0:
+    raise newException(ValueError, "universe event key is empty")
+  if ringName.len == 0:
+    raise newException(ValueError, "universe event ring is empty")
+  if op != "put":
+    raise newException(ValueError, "only put universe events are supported")
+  if sv.st.isUniverseSyncEventApplied(eventKey):
+    return false
+  let payload = event{"payload"}.getStr()
+  let vec = jsonFloat32Seq(event{"vec"}).normalize()
+  let ri = sv.ringInfo(ringName)
+  let seq = sv.st.nextSeq(ri.key)
+  let tWrite = event{"timestamp"}.getFloat(now)
+  sv.st.upsert Particle(parent: ri.key, seq: seq, period: ri.period,
+                        head: ri.head, tWrite: tWrite, payload: payload,
+                        vec: vec, lastHere: now)
+  if ri.key != HaloKey:
+    sv.fs.observeRingPut(ri.key, vec)
+  sv.st.markUniverseSyncEventApplied(eventKey)
+  true
 
 proc ownerOf(sv: Server, parent: uint64, seq: uint32, period, head, tWrite: float): int =
   let o = OrbitalId(parent: parent, epoch: 1, tWrite: tWrite, seq: seq)
@@ -443,6 +488,61 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       ops.add op
     sv.st.putClusterTxIntent ClusterTxIntent(id: txid, ops: ops, committed: true)
     sock.sendFrame("OK")
+  of "TXSTATUS":
+    if not sv.requireRole(sock, roleWriter):
+      return true
+    doAssert sv.myId == 0, "TXSTATUS は node0 の landing zone で処理する"
+    let txid = parseBiggestUInt(parts[1]).uint64
+    if sv.st.isClusterTxApplied(txid):
+      sock.sendFrame("OK APPLIED")
+    elif sv.st.hasClusterTxIntent(txid):
+      sock.sendFrame("OK PENDING")
+    else:
+      sock.sendFrame("OK UNKNOWN")
+  of "UAPPLY":
+    if not sv.requireRole(sock, roleWriter):
+      return false
+    try:
+      let bodyLen = parseInt(parts[1])
+      discard checkedWireLen(bodyLen, "bodyLen")
+      let body = sock.readExact(bodyLen)
+      let event = parseJson(body)
+      let ringName = event{"ring"}.getStr()
+      if not sv.ringNameAllowed(sock, ringName):
+        sock.denyRingName(ringName)
+        return true
+      let ri = sv.ringInfo(ringName)
+      let owner = int(sv.tbl.owner(ri.head))
+      if owner != sv.myId:
+        let status = sv.peerLink.universeApplyReq(owner, body)
+        inc sv.universeApplyForwarded
+        sv.universeApplyLastOk = now
+        sock.sendFrame("UOK " & status)
+        return true
+      let applied = sv.applyUniverseEvent(event, now)
+      if applied:
+        inc sv.universeApplyApplied
+      else:
+        inc sv.universeApplySkipped
+      sv.universeApplyLastOk = now
+      sock.sendFrame("UOK " & (if applied: "APPLIED" else: "SKIPPED"))
+    except CatchableError:
+      inc sv.universeApplyErrors
+      sv.universeApplyLastError = now
+      raise
+  of "USTATUS":
+    if not sv.requireRole(sock, roleAdmin):
+      return true
+    sock.sendFrame("USTATUS " & $sv.st.universeSyncEvents.len & " " &
+                   $sv.st.appliedUniverseSyncEvents.len & " " &
+                   $sv.universeApplyApplied & " " &
+                   $sv.universeApplySkipped & " " &
+                   $sv.universeApplyErrors & " " &
+                   $sv.universeApplyForwarded & " " &
+                   $(int(sv.universeApplyLastOk)) & " " &
+                   $(int(sv.universeApplyLastError)))
+  of "WIREVER":
+    sock.sendFrame("WIREVER " & $WireProtocolVersion)
   of "APPLYTX":
     if not sv.requireRole(sock, roleWriter):
       return false
@@ -788,6 +888,17 @@ proc handleFrame(sv: Server, sock: Socket): bool =
                    "forwarders " & $sv.st.forwarders.len & " " &
                    "walBytes " & $sv.st.logSize & " " &
                    "warpJobs " & $sv.st.warpJobs.len & " " &
+                   "universeSyncEvents " & $sv.st.universeSyncEvents.len & " " &
+                   "universeSyncApplied " &
+                     $sv.st.appliedUniverseSyncEvents.len & " " &
+                   "universeApplyApplied " & $sv.universeApplyApplied & " " &
+                   "universeApplySkipped " & $sv.universeApplySkipped & " " &
+                   "universeApplyErrors " & $sv.universeApplyErrors & " " &
+                   "universeApplyForwarded " & $sv.universeApplyForwarded & " " &
+                   "universeApplyLastOk " &
+                     $(int(sv.universeApplyLastOk)) & " " &
+                   "universeApplyLastError " &
+                     $(int(sv.universeApplyLastError)) & " " &
                    "persistent " & $(if sv.st.isPersistent: 1 else: 0) & " " &
                    "durabilityStrong " &
                      $(if sv.st.durability == durStrong: 1 else: 0) & " " &

@@ -31,7 +31,7 @@ under the documented conditions.
 | WAL recovery | Torn-tail, invalid length, invalid vector dim, partial transaction tests pass | Done |
 | Warp belt | WAL persistence, reopen recovery, ack cleanup, idempotent patch behavior | Done |
 | Cluster smoke | tx / failure retry / authz / RBAC / wire fuzz smoke scripts pass locally | Done |
-| FAISS bridge | `rochecli doctor` and FAISS bridge smoke are documented and reproducible | Done |
+| FAISS bridge | `roche doctor` and FAISS bridge smoke are documented and reproducible | Done |
 | Drivers | Driver status table is accurate and does not overclaim package publication | Done |
 | Bench docs | Benchmark conditions, limitations, Redis/PostgreSQL wording, and environment are consistent | Done |
 | AI/RAG case study | Generated JSONL corpus is imported and measured with global / routed / wrong-ring retrieval | Done |
@@ -50,6 +50,22 @@ under the documented conditions.
 | Examples | Done: cluster demo passed locally; core tests cover embedded usage |
 | AI/RAG demo | Done: `examples/ai_rag_case_study.sh` passed locally |
 | Package metadata | Done: `rochedb.nimble` version / description / license checked |
+| CLI CRUD | `roche --help`, `put/get/query/list-ring/count-ring`, and minimal `roche shell` are available for embedded smoke usage | Done |
+
+## Required Before v0.2.0
+
+| Area | Required Item | Status |
+|---|---|---|
+| Universe sync | Local data-dir sync and remote `--peers` delivery pass smoke tests | Done |
+| Universe sync failure | Target-down retry keeps source outbox pending and later applies / acks / prunes | Done |
+| Universe sync JSONL failure | Malformed JSONL rows are counted, valid rows still apply, replay is idempotent, and source ack/prune remains explicit | Done |
+| Universe sync observability | Remote apply status and process-local apply/error counters are exposed through `universe-status --peers --metrics` | Done |
+| Universe sync authz/fuzz | `UAPPLY` authz, idempotency, malformed frame, oversized body, and invalid JSON cases pass | Done |
+| Protocol compatibility | `WIREVER` exists and protocol compatibility notes document versioning and wire vector byte order | Done |
+| Driver byte order | C ABI versus TCP wire vector endian contract is documented | Done |
+| Documentation site | GitHub Pages workflow plus API / config / CLI entry pages exist under `docs/` | Done |
+| Production boundary | README/status/design avoid claiming enterprise production readiness before TLS, audit, coordinator redundancy, and mixed-version tests | Done |
+| Planner boundary | Heuristic planner status and benchmark dependency are documented | Done |
 
 ## Explicitly Not Required For v0.1.0
 

@@ -1,37 +1,21 @@
-## rochecli - cluster smoke and benchmark client
+## roche - RocheDB command-line client
 ##
 ## usage:
-##   rochecli demo  --peers=host:port,...   orbital handoff and projection demo
-##   rochecli bench --peers=host:port,... [--n=10000]   network path benchmark
-##   rochecli health --peers=host:port,...
-##   rochecli metrics --peers=host:port,...
-##   rochecli shutdown --peers=host:port,...
-##   rochecli rings --peers=host:port,...
-##   rochecli atlas [--data=DIR | --peers=host:port,...]
-##   rochecli describe-galaxy --data=DIR --description=TEXT
-##   rochecli describe-ring --data=DIR --ring=RING --description=TEXT
-##   rochecli retrieve-bench --peers=host:port,... [--n=10000]
-##   rochecli redis-bench [--n=10000] [--payload-bytes=100] [--redis=127.0.0.1:6379]
-##   rochecli rag-bench [--n=10000] [--queries=50]
-##   rochecli working-set-bench [--n=100000] [--rings=100] [--queries=50]
-##   rochecli memory-pressure-bench [--n=100000] [--rings=100] [--queries=50] [--payload-bytes=512]
-##   rochecli doctor
-##   rochecli compact --data=DIR
-##   rochecli backup --data=DIR --backup=DIR
-##   rochecli restore --backup=DIR --data=DIR [--overwrite]
-##   rochecli backup-encrypted --data=DIR --backup=DIR --passphrase=TEXT
-##   rochecli restore-encrypted --backup=DIR --data=DIR --passphrase=TEXT [--overwrite]
-##   rochecli recovery-backup --data=DIR [--mirror=DIR...] [--universe-config=FILE] [--passphrase=TEXT] [--lane=NAME] [--failure-domain=NAME] [--priority=N] [--snapshot-seq=N]
-##   rochecli recovery-verify --mirror=DIR [--passphrase=TEXT] [--metrics]
-##   rochecli recovery-status [--mirror=DIR...] [--universe-config=FILE] [--passphrase=TEXT] [--required-healthy=N] [--metrics]
-##   rochecli recovery-restore [--mirror=DIR...] [--universe-config=FILE] --data=DIR [--passphrase=TEXT] [--overwrite]
-##   rochecli dump --data=DIR [--out=FILE] [--no-vectors]
-##   rochecli import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING] [--payload-field=FIELD] [--vec-field=FIELD] [--ring-prefix=PREFIX]
+##   roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE]
+##   roche get [--data=DIR | --peers=host:port,...] --id=ID [--ring=RING]
+##   roche query [--data=DIR | --peers=host:port,...] --id=ID --selection=SEL [--ring=RING]
+##   roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]
+##   roche count-ring [--data=DIR | --peers=host:port,...] --ring=RING
+##   roche health --peers=host:port,...
+##   roche metrics --peers=host:port,...
+##   roche atlas [--data=DIR | --peers=host:port,...]
+##   roche doctor
 
 import std/[algorithm, os, strutils, strformat, json, times, monotimes, parseopt,
             net, dynlib]
 import nimsodium/hash
 import rochedb
+import roche/wire
 
 const
   RagTopics = 8
@@ -70,6 +54,46 @@ proc parseHostPort(endpoint: string): tuple[host: string, port: int] =
     (host: p[0], port: parseInt(p[1]))
   else:
     (host: endpoint, port: 6379)
+
+proc openCliDb(dataDir, peers, username, password, authToken, secretKey,
+               galaxy: string): RocheDb =
+  if peers.len > 0:
+    connect(peers, username = username, password = password,
+            authToken = authToken, secretKey = secretKey, galaxy = galaxy)
+  else:
+    open(dataDir = dataDir)
+
+proc requireCliTarget(dataDir, peers: string) =
+  if dataDir.len == 0 and peers.len == 0:
+    raise newException(ValueError, "requires --data=DIR or --peers=host:port,...")
+
+proc cliPayload(payload, inPath: string): string =
+  if payload.len > 0:
+    return payload
+  if inPath.len > 0 and inPath != "-":
+    return readFile(inPath)
+  if inPath == "-":
+    return stdin.readAll()
+  raise newException(ValueError, "requires --payload=TEXT or --in=FILE")
+
+proc cliId(idArg: string): RocheId =
+  if idArg.len == 0:
+    raise newException(ValueError, "requires --id=ID")
+  let parts = idArg.split(":")
+  if parts.len == 2:
+    return fromRaw(parseBiggestUInt(parts[0]).uint64, 1'u32,
+                   parseUInt(parts[1]).uint32, 0.0)
+  if parts.len == 4:
+    return fromRaw(parseBiggestUInt(parts[0]).uint64,
+                   parseUInt(parts[1]).uint32,
+                   parseUInt(parts[2]).uint32,
+                   parseFloat(parts[3]))
+  raise newException(ValueError,
+    "--id must be parent:seq or parent:epoch:seq:tWrite")
+
+proc cliIdString(id: RocheId): string =
+  let raw = id.toRaw()
+  $raw.parent & ":" & $raw.epoch & ":" & $raw.seq & ":" & $raw.tWrite
 
 proc checkFile(path, label: string): bool =
   result = fileExists(path)
@@ -268,6 +292,186 @@ proc runAtlas(dataDir, peers, username, password, authToken, secretKey,
       open(dataDir = dataDir)
   echo db.atlas().pretty
   db.close()
+
+proc runPut(dataDir, peers, username, password, authToken, secretKey,
+            galaxy, ring, payload, inPath: string) =
+  requireCliTarget(dataDir, peers)
+  if ring.len == 0:
+    raise newException(ValueError, "put requires --ring=RING")
+  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+                     galaxy)
+  try:
+    let id = db.put(cliPayload(payload, inPath), ring = ring)
+    echo &"put OK id={id} rawId={cliIdString(id)} ring={ring}"
+  finally:
+    db.close()
+
+proc runGet(dataDir, peers, username, password, authToken, secretKey,
+            galaxy, idArg, ring: string) =
+  requireCliTarget(dataDir, peers)
+  if peers.len > 0 and ring.len == 0:
+    raise newException(ValueError, "cluster get requires --ring=RING")
+  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+                     galaxy)
+  try:
+    if ring.len > 0:
+      db.configureRing(ring, 60.0)
+    echo db.get(cliId(idArg))
+  finally:
+    db.close()
+
+proc runQuery(dataDir, peers, username, password, authToken, secretKey,
+              galaxy, idArg, ring, selection: string) =
+  requireCliTarget(dataDir, peers)
+  if selection.len == 0:
+    raise newException(ValueError, "query requires --selection=SEL")
+  if peers.len > 0 and ring.len == 0:
+    raise newException(ValueError, "cluster query requires --ring=RING")
+  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+                     galaxy)
+  try:
+    if ring.len > 0:
+      db.configureRing(ring, 60.0)
+    echo db.query(cliId(idArg), selection).pretty
+  finally:
+    db.close()
+
+proc runListRing(dataDir, peers, username, password, authToken, secretKey,
+                 galaxy, ring, cursor: string, limit: int) =
+  requireCliTarget(dataDir, peers)
+  if ring.len == 0:
+    raise newException(ValueError, "list-ring requires --ring=RING")
+  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+                     galaxy)
+  try:
+    let page = db.listByRing(ring, limit = limit, cursor = cursor)
+    var items = newJArray()
+    for item in page.items:
+      items.add %*{
+        "id": $item.id,
+        "rawId": item.id.cliIdString(),
+        "payload": item.payload
+      }
+    echo pretty(%*{"items": items, "nextCursor": page.nextCursor})
+  finally:
+    db.close()
+
+proc runCountRing(dataDir, peers, username, password, authToken, secretKey,
+                  galaxy, ring: string) =
+  requireCliTarget(dataDir, peers)
+  if ring.len == 0:
+    raise newException(ValueError, "count-ring requires --ring=RING")
+  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+                     galaxy)
+  try:
+    echo &"count-ring OK ring={ring} count={db.countByRing(ring)}"
+  finally:
+    db.close()
+
+proc splitCommandRest(line: string): tuple[cmd, rest: string] =
+  let s = line.strip()
+  if s.len == 0:
+    return ("", "")
+  let sp = s.find(' ')
+  if sp < 0:
+    (s, "")
+  else:
+    (s[0 ..< sp], s[sp + 1 .. ^1].strip())
+
+proc splitFirstRest(s: string): tuple[first, rest: string] =
+  let t = s.strip()
+  if t.len == 0:
+    return ("", "")
+  let sp = t.find(' ')
+  if sp < 0:
+    (t, "")
+  else:
+    (t[0 ..< sp], t[sp + 1 .. ^1].strip())
+
+proc printShellHelp() =
+  echo "Commands:"
+  echo "  put RING PAYLOAD"
+  echo "  get ID [RING]"
+  echo "  query ID SELECTION"
+  echo "  query ID RING SELECTION       # cluster mode"
+  echo "  list RING [LIMIT]"
+  echo "  count RING"
+  echo "  atlas"
+  echo "  help"
+  echo "  exit"
+
+proc runShell(dataDir, peers, username, password, authToken, secretKey,
+              galaxy: string) =
+  requireCliTarget(dataDir, peers)
+  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+                     galaxy)
+  try:
+    echo "RocheDB shell. Type help or exit."
+    while true:
+      stdout.write("roche> ")
+      stdout.flushFile()
+      if stdin.endOfFile():
+        break
+      let line = stdin.readLine()
+      let cr = splitCommandRest(line)
+      let op = cr.cmd.toLowerAscii()
+      if op.len == 0:
+        continue
+      try:
+        case op
+        of "exit", "quit":
+          break
+        of "help", "?":
+          printShellHelp()
+        of "put":
+          let rp = splitFirstRest(cr.rest)
+          if rp.first.len == 0 or rp.rest.len == 0:
+            raise newException(ValueError, "usage: put RING PAYLOAD")
+          let id = db.put(rp.rest, ring = rp.first)
+          echo &"put OK id={id} rawId={cliIdString(id)} ring={rp.first}"
+        of "get":
+          let ir = splitFirstRest(cr.rest)
+          if ir.first.len == 0:
+            raise newException(ValueError, "usage: get ID [RING]")
+          if peers.len > 0 and ir.rest.len == 0:
+            raise newException(ValueError, "cluster get requires ring: get ID RING")
+          if ir.rest.len > 0:
+            db.configureRing(ir.rest, 60.0)
+          echo db.get(cliId(ir.first))
+        of "query":
+          let ir = splitFirstRest(cr.rest)
+          if ir.first.len == 0 or ir.rest.len == 0:
+            raise newException(ValueError, "usage: query ID SELECTION")
+          if peers.len > 0:
+            let rs = splitFirstRest(ir.rest)
+            if rs.first.len == 0 or rs.rest.len == 0:
+              raise newException(ValueError, "cluster query requires: query ID RING SELECTION")
+            db.configureRing(rs.first, 60.0)
+            echo db.query(cliId(ir.first), rs.rest).pretty
+          else:
+            echo db.query(cliId(ir.first), ir.rest).pretty
+        of "list", "list-ring":
+          let rl = splitFirstRest(cr.rest)
+          if rl.first.len == 0:
+            raise newException(ValueError, "usage: list RING [LIMIT]")
+          let lim = if rl.rest.len > 0: parseInt(rl.rest) else: 10
+          let page = db.listByRing(rl.first, limit = lim)
+          for item in page.items:
+            echo &"{item.id.cliIdString()} {item.payload}"
+          if page.nextCursor.len > 0:
+            echo &"nextCursor={page.nextCursor}"
+        of "count", "count-ring":
+          if cr.rest.len == 0:
+            raise newException(ValueError, "usage: count RING")
+          echo &"count-ring OK ring={cr.rest} count={db.countByRing(cr.rest)}"
+        of "atlas":
+          echo db.atlas().pretty
+        else:
+          echo "ERR unknown command: " & cr.cmd
+      except CatchableError:
+        echo "ERR " & getCurrentExceptionMsg()
+  finally:
+    db.close()
 
 proc runDescribeGalaxy(dataDir, description: string) =
   if dataDir.len == 0:
@@ -690,29 +894,35 @@ proc runRestoreEncrypted(backupDir, dataDir, passphrase: string,
 
 type
   RecoveryCandidate = object
-    mirror: string
+    archive: string
     encrypted: bool
+    readonly: bool
     priority: int
     snapshotSeq: BiggestInt
     stats: BackupStats
 
-  RecoveryLaneConfig = object
-    mirror: string
-    lane: string
+  RecoveryUniverseEntry = object
+    archive: string
+    universe: string
+    galaxy: string
+    location: string
+    endpoint: string
     failureDomain: string
+    authRef: string
     priority: int
     snapshotSeq: BiggestInt
+    readonly: bool
     enabled: bool
 
-  RecoveryLaneStatus = object
-    mirror: string
+  RecoveryUniverseStatus = object
+    archive: string
     healthy: bool
     candidate: RecoveryCandidate
     error: string
 
   RecoveryUniverseConfig = object
     requiredHealthy: int
-    lanes: seq[RecoveryLaneConfig]
+    universes: seq[RecoveryUniverseEntry]
 
 proc artifactChecksum(path: string): string =
   genericHashHex(readFile(path))
@@ -730,67 +940,204 @@ proc manifestBool(manifest: JsonNode, key: string, default: bool): bool =
 proc manifestStr(manifest: JsonNode, key, default: string): string =
   if manifest.hasKey(key): manifest[key].getStr() else: default
 
+proc recoveryLocation(value: string): string =
+  result = if value.len > 0: value else: "local"
+  if result != "local" and result != "remote":
+    raise newException(ValueError,
+      "universe config location must be local or remote")
+
+proc recoveryAuthRefs(root: JsonNode): seq[string] =
+  if root.hasKey("authProfiles"):
+    if root["authProfiles"].kind != JObject:
+      raise newException(ValueError,
+        "universe config authProfiles must be an object")
+    for key, profile in root["authProfiles"].pairs:
+      if profile.kind != JObject:
+        raise newException(ValueError,
+          "universe config authProfiles entries must be objects")
+      if profile.hasKey("username") or profile.hasKey("password") or
+          profile.hasKey("secretKey"):
+        raise newException(ValueError,
+          "universe config authProfiles must not contain credentials")
+      let mode = manifestStr(profile, "mode", "user-password-secret-key")
+      if mode != "user-password-secret-key":
+        raise newException(ValueError,
+          "universe config authProfiles mode must be user-password-secret-key")
+      result.add key
+
+proc validateAuthRef(refName: string, knownRefs: seq[string]) =
+  if refName.len > 0 and knownRefs.len > 0 and refName notin knownRefs:
+    raise newException(ValueError,
+      "universe config authRef is not declared in authProfiles: " & refName)
+
+proc galaxyNames(entries: seq[RecoveryUniverseEntry]): seq[string] =
+  for entry in entries:
+    result.add entry.galaxy
+  result.sort()
+  if result.len > 1:
+    for idx in 1 ..< result.len:
+      if result[idx] == result[idx - 1]:
+        raise newException(ValueError,
+          "universe config galaxy names must be unique per universe")
+
 proc loadRecoveryUniverseConfig(path: string): RecoveryUniverseConfig =
   if path.len == 0:
     return
   let root = parseFile(path)
   if root.hasKey("requiredHealthy"):
     result.requiredHealthy = root["requiredHealthy"].getInt()
-  if not root.hasKey("lanes") or root["lanes"].kind != JArray:
-    raise newException(ValueError, "universe config requires lanes array")
-  for laneNode in root["lanes"].items:
-    if laneNode.kind != JObject:
-      raise newException(ValueError, "universe config lane must be an object")
-    var lane = RecoveryLaneConfig(
-      mirror: manifestStr(laneNode, "mirror", manifestStr(laneNode, "path", "")),
-      lane: manifestStr(laneNode, "lane", ""),
-      failureDomain: manifestStr(laneNode, "failureDomain", ""),
-      priority: manifestInt(laneNode, "priority", 0),
-      snapshotSeq: manifestBiggestInt(laneNode, "snapshotSeq", 0),
-      enabled: manifestBool(laneNode, "enabled", true)
-    )
-    if lane.mirror.len == 0:
-      raise newException(ValueError, "universe config lane requires mirror")
-    if lane.enabled:
-      result.lanes.add lane
+  let listKey =
+    if root.hasKey("universes"): "universes"
+    elif root.hasKey("lanes"): "lanes"
+    else: ""
+  if listKey.len == 0 or root[listKey].kind != JArray:
+    raise newException(ValueError, "universe config requires universes array")
+  var expectedGalaxies: seq[string] = @[]
+  let knownAuthRefs = recoveryAuthRefs(root)
+  for universeNode in root[listKey].items:
+    if universeNode.kind != JObject:
+      raise newException(ValueError, "universe config universe must be an object")
+    let universeName = manifestStr(universeNode, "universe",
+                       manifestStr(universeNode, "lane", ""))
+    let location = recoveryLocation(manifestStr(universeNode, "location", ""))
+    let endpoint = manifestStr(universeNode, "endpoint", "")
+    let failureDomain = manifestStr(universeNode, "failureDomain", "")
+    let universeAuthRef = manifestStr(universeNode, "authRef", "")
+    validateAuthRef(universeAuthRef, knownAuthRefs)
+    let priority = manifestInt(universeNode, "priority", 0)
+    let snapshotSeq = manifestBiggestInt(universeNode, "snapshotSeq", 0)
+    let universeReadonly = manifestBool(universeNode, "readonly",
+                           manifestBool(universeNode, "readOnly", false))
+    let universeEnabled = manifestBool(universeNode, "enabled", true)
+    if location == "remote" and endpoint.len == 0:
+      raise newException(ValueError,
+        "universe config remote universe requires endpoint")
+    var entries: seq[RecoveryUniverseEntry] = @[]
+    if universeNode.hasKey("galaxies"):
+      if universeNode["galaxies"].kind != JArray:
+        raise newException(ValueError,
+          "universe config universe galaxies must be an array")
+      for galaxyNode in universeNode["galaxies"].items:
+        if galaxyNode.kind != JObject:
+          raise newException(ValueError,
+            "universe config galaxy must be an object")
+        let archive = manifestStr(galaxyNode, "archive",
+                      manifestStr(galaxyNode, "mirror",
+                      manifestStr(galaxyNode, "path", "")))
+        if archive.len == 0:
+          raise newException(ValueError,
+            "universe config galaxy requires archive")
+        let galaxyName = manifestStr(galaxyNode, "galaxy", "")
+        if galaxyName.len == 0:
+          raise newException(ValueError,
+            "universe config galaxy requires galaxy")
+        let authRef = manifestStr(galaxyNode, "authRef", universeAuthRef)
+        validateAuthRef(authRef, knownAuthRefs)
+        entries.add RecoveryUniverseEntry(
+          archive: archive,
+          universe: universeName,
+          galaxy: galaxyName,
+          location: location,
+          endpoint: endpoint,
+          failureDomain: failureDomain,
+          authRef: authRef,
+          priority: priority,
+          snapshotSeq: snapshotSeq,
+          readonly: manifestBool(galaxyNode, "readonly",
+                    manifestBool(galaxyNode, "readOnly", universeReadonly)),
+          enabled: universeEnabled and manifestBool(galaxyNode, "enabled", true)
+        )
+    else:
+      let archive = manifestStr(universeNode, "archive",
+                    manifestStr(universeNode, "mirror",
+                    manifestStr(universeNode, "path", "")))
+      if archive.len == 0:
+        raise newException(ValueError, "universe config universe requires archive")
+      let galaxyName = manifestStr(universeNode, "galaxy", "")
+      if galaxyName.len == 0:
+        raise newException(ValueError, "universe config universe requires galaxy")
+      entries.add RecoveryUniverseEntry(
+        archive: archive,
+        universe: universeName,
+        galaxy: galaxyName,
+        location: location,
+        endpoint: endpoint,
+        failureDomain: failureDomain,
+        authRef: universeAuthRef,
+        priority: priority,
+        snapshotSeq: snapshotSeq,
+        readonly: universeReadonly,
+        enabled: universeEnabled
+      )
+    let names = galaxyNames(entries)
+    if names.len == 0:
+      raise newException(ValueError,
+        "universe config universe requires at least one galaxy")
+    if expectedGalaxies.len == 0:
+      expectedGalaxies = names
+    elif names != expectedGalaxies:
+      raise newException(ValueError,
+        "universe config requires the same galaxies in every universe")
+    for entry in entries:
+      if entry.enabled:
+        result.universes.add entry
 
-proc recoveryLanesFromArgs(mirrors: seq[string], lane, failureDomain: string,
-                           priority: int,
-                           snapshotSeq: BiggestInt): seq[RecoveryLaneConfig] =
+proc recoveryUniversesFromArgs(mirrors: seq[string], universeName,
+                               galaxy, location, failureDomain, authRef: string,
+                               priority: int,
+                               snapshotSeq: BiggestInt,
+                               readonly: bool): seq[RecoveryUniverseEntry] =
   for mirror in mirrors:
-    result.add RecoveryLaneConfig(
-      mirror: mirror,
-      lane: lane,
+    result.add RecoveryUniverseEntry(
+      archive: mirror,
+      universe: universeName,
+      galaxy: galaxy,
+      location: recoveryLocation(location),
       failureDomain: failureDomain,
+      authRef: authRef,
       priority: priority,
       snapshotSeq: snapshotSeq,
+      readonly: readonly,
       enabled: true
     )
 
-proc recoveryLanesFromInputs(mirrors: seq[string], configPath, lane,
-                             failureDomain: string, priority: int,
-                             snapshotSeq: BiggestInt): RecoveryUniverseConfig =
+proc recoveryUniversesFromInputs(mirrors: seq[string], configPath, universeName,
+                                 galaxy, location, failureDomain,
+                                 authRef: string,
+                                 priority: int,
+                                 snapshotSeq: BiggestInt,
+                                 readonly: bool): RecoveryUniverseConfig =
   if configPath.len > 0:
     result = loadRecoveryUniverseConfig(configPath)
-  result.lanes.add recoveryLanesFromArgs(mirrors, lane, failureDomain, priority,
-                                         snapshotSeq)
+  result.universes.add recoveryUniversesFromArgs(mirrors, universeName,
+                                                 galaxy, location,
+                                                 failureDomain, authRef, priority,
+                                                 snapshotSeq, readonly)
 
-proc recoveryMirrors(lanes: seq[RecoveryLaneConfig]): seq[string] =
-  for lane in lanes:
-    result.add lane.mirror
+proc recoveryArchives(universes: seq[RecoveryUniverseEntry]): seq[string] =
+  for universe in universes:
+    result.add universe.archive
 
-proc recoveryManifest(encrypted: bool, mirror, backupFile, lane,
-                      failureDomain: string, priority: int,
-                      snapshotSeq: BiggestInt, stats: BackupStats): JsonNode =
+proc recoveryManifest(encrypted: bool, archive, backupFile, universeName,
+                      galaxy, location, endpoint, failureDomain, authRef: string,
+                      priority: int,
+                      snapshotSeq: BiggestInt, readonly: bool,
+                      stats: BackupStats): JsonNode =
   %*{
     "version": 1,
     "kind": "rochedb-recovery-mirror",
     "createdAt": $now(),
     "encrypted": encrypted,
     "eligibleForRestore": true,
-    "mirror": mirror,
-    "lane": lane,
+    "readonly": readonly,
+    "archive": archive,
+    "mirror": archive,
+    "universe": universeName,
+    "galaxy": galaxy,
+    "location": location,
+    "endpoint": endpoint,
     "failureDomain": failureDomain,
+    "authRef": authRef,
     "priority": priority,
     "snapshotSeq": snapshotSeq,
     "backupFile": backupFile,
@@ -802,49 +1149,59 @@ proc recoveryManifest(encrypted: bool, mirror, backupFile, lane,
     "names": stats.ringNames,
     "clusterTx": stats.clusterTx,
     "appliedClusterTx": stats.appliedClusterTx,
-    "warpJobs": stats.warpJobs
+    "warpJobs": stats.warpJobs,
+    "universeSyncEvents": stats.universeSyncEvents
   }
 
 proc writeRecoveryManifest(mirror: string, manifest: JsonNode) =
   writeFile(mirror / "roche.recovery.json", pretty(manifest))
 
-proc runRecoveryBackup(dataDir: string, lanes: seq[RecoveryLaneConfig],
+proc runRecoveryBackup(dataDir: string, universes: seq[RecoveryUniverseEntry],
                        passphrase: string) =
-  if dataDir.len == 0 or lanes.len == 0:
+  if dataDir.len == 0 or universes.len == 0:
     raise newException(ValueError,
       "recovery-backup requires --data=DIR and --mirror=DIR or --universe-config=FILE")
   var db = open(dataDir = dataDir)
   try:
-    for laneConfig in lanes:
-      let mirror = laneConfig.mirror
+    for universeConfig in universes:
+      let archive = universeConfig.archive
+      if universeConfig.readonly:
+        echo &"recovery-backup SKIP archive={archive} universe={universeConfig.universe} readonly=true"
+        continue
       let encrypted = passphrase.len > 0
       let stats =
-        if encrypted: db.backupEncrypted(mirror, passphrase)
-        else: db.backup(mirror)
+        if encrypted: db.backupEncrypted(archive, passphrase)
+        else: db.backup(archive)
       let verified =
-        if encrypted: verifyEncryptedBackup(mirror, passphrase)
-        else: verifyBackup(mirror)
-      let backupFile = mirror / (if encrypted: "roche.backup" else: "roche.log")
-      let laneName =
-        if laneConfig.lane.len > 0: laneConfig.lane else: lastPathPart(mirror)
-      writeRecoveryManifest(mirror, recoveryManifest(encrypted, mirror,
-                                                    backupFile, laneName,
-                                                    laneConfig.failureDomain,
-                                                    laneConfig.priority,
-                                                    laneConfig.snapshotSeq,
+        if encrypted: verifyEncryptedBackup(archive, passphrase)
+        else: verifyBackup(archive)
+      let backupFile = archive / (if encrypted: "roche.backup" else: "roche.log")
+      let universeName =
+        if universeConfig.universe.len > 0: universeConfig.universe
+        else: lastPathPart(archive)
+      writeRecoveryManifest(archive, recoveryManifest(encrypted, archive,
+                                                    backupFile, universeName,
+                                                    universeConfig.galaxy,
+                                                    universeConfig.location,
+                                                    universeConfig.endpoint,
+                                                    universeConfig.failureDomain,
+                                                    universeConfig.authRef,
+                                                    universeConfig.priority,
+                                                    universeConfig.snapshotSeq,
+                                                    universeConfig.readonly,
                                                     verified))
-      echo &"recovery-backup OK mirror={mirror} lane={laneName} encrypted={encrypted} bytes={verified.bytes} items={verified.items} source={stats.source}"
+      echo &"recovery-backup OK archive={archive} universe={universeName} encrypted={encrypted} bytes={verified.bytes} items={verified.items} source={stats.source}"
   finally:
     db.close()
 
-proc verifyRecoveryMirror(mirror, passphrase: string): RecoveryCandidate =
-  if mirror.len == 0:
+proc verifyRecoveryMirror(archive, passphrase: string): RecoveryCandidate =
+  if archive.len == 0:
     raise newException(ValueError, "recovery-verify requires --mirror=DIR")
   let encrypted = passphrase.len > 0
   let stats =
-    if encrypted: verifyEncryptedBackup(mirror, passphrase)
-    else: verifyBackup(mirror)
-  let manifestPath = mirror / "roche.recovery.json"
+    if encrypted: verifyEncryptedBackup(archive, passphrase)
+    else: verifyBackup(archive)
+  let manifestPath = archive / "roche.recovery.json"
   if fileExists(manifestPath):
     let manifest = parseFile(manifestPath)
     if manifest.hasKey("encrypted") and manifest["encrypted"].getBool() != encrypted:
@@ -853,7 +1210,7 @@ proc verifyRecoveryMirror(mirror, passphrase: string): RecoveryCandidate =
       raise newException(IOError, "recovery mirror is not eligible for restore")
     if manifest.hasKey("bytes") and manifest["bytes"].getBiggestInt() != stats.bytes:
       raise newException(IOError, "recovery manifest byte count mismatch")
-    let backupFile = mirror / (if encrypted: "roche.backup" else: "roche.log")
+    let backupFile = archive / (if encrypted: "roche.backup" else: "roche.log")
     if manifest.hasKey("checksum") and
         manifest["checksum"].getStr() != artifactChecksum(backupFile):
       raise newException(IOError, "recovery manifest checksum mismatch")
@@ -865,44 +1222,46 @@ proc verifyRecoveryMirror(mirror, passphrase: string): RecoveryCandidate =
       raise newException(IOError, "recovery manifest ring name count mismatch")
     result.priority = manifestInt(manifest, "priority", 0)
     result.snapshotSeq = manifestBiggestInt(manifest, "snapshotSeq", 0)
-  result.mirror = mirror
+    result.readonly = manifestBool(manifest, "readonly",
+                      manifestBool(manifest, "readOnly", false))
+  result.archive = archive
   result.encrypted = encrypted
   result.stats = stats
 
-proc runRecoveryVerify(mirror, passphrase: string, metricsFormat: bool) =
-  let candidate = verifyRecoveryMirror(mirror, passphrase)
+proc runRecoveryVerify(archive, passphrase: string, metricsFormat: bool) =
+  let candidate = verifyRecoveryMirror(archive, passphrase)
   let stats = candidate.stats
   if metricsFormat:
-    echo &"recoveryMirrorHealthy 1 recoveryMirrorEncrypted {int(candidate.encrypted)} recoveryMirrorBytes {stats.bytes} recoveryMirrorItems {stats.items} recoveryMirrorRings {stats.ringMeta} recoveryMirrorNames {stats.ringNames} recoveryMirrorClusterTx {stats.clusterTx} recoveryMirrorWarpJobs {stats.warpJobs} recoveryMirrorPriority {candidate.priority} recoveryMirrorSnapshotSeq {candidate.snapshotSeq}"
+    echo &"recoveryMirrorHealthy 1 recoveryMirrorEncrypted {int(candidate.encrypted)} recoveryMirrorReadonly {int(candidate.readonly)} recoveryMirrorBytes {stats.bytes} recoveryMirrorItems {stats.items} recoveryMirrorRings {stats.ringMeta} recoveryMirrorNames {stats.ringNames} recoveryMirrorClusterTx {stats.clusterTx} recoveryMirrorWarpJobs {stats.warpJobs} recoveryMirrorUniverseSyncEvents {stats.universeSyncEvents} recoveryMirrorPriority {candidate.priority} recoveryMirrorSnapshotSeq {candidate.snapshotSeq}"
   else:
-    echo &"recovery-verify OK mirror={mirror} encrypted={candidate.encrypted} bytes={stats.bytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames} priority={candidate.priority} snapshotSeq={candidate.snapshotSeq}"
+    echo &"recovery-verify OK archive={archive} encrypted={candidate.encrypted} readonly={candidate.readonly} bytes={stats.bytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames} priority={candidate.priority} snapshotSeq={candidate.snapshotSeq}"
 
 proc recoveryCandidateCmp(a, b: RecoveryCandidate): int =
   result = cmp(b.priority, a.priority)
   if result == 0:
     result = cmp(b.snapshotSeq, a.snapshotSeq)
   if result == 0:
-    result = cmp(a.mirror, b.mirror)
+    result = cmp(a.archive, b.archive)
 
-proc runRecoveryStatus(mirrors: seq[string], passphrase: string,
+proc runRecoveryStatus(archives: seq[string], passphrase: string,
                        requiredHealthy: int, metricsFormat: bool) =
-  if mirrors.len == 0:
+  if archives.len == 0:
     raise newException(ValueError,
       "recovery-status requires --mirror=DIR [--mirror=DIR...]")
   if requiredHealthy < 1:
     raise newException(ValueError, "recovery-status requires --required-healthy >= 1")
 
-  var statuses: seq[RecoveryLaneStatus] = @[]
+  var statuses: seq[RecoveryUniverseStatus] = @[]
   var candidates: seq[RecoveryCandidate] = @[]
-  for mirror in mirrors:
-    var lane = RecoveryLaneStatus(mirror: mirror)
+  for archive in archives:
+    var universe = RecoveryUniverseStatus(archive: archive)
     try:
-      lane.candidate = verifyRecoveryMirror(mirror, passphrase)
-      lane.healthy = true
-      candidates.add lane.candidate
+      universe.candidate = verifyRecoveryMirror(archive, passphrase)
+      universe.healthy = true
+      candidates.add universe.candidate
     except CatchableError:
-      lane.error = getCurrentExceptionMsg()
-    statuses.add lane
+      universe.error = getCurrentExceptionMsg()
+    statuses.add universe
 
   candidates.sort(recoveryCandidateCmp)
   let healthy = candidates.len
@@ -913,14 +1272,14 @@ proc runRecoveryStatus(mirrors: seq[string], passphrase: string,
     else: RecoveryCandidate()
 
   if metricsFormat:
-    echo &"recoveryUniverseHealthy {int(ok)} recoveryHealthyLanes {healthy} recoveryRequiredHealthyLanes {requiredHealthy} recoveryFailedLanes {failed} recoveryBestPriority {best.priority} recoveryBestSnapshotSeq {best.snapshotSeq} recoveryBestBytes {best.stats.bytes} recoveryBestItems {best.stats.items}"
+    echo &"recoveryUniverseHealthy {int(ok)} recoveryHealthyUniverses {healthy} recoveryRequiredHealthyUniverses {requiredHealthy} recoveryFailedUniverses {failed} recoveryBestPriority {best.priority} recoveryBestSnapshotSeq {best.snapshotSeq} recoveryBestBytes {best.stats.bytes} recoveryBestItems {best.stats.items}"
   else:
-    echo &"recovery-status {(if ok: \"OK\" else: \"FAIL\")} healthy={healthy} required={requiredHealthy} failed={failed} bestMirror={best.mirror} priority={best.priority} snapshotSeq={best.snapshotSeq}"
-    for lane in statuses:
-      if lane.healthy:
-        echo &"  lane OK mirror={lane.mirror} priority={lane.candidate.priority} snapshotSeq={lane.candidate.snapshotSeq} bytes={lane.candidate.stats.bytes} items={lane.candidate.stats.items}"
+    echo &"recovery-status {(if ok: \"OK\" else: \"FAIL\")} healthy={healthy} required={requiredHealthy} failed={failed} bestArchive={best.archive} priority={best.priority} snapshotSeq={best.snapshotSeq}"
+    for universe in statuses:
+      if universe.healthy:
+        echo &"  universe OK archive={universe.archive} priority={universe.candidate.priority} snapshotSeq={universe.candidate.snapshotSeq} bytes={universe.candidate.stats.bytes} items={universe.candidate.stats.items}"
       else:
-        echo &"  lane FAIL mirror={lane.mirror} error={lane.error}"
+        echo &"  universe FAIL archive={universe.archive} error={universe.error}"
 
   if not ok:
     quit(1)
@@ -947,9 +1306,9 @@ proc replaceRecoveryLog(stageDir, dataDir: string) =
       moveFile(bak, dst)
     raise
 
-proc runRecoveryRestore(mirrors: seq[string], dataDir, passphrase: string,
+proc runRecoveryRestore(archives: seq[string], dataDir, passphrase: string,
                         overwrite: bool) =
-  if dataDir.len == 0 or mirrors.len == 0:
+  if dataDir.len == 0 or archives.len == 0:
     raise newException(ValueError,
       "recovery-restore requires --mirror=DIR [--mirror=DIR...] --data=DIR")
   let dst = dataDir / "roche.log"
@@ -958,11 +1317,11 @@ proc runRecoveryRestore(mirrors: seq[string], dataDir, passphrase: string,
 
   var candidates: seq[RecoveryCandidate] = @[]
   var lastError = ""
-  for mirror in mirrors:
+  for archive in archives:
     try:
-      candidates.add verifyRecoveryMirror(mirror, passphrase)
+      candidates.add verifyRecoveryMirror(archive, passphrase)
     except CatchableError:
-      lastError = mirror & ": " & getCurrentExceptionMsg()
+      lastError = archive & ": " & getCurrentExceptionMsg()
 
   if candidates.len == 0:
     raise newException(IOError, "no eligible recovery mirror" &
@@ -975,15 +1334,15 @@ proc runRecoveryRestore(mirrors: seq[string], dataDir, passphrase: string,
     removeDir(stageDir)
   try:
     if chosen.encrypted:
-      discard restoreEncryptedBackup(chosen.mirror, stageDir, passphrase,
+      discard restoreEncryptedBackup(chosen.archive, stageDir, passphrase,
                                      overwrite = true)
     else:
-      discard restoreBackup(chosen.mirror, stageDir, overwrite = true)
+      discard restoreBackup(chosen.archive, stageDir, overwrite = true)
     replaceRecoveryLog(stageDir, dataDir)
   finally:
     if dirExists(stageDir):
       removeDir(stageDir)
-  echo &"recovery-restore OK mirror={chosen.mirror} data={dataDir} encrypted={chosen.encrypted} priority={chosen.priority} snapshotSeq={chosen.snapshotSeq} bytes={chosen.stats.bytes} items={chosen.stats.items}"
+  echo &"recovery-restore OK archive={chosen.archive} data={dataDir} encrypted={chosen.encrypted} priority={chosen.priority} snapshotSeq={chosen.snapshotSeq} bytes={chosen.stats.bytes} items={chosen.stats.items}"
 
 proc runDump(dataDir, outPath: string, includeVectors: bool) =
   if dataDir.len == 0:
@@ -1006,14 +1365,247 @@ proc runImportJsonl(dataDir, inPath, defaultRing, ringField, ringPrefix,
   db.close()
   echo &"import-jsonl OK read={stats.read} imported={stats.imported} skipped={stats.skipped} errors={stats.errors} rings={stats.rings} source={stats.source}"
 
+proc universeSyncEventNode(event: UniverseSyncEvent): JsonNode =
+  %*{
+    "id": event.id,
+    "eventKey": event.eventKey,
+    "sourceUniverse": event.sourceUniverse,
+    "sourceGalaxy": event.sourceGalaxy,
+    "ring": event.ring,
+    "op": event.op,
+    "logicalKey": event.logicalKey,
+    "payload": event.payload,
+    "vec": event.vec,
+    "timestamp": event.timestamp,
+    "originSeq": event.originSeq
+  }
+
+proc parseUniverseSyncEvent(node: JsonNode): UniverseSyncEvent =
+  if node.kind != JObject:
+    raise newException(ValueError, "universe sync event must be an object")
+  var vec: seq[float32] = @[]
+  if node.hasKey("vec") and node["vec"].kind == JArray:
+    for item in node["vec"]:
+      case item.kind
+      of JInt:
+        vec.add float32(item.getInt())
+      of JFloat:
+        vec.add float32(item.getFloat())
+      else:
+        discard
+  UniverseSyncEvent(
+    id: node{"id"}.getBiggestInt().uint64,
+    eventKey: node["eventKey"].getStr(),
+    sourceUniverse: node{"sourceUniverse"}.getStr(),
+    sourceGalaxy: node{"sourceGalaxy"}.getStr(),
+    ring: node["ring"].getStr(),
+    op: node{"op"}.getStr("put"),
+    logicalKey: node{"logicalKey"}.getStr(),
+    payload: node{"payload"}.getStr(),
+    vec: vec,
+    timestamp: node{"timestamp"}.getFloat(),
+    originSeq: node{"originSeq"}.getBiggestInt().uint64)
+
+proc runUniverseExport(dataDir, outPath: string) =
+  if dataDir.len == 0:
+    raise newException(ValueError, "universe-export requires --data=DIR")
+  var db = open(dataDir = dataDir)
+  var outFile: File
+  let toStdout = outPath.len == 0 or outPath == "-"
+  if toStdout:
+    outFile = stdout
+  else:
+    let parent = parentDir(outPath)
+    if parent.len > 0:
+      createDir(parent)
+    outFile = open(outPath, fmWrite)
+  var exported = 0
+  try:
+    for event in db.universeSyncEvents():
+      outFile.write($event.universeSyncEventNode())
+      outFile.write("\n")
+      inc exported
+  finally:
+    if not toStdout:
+      outFile.close()
+    db.close()
+  if not toStdout:
+    echo &"universe-export OK events={exported} to={outPath}"
+
+proc runUniverseApply(dataDir, inPath: string) =
+  if dataDir.len == 0 or inPath.len == 0:
+    raise newException(ValueError, "universe-apply requires --data=DIR --in=FILE")
+  var db = open(dataDir = dataDir)
+  var read = 0
+  var applied = 0
+  var skipped = 0
+  var errors = 0
+  try:
+    for line in lines(inPath):
+      let trimmed = line.strip()
+      if trimmed.len == 0:
+        inc skipped
+        continue
+      inc read
+      try:
+        if db.applyUniverseSyncEvent(parseUniverseSyncEvent(parseJson(trimmed))):
+          inc applied
+        else:
+          inc skipped
+      except CatchableError:
+        inc errors
+  finally:
+    db.close()
+  echo &"universe-apply OK read={read} applied={applied} skipped={skipped} errors={errors} source={inPath}"
+
+proc runUniverseSync(dataDir, targetDataDir: string, pruneAcked: bool) =
+  if dataDir.len == 0 or targetDataDir.len == 0:
+    raise newException(ValueError,
+      "universe-sync requires --data=SOURCE_DIR --target-data=TARGET_DIR")
+  var source = open(dataDir = dataDir)
+  var target = open(dataDir = targetDataDir)
+  try:
+    let stats = syncUniverseOnce(source, target, pruneAcked = pruneAcked)
+    echo &"universe-sync OK read={stats.read} applied={stats.applied} skipped={stats.skipped} acked={stats.acked} pruned={stats.pruned} errors={stats.errors} source={dataDir} target={targetDataDir}"
+  finally:
+    target.close()
+    source.close()
+
+proc runUniverseSyncRemote(dataDir, peers, username, password, authToken,
+                           secretKey, galaxy: string, pruneAcked: bool) =
+  if dataDir.len == 0 or peers.len == 0:
+    raise newException(ValueError,
+      "remote universe-sync requires --data=SOURCE_DIR --peers=host:port,...")
+  var source = open(dataDir = dataDir)
+  let client = newClusterClient(parsePeers(peers), username, password,
+                                authToken, secretKey, galaxy)
+  var stats = UniverseSyncStats()
+  try:
+    for event in source.universeSyncEvents():
+      inc stats.read
+      try:
+        let status = client.universeApplyReq(0, $event.universeSyncEventNode())
+        if status == "APPLIED":
+          inc stats.applied
+        else:
+          inc stats.skipped
+        discard source.ackUniverseSyncEvent(event.id)
+        inc stats.acked
+      except CatchableError:
+        inc stats.errors
+    if pruneAcked:
+      stats.pruned = source.pruneAckedUniverseSyncEvents()
+  finally:
+    client.close()
+    source.close()
+  echo &"universe-sync OK read={stats.read} applied={stats.applied} skipped={stats.skipped} acked={stats.acked} pruned={stats.pruned} errors={stats.errors} source={dataDir} targetPeers={peers}"
+
+proc runUniverseStatus(dataDir, peers, username, password, authToken,
+                       secretKey, galaxy: string, metricsFormat: bool) =
+  if dataDir.len > 0:
+    var db = open(dataDir = dataDir)
+    var pending = 0
+    var acked = 0
+    var errors = 0
+    try:
+      for event in db.universeSyncEvents(includeAcknowledged = true):
+        if event.acknowledged:
+          inc acked
+        else:
+          inc pending
+        if event.error.len > 0:
+          inc errors
+    finally:
+      db.close()
+    if metricsFormat:
+      echo &"universeSyncPending {pending}"
+      echo &"universeSyncAcked {acked}"
+      echo &"universeSyncErrors {errors}"
+    else:
+      echo &"universe-status OK source=local pending={pending} acked={acked} errors={errors} data={dataDir}"
+  elif peers.len > 0:
+    let parsedPeers = parsePeers(peers)
+    let client = newClusterClient(parsedPeers, username, password,
+                                  authToken, secretKey, galaxy)
+    var pending = 0
+    var applied = 0
+    var appliedOps = 0
+    var skippedOps = 0
+    var errors = 0
+    var forwarded = 0
+    var lastOk = 0
+    var lastError = 0
+    try:
+      for node in 0 ..< parsedPeers.len:
+        let status = client.universeStatusReq(node)
+        pending += status.pending
+        applied += status.applied
+        appliedOps += status.appliedOps
+        skippedOps += status.skippedOps
+        errors += status.errors
+        forwarded += status.forwarded
+        if status.lastOk > lastOk:
+          lastOk = status.lastOk
+        if status.lastError > lastError:
+          lastError = status.lastError
+      if metricsFormat:
+        echo &"universeSyncPending {pending}"
+        echo &"universeSyncApplied {applied}"
+        echo &"universeApplyApplied {appliedOps}"
+        echo &"universeApplySkipped {skippedOps}"
+        echo &"universeApplyErrors {errors}"
+        echo &"universeApplyForwarded {forwarded}"
+        echo &"universeApplyLastOk {lastOk}"
+        echo &"universeApplyLastError {lastError}"
+      else:
+        echo &"universe-status OK source=remote pending={pending} applied={applied} applyApplied={appliedOps} skipped={skippedOps} errors={errors} forwarded={forwarded} lastOk={lastOk} lastError={lastError} peers={peers}"
+    finally:
+      client.close()
+  else:
+    raise newException(ValueError,
+      "universe-status requires --data=DIR or --peers=host:port,...")
+
+proc printHelp() =
+  echo "RocheDB command-line client"
+  echo ""
+  echo "Usage:"
+  echo "  roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE]"
+  echo "  roche get [--data=DIR | --peers=host:port,...] --id=ID [--ring=RING]"
+  echo "  roche query [--data=DIR | --peers=host:port,...] --id=ID --selection=SEL [--ring=RING]"
+  echo "  roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]"
+  echo "  roche count-ring [--data=DIR | --peers=host:port,...] --ring=RING"
+  echo "  roche shell [--data=DIR | --peers=host:port,...]"
+  echo "  roche atlas [--data=DIR | --peers=host:port,...]"
+  echo "  roche health|metrics|rings --peers=host:port,..."
+  echo "  roche compact --data=DIR"
+  echo "  roche backup --data=DIR --backup=DIR"
+  echo "  roche restore --backup=DIR --data=DIR [--overwrite]"
+  echo "  roche dump --data=DIR [--out=FILE] [--no-vectors]"
+  echo "  roche import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING]"
+  echo "  roche universe-sync --data=SOURCE_DIR [--target-data=TARGET_DIR | --peers=host:port,...] [--prune-acked]"
+  echo "  roche universe-status [--data=DIR | --peers=host:port,...] [--metrics]"
+  echo "  roche recovery-status [--mirror=DIR...] [--universe-config=FILE] [--required-healthy=N] [--metrics]"
+  echo "  roche doctor"
+  echo ""
+  echo "ID formats:"
+  echo "  parent:seq"
+  echo "  parent:epoch:seq:tWrite"
+  echo ""
+  echo "Cluster get/query requires --ring=RING so the CLI can reconstruct ring placement metadata."
+
 when isMainModule:
   var cmd = ""
   var peers = ""
   var dataDir = ""
+  var targetDataDir = ""
   var backupDir = ""
   var mirrors: seq[string] = @[]
   var outPath = ""
   var inPath = ""
+  var payload = ""
+  var idArg = ""
+  var selection = ""
+  var cursor = ""
   var defaultRing = "imported"
   var ringName = ""
   var description = ""
@@ -1022,16 +1614,20 @@ when isMainModule:
   var payloadField = ""
   var vecField = ""
   var overwrite = false
+  var pruneAcked = false
   var includeVectors = true
   var metricsFormat = false
+  var readonly = false
   var username = ""
   var password = ""
   var authToken = ""
   var secretKey = ""
   var backupPassphrase = ""
   var galaxy = ""
-  var lane = ""
+  var universeName = ""
+  var universeLocation = "local"
   var failureDomain = ""
+  var authRef = ""
   var redisEndpoint = "127.0.0.1:6379"
   var universeConfig = ""
   var n = 10_000
@@ -1044,17 +1640,29 @@ when isMainModule:
   var snapshotSeq: BiggestInt = 0
   var requiredHealthy = 1
   var requiredHealthySet = false
+  var help = false
+  var limit = 100
   for kind, key, val in getopt():
     case kind
-    of cmdArgument: cmd = key
+    of cmdArgument:
+      if key == "help":
+        help = true
+      else:
+        cmd = key
     of cmdLongOption:
       case key
+      of "help": help = true
       of "peers": peers = val
       of "data": dataDir = val
+      of "target-data": targetDataDir = val
       of "backup": backupDir = val
       of "mirror": mirrors.add val
       of "out": outPath = val
       of "in": inPath = val
+      of "payload": payload = val
+      of "id": idArg = val
+      of "selection": selection = val
+      of "cursor": cursor = val
       of "default-ring": defaultRing = val
       of "ring": ringName = val
       of "description": description = val
@@ -1063,6 +1671,8 @@ when isMainModule:
       of "payload-field": payloadField = val
       of "vec-field": vecField = val
       of "overwrite": overwrite = true
+      of "prune-acked": pruneAcked = true
+      of "readonly": readonly = true
       of "metrics": metricsFormat = true
       of "no-vectors": includeVectors = false
       of "user": username = val
@@ -1071,11 +1681,14 @@ when isMainModule:
       of "secret-key": secretKey = val
       of "passphrase": backupPassphrase = val
       of "galaxy": galaxy = val
-      of "lane": lane = val
+      of "universe", "lane": universeName = val
+      of "location": universeLocation = val
       of "failure-domain": failureDomain = val
+      of "auth-ref": authRef = val
       of "redis": redisEndpoint = val
       of "universe-config": universeConfig = val
       of "n": n = parseInt(val)
+      of "limit": limit = parseInt(val)
       of "queries": queries = parseInt(val)
       of "budget": budget = parseInt(val)
       of "routed-budget": routedBudget = parseInt(val)
@@ -1088,7 +1701,27 @@ when isMainModule:
         requiredHealthySet = true
       else: discard
     else: discard
+  if help or cmd.len == 0:
+    printHelp()
+    quit 0
   case cmd
+  of "put":
+    runPut(dataDir, peers, username, password, authToken, secretKey, galaxy,
+           ringName, payload, inPath)
+  of "get":
+    runGet(dataDir, peers, username, password, authToken, secretKey, galaxy,
+           idArg, ringName)
+  of "query":
+    runQuery(dataDir, peers, username, password, authToken, secretKey, galaxy,
+             idArg, ringName, selection)
+  of "list-ring":
+    runListRing(dataDir, peers, username, password, authToken, secretKey,
+                galaxy, ringName, cursor, limit)
+  of "count-ring":
+    runCountRing(dataDir, peers, username, password, authToken, secretKey,
+                 galaxy, ringName)
+  of "shell":
+    runShell(dataDir, peers, username, password, authToken, secretKey, galaxy)
   of "demo": runDemo(peers, username, password, authToken, secretKey, galaxy)
   of "bench": runBench(peers, username, password, authToken, secretKey, galaxy, n)
   of "health": runHealth(peers, username, password, authToken, secretKey, galaxy)
@@ -1115,45 +1748,49 @@ when isMainModule:
   of "restore-encrypted": runRestoreEncrypted(backupDir, dataDir,
                                               backupPassphrase, overwrite)
   of "recovery-backup":
-    let recoveryConfig = recoveryLanesFromInputs(mirrors, universeConfig, lane,
-                                                failureDomain, priority,
-                                                snapshotSeq)
-    runRecoveryBackup(dataDir, recoveryConfig.lanes, backupPassphrase)
+    let recoveryConfig = recoveryUniversesFromInputs(mirrors, universeConfig,
+                                                    universeName, galaxy,
+                                                    universeLocation,
+                                                    failureDomain, authRef, priority,
+                                                    snapshotSeq, readonly)
+    runRecoveryBackup(dataDir, recoveryConfig.universes, backupPassphrase)
   of "recovery-verify":
     let mirror = if mirrors.len > 0: mirrors[0] else: backupDir
     runRecoveryVerify(mirror, backupPassphrase, metricsFormat)
   of "recovery-status":
-    let recoveryConfig = recoveryLanesFromInputs(mirrors, universeConfig, lane,
-                                                failureDomain, priority,
-                                                snapshotSeq)
+    let recoveryConfig = recoveryUniversesFromInputs(mirrors, universeConfig,
+                                                    universeName, galaxy,
+                                                    universeLocation,
+                                                    failureDomain, authRef, priority,
+                                                    snapshotSeq, readonly)
     let needed =
       if requiredHealthySet: requiredHealthy
       elif recoveryConfig.requiredHealthy > 0: recoveryConfig.requiredHealthy
       else: requiredHealthy
-    runRecoveryStatus(recoveryMirrors(recoveryConfig.lanes), backupPassphrase,
+    runRecoveryStatus(recoveryArchives(recoveryConfig.universes), backupPassphrase,
                       needed, metricsFormat)
   of "recovery-restore":
-    let recoveryConfig = recoveryLanesFromInputs(mirrors, universeConfig, lane,
-                                                failureDomain, priority,
-                                                snapshotSeq)
-    runRecoveryRestore(recoveryMirrors(recoveryConfig.lanes), dataDir,
+    let recoveryConfig = recoveryUniversesFromInputs(mirrors, universeConfig,
+                                                    universeName, galaxy,
+                                                    universeLocation,
+                                                    failureDomain, authRef, priority,
+                                                    snapshotSeq, readonly)
+    runRecoveryRestore(recoveryArchives(recoveryConfig.universes), dataDir,
                        backupPassphrase, overwrite)
   of "dump": runDump(dataDir, outPath, includeVectors)
   of "import-jsonl": runImportJsonl(dataDir, inPath, defaultRing, ringField,
                                     ringPrefix, payloadField, vecField, n)
+  of "universe-export": runUniverseExport(dataDir, outPath)
+  of "universe-apply": runUniverseApply(dataDir, inPath)
+  of "universe-sync":
+    if targetDataDir.len > 0:
+      runUniverseSync(dataDir, targetDataDir, pruneAcked)
+    else:
+      runUniverseSyncRemote(dataDir, peers, username, password, authToken,
+                            secretKey, galaxy, pruneAcked)
+  of "universe-status":
+    runUniverseStatus(dataDir, peers, username, password, authToken, secretKey,
+                      galaxy, metricsFormat)
   else:
-    echo "usage: rochecli [demo|bench|retrieve-bench|redis-bench|rag-bench|working-set-bench|memory-pressure-bench|health|metrics|rings|atlas|shutdown|doctor] --peers=host:port,... [--user=U --password=P --secret-key=K] [--galaxy=G] [--n=N]"
-    echo "       rochecli compact --data=DIR"
-    echo "       rochecli backup --data=DIR --backup=DIR"
-    echo "       rochecli restore --backup=DIR --data=DIR [--overwrite]"
-    echo "       rochecli backup-encrypted --data=DIR --backup=DIR --passphrase=TEXT"
-    echo "       rochecli restore-encrypted --backup=DIR --data=DIR --passphrase=TEXT [--overwrite]"
-    echo "       rochecli recovery-backup --data=DIR [--mirror=DIR...] [--universe-config=FILE] [--passphrase=TEXT] [--lane=NAME] [--failure-domain=NAME] [--priority=N] [--snapshot-seq=N]"
-    echo "       rochecli recovery-verify --mirror=DIR [--passphrase=TEXT] [--metrics]"
-    echo "       rochecli recovery-status [--mirror=DIR...] [--universe-config=FILE] [--passphrase=TEXT] [--required-healthy=N] [--metrics]"
-    echo "       rochecli recovery-restore [--mirror=DIR...] [--universe-config=FILE] --data=DIR [--passphrase=TEXT] [--overwrite]"
-    echo "       rochecli dump --data=DIR [--out=FILE] [--no-vectors]"
-    echo "       rochecli import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING] [--payload-field=FIELD] [--vec-field=FIELD] [--ring-prefix=PREFIX]"
-    echo "       rochecli describe-galaxy --data=DIR --description=TEXT"
-    echo "       rochecli describe-ring --data=DIR --ring=RING --description=TEXT"
+    printHelp()
     quit(1)

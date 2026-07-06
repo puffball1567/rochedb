@@ -1,0 +1,16 @@
+title: RocheDB
+description: Ring-oriented NoSQL storage for smaller working sets.
+theme: minima
+markdown: kramdown
+
+header_pages:
+  - index.md
+  - public-api.md
+  - config-reference.md
+  - cli-reference.md
+  - rochedb-status.md
+  - rochedb-bench.md
+  - topology-examples.md
+
+exclude:
+  - vendor

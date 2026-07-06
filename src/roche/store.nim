@@ -23,6 +23,9 @@
 ##   CA <txid>\n                                          cluster tx applied
 ##   WJ <jobId> <len>\n<json>\n                         warp belt job snapshot
 ##   WD <jobId>\n                                      warp belt job delete tombstone
+##   UJ <eventId> <len>\n<json>\n                    universe sync event snapshot
+##   UD <eventId>\n                                    universe sync event delete tombstone
+##   UA <len>\n<eventKey>\n                         universe sync event applied marker
 ##   Q <nextTxId>\n                                      次の transaction id
 
 import std/[tables, os, streams, strutils, monotimes, times, posix]
@@ -105,6 +108,7 @@ type
     clusterTx*: int
     appliedClusterTx*: int
     warpJobs*: int
+    universeSyncEvents*: int
 
   StoreBackupStats* = object
     bytes*: BiggestInt
@@ -115,6 +119,7 @@ type
     clusterTx*: int
     appliedClusterTx*: int
     warpJobs*: int
+    universeSyncEvents*: int
     source*: string
     destination*: string
 
@@ -131,6 +136,8 @@ type
     clusterTx*: Table[uint64, ClusterTxIntent]
     appliedClusterTx*: Table[uint64, bool]
     warpJobs*: Table[uint64, string]
+    universeSyncEvents*: Table[uint64, string]
+    appliedUniverseSyncEvents*: Table[string, bool]
     maxTWrite*: float
     nextTxId: uint64
     logFile: File
@@ -460,6 +467,17 @@ proc replay(s: Store, path: string, repair = true) =
         fs.readRecordSep()
       of "WD":
         s.warpJobs.del parseBiggestUInt(parts[1]).uint64
+      of "UJ":
+        let eventId = parseBiggestUInt(parts[1]).uint64
+        let len = parseInt(parts[2])
+        s.universeSyncEvents[eventId] = fs.readExactStr(len)
+        fs.readRecordSep()
+      of "UD":
+        s.universeSyncEvents.del parseBiggestUInt(parts[1]).uint64
+      of "UA":
+        let len = parseInt(parts[1])
+        s.appliedUniverseSyncEvents[fs.readExactStr(len)] = true
+        fs.readRecordSep()
       of "Q":
         s.nextTxId = max(s.nextTxId, parseBiggestUInt(parts[1]).uint64)
       else:
@@ -595,6 +613,15 @@ proc writeSnapshotFile(s: Store, path: string) =
       file.write("WJ " & $jobId & " " & $blob.len & "\n")
       file.write(blob)
       file.write("\n")
+    for eventId, blob in s.universeSyncEvents:
+      file.write("UJ " & $eventId & " " & $blob.len & "\n")
+      file.write(blob)
+      file.write("\n")
+    for eventKey, applied in s.appliedUniverseSyncEvents:
+      if applied:
+        file.write("UA " & $eventKey.len & "\n")
+        file.write(eventKey)
+        file.write("\n")
     if s.durability == durStrong:
       file.syncFile()
     else:
@@ -611,6 +638,7 @@ proc snapshotStats(s: Store, path: string, source = ""): StoreBackupStats =
                    clusterTx: s.clusterTx.len,
                    appliedClusterTx: s.appliedClusterTx.len,
                    warpJobs: s.warpJobs.len,
+                   universeSyncEvents: s.universeSyncEvents.len,
                    source: source,
                    destination: path)
 
@@ -629,6 +657,7 @@ proc compact*(s: Store): StoreCompactStats =
   result.clusterTx = s.clusterTx.len
   result.appliedClusterTx = s.appliedClusterTx.len
   result.warpJobs = s.warpJobs.len
+  result.universeSyncEvents = s.universeSyncEvents.len
   if not s.persistent or s.logPath.len == 0:
     return
 
@@ -840,6 +869,39 @@ proc deleteWarpJob*(s: Store, jobId: uint64) =
     s.logFile.write("WD " & $jobId & "\n")
     s.flushMaybe(force = true)
 
+proc putUniverseSyncEvent*(s: Store, eventId: uint64, blob: string) =
+  ## RocheDB layer が解釈する universe sync event snapshot を保存する。
+  ## Store は durable queue / compact / backup / restore だけを担当する。
+  if blob.len == 0:
+    raise newException(ValueError, "universe sync event blob is empty")
+  s.universeSyncEvents[eventId] = blob
+  if s.persistent:
+    s.logFile.write("UJ " & $eventId & " " & $blob.len & "\n")
+    s.logFile.write(blob)
+    s.logFile.write("\n")
+    s.flushMaybe(force = true)
+
+proc deleteUniverseSyncEvent*(s: Store, eventId: uint64) =
+  s.universeSyncEvents.del eventId
+  if s.persistent:
+    s.logFile.write("UD " & $eventId & "\n")
+    s.flushMaybe(force = true)
+
+proc markUniverseSyncEventApplied*(s: Store, eventKey: string) =
+  if eventKey.len == 0:
+    raise newException(ValueError, "universe sync event key is empty")
+  if s.appliedUniverseSyncEvents.getOrDefault(eventKey, false):
+    return
+  s.appliedUniverseSyncEvents[eventKey] = true
+  if s.persistent:
+    s.logFile.write("UA " & $eventKey.len & "\n")
+    s.logFile.write(eventKey)
+    s.logFile.write("\n")
+    s.flushMaybe(force = true)
+
+proc isUniverseSyncEventApplied*(s: Store, eventKey: string): bool =
+  s.appliedUniverseSyncEvents.getOrDefault(eventKey, false)
+
 proc nextSeq*(s: Store, ring: uint64): uint32 =
   result = s.seqs.getOrDefault(ring, 0'u32)
   s.seqs[ring] = result + 1
@@ -885,6 +947,13 @@ proc clusterTxApplied*(s: Store): int =
   for _, intent in s.clusterTx:
     if intent.applied:
       inc result
+
+proc isClusterTxApplied*(s: Store, txid: uint64): bool =
+  s.appliedClusterTx.getOrDefault(txid, false) or
+    (txid in s.clusterTx and s.clusterTx[txid].applied)
+
+proc hasClusterTxIntent*(s: Store, txid: uint64): bool =
+  txid in s.clusterTx
 
 proc beginTxn*(s: Store): StoreTxn =
   result = StoreTxn(store: s, id: s.nextTxId)

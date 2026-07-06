@@ -1,0 +1,139 @@
+---
+layout: page
+title: CLI Reference
+---
+
+# CLI Reference
+
+Build the CLI:
+
+```sh
+nim c -d:release --nimcache:/tmp/nimcache_roche -o:bin/roche src/rochecli.nim
+bin/roche --help
+```
+
+## Common Cluster Flags
+
+| Flag | Meaning |
+|---|---|
+| `--peers=host:port,...` | Target cluster. |
+| `--user=NAME` / `--password=TEXT` | Username/password auth. |
+| `--auth-token=TEXT` | Token-style auth. |
+| `--secret-key=TEXT` | Secret-key gate. |
+| `--galaxy=NAME` | Expected remote galaxy. |
+| `--metrics` | Emit key/value metrics where supported. |
+
+## Cluster Commands
+
+| Command | Purpose |
+|---|---|
+| `health` | Check cluster health. |
+| `metrics` | Emit server metrics. |
+| `rings` | Show ring summaries. |
+| `atlas` | Emit the galaxy/ring map. Works with `--data` or `--peers`. |
+| `shutdown` | Stop a server. |
+| `demo` | Run a small cluster demo. |
+
+## Document Commands
+
+These commands work with `--data=DIR` for embedded mode and `--peers=...` for a
+running cluster.
+
+```sh
+bin/roche put --data=data --ring=docs/japan --payload='{"title":"Hello"}'
+bin/roche list-ring --data=data --ring=docs/japan
+bin/roche get --data=data --id=RAW_ID
+bin/roche query --data=data --id=RAW_ID --selection='{ title }'
+bin/roche count-ring --data=data --ring=docs/japan
+```
+
+| Command | Required flags | Purpose |
+|---|---|---|
+| `put` | `--ring=RING` plus `--payload=TEXT` or `--in=FILE` | Store a document and print `id` plus `rawId`. |
+| `get` | `--id=ID` | Fetch one document by ID. Cluster mode also requires `--ring=RING`. |
+| `query` | `--id=ID --selection=SEL` | Fetch a JSON projection. Cluster mode also requires `--ring=RING`. |
+| `list-ring` | `--ring=RING` | List records in one ring. |
+| `count-ring` | `--ring=RING` | Count records in one ring. |
+
+ID formats accepted by `get` and `query`:
+
+- `parent:seq`
+- `parent:epoch:seq:tWrite`
+
+Use the `rawId` printed by `put` for scripts and reproducible examples.
+
+## Interactive Shell
+
+`roche shell` provides a small MySQL-like interactive command surface for manual
+exploration:
+
+```sh
+bin/roche shell --data=data
+```
+
+Minimal shell commands:
+
+```text
+put RING PAYLOAD
+get ID [RING]
+query ID SELECTION
+query ID RING SELECTION  # cluster mode
+list RING [LIMIT]
+count RING
+atlas
+help
+exit
+```
+
+The shell intentionally uses RocheDB terms directly. It is not an SQL parser.
+For scripts and reproducible examples, prefer the single-shot commands above.
+
+## Local Data Commands
+
+| Command | Required flags | Purpose |
+|---|---|---|
+| `compact` | `--data=DIR` | Compact WAL. |
+| `backup` | `--data=DIR --backup=DIR` | Create backup. |
+| `restore` | `--backup=DIR --data=DIR` | Restore backup. |
+| `backup-encrypted` | `--data=DIR --backup=DIR --passphrase=TEXT` | Create encrypted backup. |
+| `restore-encrypted` | `--backup=DIR --data=DIR --passphrase=TEXT` | Restore encrypted backup. |
+| `dump` | `--data=DIR` | Export JSONL. |
+| `import-jsonl` | `--data=DIR --in=FILE` | Import JSONL. |
+| `describe-galaxy` | `--data=DIR --description=TEXT` | Set galaxy map description. |
+| `describe-ring` | `--data=DIR --ring=RING --description=TEXT` | Set ring map description. |
+
+## Recovery Commands
+
+| Command | Purpose |
+|---|---|
+| `recovery-backup` | Write recovery archives from a data directory. |
+| `recovery-verify` | Verify one recovery archive. |
+| `recovery-status` | Check archive health against `requiredHealthy`. |
+| `recovery-restore` | Restore from the best healthy archive. |
+
+Recovery commands accept `--mirror`, `--universe-config`, `--universe`,
+`--galaxy`, `--location`, `--failure-domain`, `--priority`, `--snapshot-seq`,
+`--auth-ref`, `--readonly`, and `--passphrase` where applicable.
+
+## Universe Sync Commands
+
+| Command | Purpose |
+|---|---|
+| `universe-export --data=DIR [--out=FILE]` | Export source outbox events. |
+| `universe-apply --data=DIR --in=FILE` | Apply exported events to a local data directory. |
+| `universe-sync --data=SOURCE --target-data=TARGET` | One-shot local sync. |
+| `universe-sync --data=SOURCE --peers=host:port,...` | Deliver source outbox events to a running cluster. |
+| `universe-status --data=DIR` | Inspect source outbox status. |
+| `universe-status --peers=host:port,... --metrics` | Inspect remote apply counters. |
+
+## Benchmark / Demo Commands
+
+| Command | Purpose |
+|---|---|
+| `bench` | Basic cluster operation benchmark. |
+| `retrieve-bench` | Retrieval benchmark. |
+| `redis-bench` | Redis comparison smoke. |
+| `rag-bench` | Synthetic RAG-style working-set/token benchmark. |
+| `working-set-bench` | Working-set reduction benchmark. |
+| `memory-pressure-bench` | Candidate memory pressure benchmark. |
+| `doctor` | Check optional native dependencies such as FAISS bridge. |

@@ -9,18 +9,9 @@ suite "cluster transaction":
     var db = connect(peers)
     let tx = db.beginTransaction()
     let id = tx.put("cluster tx value", ring = "cluster-tx", vec = @[1.0'f32, 0.0'f32])
-    tx.commit()
+    tx.commit(wamApplied)
 
-    var ok = false
-    for _ in 0 ..< 30:
-      try:
-        if db.get(id) == "cluster tx value":
-          ok = true
-          break
-      except KeyError, IOError, OSError:
-        discard
-      sleep(100)
-    check ok
+    check db.get(id) == "cluster tx value"
     db.close()
 
   test "cluster retrieve は全ノード候補をマージする":
@@ -56,6 +47,7 @@ suite "cluster transaction":
     let a = db.put(%*{"name": "a"}, ring = "cluster-crud")
     let b = db.put(%*{"name": "b"}, ring = "cluster-crud")
 
+    db.configureRingWriteAckMode("cluster-crud", wamApplied)
     db.update(a, %*{"name": "a2"})
     check db.query(a, "{ name }") == %*{"name": "a2"}
     check db.batchGet(@[a])[0] == $(%*{"name": "a2"})

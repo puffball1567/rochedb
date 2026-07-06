@@ -30,6 +30,7 @@ Translations:
 | Retrieval tuning profile | Done | amount / scope / depth |
 | FAISS vector backend | PoC | Dynamic bridge via `libroche_faiss.so`; default fetch tag is FAISS `v1.14.3`, exact commit pinning is optional via `ROCHE_FAISS_COMMIT`; `rochecli doctor`, bridge build, `tests/tapi.nim`, and `examples/vector_backend_bench.sh` are verified locally |
 | FAISS GPU backend | Not planned for core | RocheDB is designed to reduce the search set before ANN/LLM work. Needing GPU FAISS is treated as a placement or retrieval-profile issue first |
+| Retrieval planner | PoC | Deterministic heuristic planner. Stronger planner claims require larger real-corpus benchmarks and further tuning |
 | WASM browser embedded | Post-v0.1 candidate | Browser state boundary / IndexedDB / OPFS |
 
 ## Persistence / Operations
@@ -44,10 +45,11 @@ Translations:
 | Compact | Done | Rebuilds WAL from live records |
 | Backup / restore | Done | Backup as compacted WAL and restore into another data dir |
 | Dump / import-jsonl | Done | NoSQL JSONL import rules |
+| Universe sync outbox | PoC | WAL-backed eventual sync event queue with idempotent apply, ack/prune, `putSynced`, latest-only pending coalescing, delayed timestamp apply windows, `rochecli universe-export` / `universe-apply` JSONL handoff, one-shot `rochecli universe-sync` between local data dirs, remote `--peers` delivery via `UAPPLY`, and `universe-status` operational counters. It is a durable scheduler boundary, not immediate global consistency |
 | Crash recovery tests | Partial | Torn WAL tail repair, compact interruption, partial commit cases |
 | Strong durability / fsync knob | Done | `open(dataDir=..., durability=durStrong)` and `roched --durability=strong`; store/API tests cover reopen, transaction, compact |
 | Core test suite | Done | `scripts/test_core.sh` runs orbital core, selection, field, store, and public API tests |
-| Full smoke suite | Done | `scripts/test_all_smoke.sh` runs core tests plus cluster tx, failure retry, authz, and wire fuzz smoke; driver compatibility is opt-in |
+| Full smoke suite | Done | `scripts/test_all_smoke.sh` runs core tests plus cluster tx, failure retry, authz, wire fuzz, recovery, and remote universe sync smoke; driver compatibility is opt-in |
 | Generation snapshot / checkpoint | Planned | Generational snapshot and checkpoint are pending; encrypted backup is available |
 | Kubernetes manifests | Planned | liveness/readiness, PVC, rolling restart |
 
@@ -58,8 +60,8 @@ Translations:
 | Static cluster | Done | `roched --id --peers` |
 | Deterministic locate | Done | `E(id,t) -> node` |
 | Handoff / forwarder | PoC | Slow tick integration exists. Fully distributed forwarder placement is not done |
-| Driver-friendly wire | Done | `PUTR/GETID/QRYID` |
-| Health / metrics / rings | Done | CLI and wire protocol; metrics include uptime, request/error/auth counters, connection counts, WAL bytes, warp backlog, cluster tx backlog, and storage/ring counts |
+| Driver-friendly wire | Done | `PUTR/GETID/QRYID`; `WIREVER` exposes the current protocol version. Compatibility policy is documented in `docs/protocol-compatibility.md` |
+| Health / metrics / rings | Done | CLI and wire protocol; metrics include uptime, request/error/auth counters, connection counts, WAL bytes, warp backlog, universe apply counters, cluster tx backlog, and storage/ring counts |
 | Authn + secret key | Done | username/password/secret-key |
 | TLS | Planned | Required for public-network deployments |
 | Authz / RBAC | PoC | `roched --allow-ring=prefix[,prefix...]` and `--role=user:password:reader|writer|admin[:prefixes]`; `scripts/cluster_authz_smoke.sh` and `scripts/cluster_rbac_smoke.sh` cover prefix and role matrix behavior |
@@ -67,7 +69,7 @@ Translations:
 | Dynamic membership / epoch migration | Planned | Current peer list is static |
 | Cluster transaction coordinator redundancy | Planned | Remove node0 as a single point of failure |
 | Read-your-writes for cluster tx | PoC | `get/query/batchGet` fallback to node0 landing intent before owner apply; cluster smoke covers update/delete |
-| Fault-tolerance improvements | Planned | Post-v0.1 work; public details intentionally stay high-level |
+| Fault-tolerance improvements | Planned | Post-v0.1 work; universe sync outbox is now the first durable eventual-convergence primitive |
 | Multi-VM / multi-AZ benchmark | Planned | Real-world latency and failure behavior |
 
 ## Drivers / Bindings
@@ -75,7 +77,7 @@ Translations:
 | Target | Status | Notes |
 |---|---|---|
 | Nim API | Done | Native public API |
-| C ABI | Done | ABI version / last error / put/get/retrieve/batch/atlas |
+| C ABI | Done | ABI version / last error / put/get/retrieve/batch/atlas; C ABI vectors are host-native float arrays, while TCP wire vectors are canonical little-endian float32 |
 | Python | Done | Native wire minimal |
 | Node.js / TypeScript | Done | ESM native wire minimal |
 | Bun | Done | TypeScript smoke test |
@@ -104,6 +106,7 @@ Translations:
 | Docker case study | Partial | memory pressure / PHP / Swift smoke |
 | Cluster transaction smoke | Partial | `scripts/cluster_tx_smoke.sh` starts 3 local nodes and verifies apply / retrieve |
 | Cluster failure retry smoke | Partial | `scripts/cluster_failure_smoke.sh` kills the owner node, verifies the intent remains pending, restarts the owner, and verifies retry apply |
+| Universe sync demo | Done | `examples/universe_sync_demo.sh` builds a small source/target pair, demonstrates API-level sync, then demonstrates the CLI export/sync/prune boundary. `scripts/universe_sync_failure_smoke.sh` verifies malformed JSONL handling, replay idempotency, and explicit ack/prune. `scripts/universe_sync_remote_smoke.sh` verifies remote `--peers` delivery and target-down retry behavior |
 | Crash / failure case study | Partial | Store-level WAL tail repair, compact interruption, partial commit, and cluster owner crash/restart retry are covered |
 | Multi-node cloud case study | Planned | VM/AZ, latency, failover behavior |
 | Prometheus / Datadog exporter | Post-v0.1 candidate | Core exposes key/value metrics now; OpenMetrics / Datadog collector should be added outside the core server loop |
@@ -138,3 +141,36 @@ single v0.2.0 milestone.
 - API reference documentation
 - Prometheus / OpenMetrics and Datadog metrics adapters
 - Fault-tolerance improvements
+
+## Managed Service Readiness Gaps
+
+RocheDB should be able to become a managed service in the same operational
+category as hosted cache, document, search, or AI-context databases. Some
+managed-service requirements are already expressible through RocheDB concepts:
+replication-style redundancy maps to universes, logical isolation maps to
+galaxies, read scope maps to rings, and backup verification maps to recovery
+universes.
+
+The following items are the remaining implementation candidates that are not
+fully covered by the current concepts or code:
+
+| Candidate | Why it is needed |
+|---|---|
+| Durable eventual universe sync | Universes currently cover recovery topology. A managed service also needs live delayed convergence between same-name galaxies across universes without global commit waits. |
+| Ring apply policy | Managed deployments need per-ring behavior such as latest-only, append-only, bounded-history, and delayed timestamp apply. This keeps consistency rules explicit without making the whole DB strongly serializable. |
+| Read-your-writes across local pending state | Local users should not feel universe-sync delay. The cluster landing-intent fallback is a start; universe-level pending overlays are still missing. |
+| Dynamic node replacement | Managed services must replace failed or upgraded nodes without manual peer-list surgery. Current clusters use static peers. |
+| Cluster coordinator redundancy | Node0 is currently the transaction landing zone. Managed service readiness needs the coordinator role to survive node replacement or failover. |
+| TLS and certificate rotation | Username/password/secret-key auth exists, but managed public or VPC deployments need transport TLS and rotation workflows. |
+| Secret rotation | `authProfiles` reference external secrets, but the server and drivers need an explicit rotation story for username/password/secret-key credentials. |
+| Point-in-time recovery / generation checkpoints | Backup/restore exists. Managed services normally require recoverable generations, restore-point selection, and verification before promotion. |
+| Drain / quiesce / snapshot barrier | Rolling maintenance and consistent managed backups need a control-plane hook to stop accepting new writes, flush durable state, and report readiness. |
+| OpenMetrics / CloudWatch / Datadog adapters | RocheDB exposes key/value metrics, but managed integrations need standard exporters or collectors. |
+| Quotas and capacity guardrails | Galaxy isolation exists, but managed multi-tenant operation needs limits for WAL bytes, item count, ring count, payload size, and connection pressure. |
+| Protocol / storage compatibility policy | Managed upgrades need clear compatibility rules for wire protocol, WAL records, snapshots, and drivers. |
+
+These gaps define the boundary between a promising server database and a
+provider-ready managed database. RocheDB should not copy every Redis, RDS, or
+ElastiCache mechanism one-to-one; it should provide equivalent operational
+outcomes where RocheDB's universe / galaxy / ring model already gives a simpler
+or more natural shape.

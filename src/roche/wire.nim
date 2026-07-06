@@ -24,6 +24,11 @@
 ##   TXBEGIN\n                                                  → OK <txid>\n
 ##   TXRESERVE <txid> <ringKey> <period> <head>\n              → OK <seq> <tWrite>\n
 ##   TXCOMMIT <txid> <n>\n repeated: <parent> ... <vecDim>\n<payload><vec> → OK\n
+##   TXSTATUS <txid>\n                                             → OK APPLIED|PENDING|UNKNOWN\n
+##   UAPPLY <len>\n<json event>                                    → UOK APPLIED|SKIPPED
+##   USTATUS\n
+##       → USTATUS <pending> <appliedKeys> <appliedOps> <skippedOps> <errors> <forwarded> <lastOk> <lastError>
+##   WIREVER\n                                                     → WIREVER <version>
 ##   APPLYTX <txid> <parent> <seq> <period> <head> <tWrite> <len> <vecDim>\n<payload><vec> → OK\n
 ##   RETRIEVE <hasRing> <ringKey> <budget> <vecDim>\n<vec>
 ##     → RHIT <scanned> <ringsTouched> <n>\n repeated: <parent> <seq> <tWrite> <score> <len>\n<payload>
@@ -34,11 +39,22 @@ import std/[net, strutils, tables]
 import ./auth
 
 const
+  WireProtocolVersion* = 1
   MaxWireHeaderBytes* = 8 * 1024
   MaxSecureFrameBytes = 64 * 1024 * 1024 + MaxWireHeaderBytes
 
 type
   Peer* = tuple[host: string, port: int]
+
+  UniverseWireStatus* = object
+    pending*: int
+    applied*: int
+    appliedOps*: int
+    skippedOps*: int
+    errors*: int
+    forwarded*: int
+    lastOk*: int
+    lastError*: int
 
   TxWireOp* = object
     delete*: bool
@@ -199,16 +215,32 @@ proc sendFrame*(sock: Socket, header: string, payload: string = "") =
     sock.send(plaintext)
 
 proc vecBytes*(vec: seq[float32]): string =
-  ## float32 の生バイト列。現行ターゲットは little endian 前提。
+  ## Wire vectors are canonical little-endian IEEE-754 float32 values.
+  ## Do not use host-endian copyMem here; native wire drivers depend on this.
   result = newString(vec.len * sizeof(float32))
-  if result.len > 0:
-    copyMem(addr result[0], unsafeAddr vec[0], result.len)
+  var pos = 0
+  for value in vec:
+    var bits: uint32
+    copyMem(addr bits, unsafeAddr value, sizeof(uint32))
+    result[pos] = char(bits and 0xff'u32)
+    result[pos + 1] = char((bits shr 8) and 0xff'u32)
+    result[pos + 2] = char((bits shr 16) and 0xff'u32)
+    result[pos + 3] = char((bits shr 24) and 0xff'u32)
+    pos += 4
 
 proc bytesVec*(bytes: string, dim: int): seq[float32] =
+  ## Decode canonical little-endian IEEE-754 float32 values from the wire.
   doAssert bytes.len == dim * sizeof(float32), "vec bytes length mismatch"
   result = newSeq[float32](dim)
-  if bytes.len > 0:
-    copyMem(addr result[0], unsafeAddr bytes[0], bytes.len)
+  var pos = 0
+  for i in 0 ..< dim:
+    let bits =
+      uint32(ord(bytes[pos])) or
+      (uint32(ord(bytes[pos + 1])) shl 8) or
+      (uint32(ord(bytes[pos + 2])) shl 16) or
+      (uint32(ord(bytes[pos + 3])) shl 24)
+    copyMem(addr result[i], unsafeAddr bits, sizeof(uint32))
+    pos += 4
 
 proc readHeader*(sock: Socket, timeoutMs = 10_000): seq[string] =
   let fd = sock.getFd.int
@@ -474,6 +506,34 @@ proc txCommitReq*(c: ClusterClient, node: int, txid: uint64, ops: seq[TxWireOp])
   let r = c.rpc(node, "TXCOMMIT " & $txid & " " & $ops.len, body)
   doAssert r[0] == "OK", "TXCOMMIT failed: " & r.join(" ")
 
+proc txStatusReq*(c: ClusterClient, node: int, txid: uint64): string =
+  let r = c.rpc(node, "TXSTATUS " & $txid)
+  doAssert r[0] == "OK", "TXSTATUS failed: " & r.join(" ")
+  r[1]
+
+proc universeApplyReq*(c: ClusterClient, node: int, eventJson: string): string =
+  let r = c.rpc(node, "UAPPLY " & $eventJson.len, eventJson)
+  doAssert r[0] == "UOK", "UAPPLY failed: " & r.join(" ")
+  r[1]
+
+proc universeStatusReq*(c: ClusterClient, node: int): UniverseWireStatus =
+  let r = c.rpc(node, "USTATUS")
+  doAssert r[0] == "USTATUS", "USTATUS failed: " & r.join(" ")
+  result.pending = parseInt(r[1])
+  result.applied = parseInt(r[2])
+  if r.len > 3:
+    result.appliedOps = parseInt(r[3])
+  if r.len > 4:
+    result.skippedOps = parseInt(r[4])
+  if r.len > 5:
+    result.errors = parseInt(r[5])
+  if r.len > 6:
+    result.forwarded = parseInt(r[6])
+  if r.len > 7:
+    result.lastOk = parseInt(r[7])
+  if r.len > 8:
+    result.lastError = parseInt(r[8])
+
 proc applyTxReq*(c: ClusterClient, node: int, txid: uint64, op: TxWireOp,
                  timeoutMs = 10_000) =
   let body = op.payload & op.vec.vecBytes
@@ -537,6 +597,11 @@ proc metricsReq*(c: ClusterClient, node: int): string =
   let r = c.rpc(node, "METRICS")
   doAssert r[0] == "OK", "METRICS failed: " & r.join(" ")
   r[1 .. ^1].join(" ")
+
+proc wireVersionReq*(c: ClusterClient, node: int): int =
+  let r = c.rpc(node, "WIREVER")
+  doAssert r[0] == "WIREVER", "WIREVER failed: " & r.join(" ")
+  parseInt(r[1])
 
 proc shutdownReq*(c: ClusterClient, node: int): string =
   let r = c.rpc(node, "SHUTDOWN")

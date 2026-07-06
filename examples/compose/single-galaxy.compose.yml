@@ -1,0 +1,20 @@
+services:
+  roche-main:
+    build:
+      context: ../..
+      dockerfile: examples/compose/Dockerfile
+    command:
+      - --id=0
+      - --peers=0.0.0.0:7301
+      - --data=/data/app-main
+      - --galaxy=app-main
+      - --user=app
+      - --password=${ROCHE_APP_PASSWORD:-change-me}
+      - --secret-key=${ROCHE_APP_SECRET_KEY:-change-me-too}
+    ports:
+      - "7301:7301"
+    volumes:
+      - roche_app_main:/data
+
+volumes:
+  roche_app_main:

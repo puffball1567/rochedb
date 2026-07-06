@@ -72,6 +72,14 @@ suite "public api":
     check db.get(b) == "2"
     db.close()
 
+  test "write ack mode は DB 全体と ring 単位で設定できる":
+    var db = open()
+    db.configureWriteAckMode(wamAccepted)
+    db.configureRingWriteAckMode("profile", wamApplied)
+    let id = db.put("p", ring = "profile")
+    check db.get(id) == "p"
+    db.close()
+
   test "halo は予約リングとして使える":
     var db = open(nodes = 8)
     let id = db.put("stray", ring = "halo", vec = @[3.0'f32, 4.0'f32])
@@ -206,6 +214,164 @@ suite "public api":
       discard reopened3.warpStatus(jobId)
     reopened3.close()
     removeDir(dir)
+
+  test "universe sync event は WAL で復元され idempotent に適用できる":
+    let srcDir = createTempDir("roche-universe", "src")
+    let dstDir = createTempDir("roche-universe", "dst")
+
+    var src = open(dataDir = srcDir)
+    let eventId = src.enqueueUniverseSyncEvent(
+      sourceUniverse = "tokyo",
+      sourceGalaxy = "social",
+      ring = "posts/u1",
+      payload = """{"post":"hello","createdAt":"2026-07-07T00:00:00Z"}""",
+      logicalKey = "post-1")
+    check src.universeSyncEvents().len == 1
+    src.close()
+
+    var resumed = open(dataDir = srcDir)
+    let events = resumed.universeSyncEvents()
+    check events.len == 1
+    check events[0].id == eventId
+    check events[0].ring == "posts/u1"
+
+    var dst = open(dataDir = dstDir)
+    check dst.applyUniverseSyncEvent(events[0])
+    check not dst.applyUniverseSyncEvent(events[0])
+    check dst.countByRing("posts/u1") == 1
+    dst.close()
+
+    discard resumed.ackUniverseSyncEvent(eventId)
+    check resumed.pruneAckedUniverseSyncEvents() == 1
+    resumed.close()
+
+    var resumed2 = open(dataDir = srcDir)
+    check resumed2.universeSyncEvents().len == 0
+    resumed2.close()
+
+    removeDir(srcDir)
+    removeDir(dstDir)
+
+  test "syncUniverseOnce は source outbox から target へ配送して ack/prune できる":
+    let srcDir = createTempDir("roche-universe", "sync-src")
+    let dstDir = createTempDir("roche-universe", "sync-dst")
+
+    var src = open(dataDir = srcDir)
+    var dst = open(dataDir = dstDir)
+    discard src.enqueueUniverseSyncEvent(
+      sourceUniverse = "tokyo",
+      sourceGalaxy = "repo",
+      ring = "issues/repo-1",
+      payload = """{"issue":1,"title":"sync me"}""",
+      logicalKey = "issue-1")
+
+    let stats = syncUniverseOnce(src, dst, pruneAcked = true)
+    check stats.read == 1
+    check stats.applied == 1
+    check stats.acked == 1
+    check stats.pruned == 1
+    check stats.errors == 0
+    check src.universeSyncEvents().len == 0
+    check dst.countByRing("issues/repo-1") == 1
+
+    let stats2 = syncUniverseOnce(src, dst, pruneAcked = true)
+    check stats2.read == 0
+    check stats2.applied == 0
+    src.close()
+    dst.close()
+
+    removeDir(srcDir)
+    removeDir(dstDir)
+
+  test "putSynced は local put と universe outbox 登録を同時に行う":
+    let dir = createTempDir("roche-universe", "putsynced")
+    var db = open(dataDir = dir)
+    let id = db.putSynced("""{"name":"Ada"}""",
+                          sourceUniverse = "tokyo",
+                          sourceGalaxy = "users",
+                          ring = "users/u1",
+                          logicalKey = "user:u1")
+    check db.get(id) == """{"name":"Ada"}"""
+    let events = db.universeSyncEvents()
+    check events.len == 1
+    check events[0].ring == "users/u1"
+    check events[0].logicalKey == "user:u1"
+    db.close()
+    removeDir(dir)
+
+  test "latest-only ring policy は未配送 outbox を logical key で畳み込む":
+    let srcDir = createTempDir("roche-universe", "latest-src")
+    let dstDir = createTempDir("roche-universe", "latest-dst")
+
+    var src = open(dataDir = srcDir)
+    src.configureRingApplyPolicy("profiles/u1",
+      RingApplyPolicy(mode: ramLatestOnly, historyKeep: 1, delayMs: 0))
+    discard src.enqueueUniverseSyncEvent(
+      sourceUniverse = "tokyo",
+      sourceGalaxy = "users",
+      ring = "profiles/u1",
+      payload = """{"name":"old"}""",
+      logicalKey = "profile:u1",
+      timestamp = 1.0)
+    discard src.enqueueUniverseSyncEvent(
+      sourceUniverse = "tokyo",
+      sourceGalaxy = "users",
+      ring = "profiles/u1",
+      payload = """{"name":"new"}""",
+      logicalKey = "profile:u1",
+      timestamp = 2.0)
+    check src.universeSyncEvents().len == 1
+
+    var dst = open(dataDir = dstDir)
+    let stats = syncUniverseOnce(src, dst, pruneAcked = true)
+    check stats.read == 1
+    check stats.applied == 1
+    check dst.countByRing("profiles/u1") == 1
+    let page = dst.listByRing("profiles/u1", limit = 10)
+    check page.items[0].payload == """{"name":"new"}"""
+    src.close()
+    dst.close()
+
+    removeDir(srcDir)
+    removeDir(dstDir)
+
+  test "delayed timestamp ring policy は ready になるまで ack しない":
+    let srcDir = createTempDir("roche-universe", "delay-src")
+    let dstDir = createTempDir("roche-universe", "delay-dst")
+
+    var src = open(dataDir = srcDir)
+    var dst = open(dataDir = dstDir)
+    dst.configureRingApplyPolicy("audit/u1",
+      RingApplyPolicy(mode: ramDelayedTimestamp, historyKeep: 1, delayMs: 60_000))
+    discard src.enqueueUniverseSyncEvent(
+      sourceUniverse = "tokyo",
+      sourceGalaxy = "audit",
+      ring = "audit/u1",
+      payload = """{"event":"login"}""",
+      logicalKey = "audit:u1:1")
+
+    let delayed = syncUniverseOnce(src, dst, pruneAcked = true)
+    check delayed.read == 1
+    check delayed.skipped == 1
+    check delayed.acked == 0
+    check delayed.pruned == 0
+    check src.universeSyncEvents().len == 1
+    check dst.countByRing("audit/u1") == 0
+
+    dst.configureRingApplyPolicy("audit/u1",
+      RingApplyPolicy(mode: ramDelayedTimestamp, historyKeep: 1, delayMs: 0))
+    let applied = syncUniverseOnce(src, dst, pruneAcked = true)
+    check applied.read == 1
+    check applied.applied == 1
+    check applied.acked == 1
+    check applied.pruned == 1
+    check src.universeSyncEvents().len == 0
+    check dst.countByRing("audit/u1") == 1
+    src.close()
+    dst.close()
+
+    removeDir(srcDir)
+    removeDir(dstDir)
 
 suite "query (GraphQL 風選択取得)":
   test "選択した形だけ返る":
