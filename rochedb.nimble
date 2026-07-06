@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.1.3"
+version       = "0.1.4"
 author        = "puffball1567"
 description   = "RocheDB PoC - ephemeris-based distributed document/vector store"
 license       = "Apache-2.0"

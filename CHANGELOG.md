@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.4
+
+### Changed
+
+- Reduced public fault-tolerance roadmap details and kept detailed recovery
+  strategy outside the public repository.
+
 ## v0.1.3
 
 ### Added
