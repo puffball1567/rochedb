@@ -79,6 +79,7 @@ all of them fit into v0.2.0:
 - browser / WASM local-state boundary
 - stronger cluster operational stories
 - package publication workflows
+- API reference documentation
 - Prometheus / OpenMetrics and Datadog metrics adapters
 
 ## Final Release Gate

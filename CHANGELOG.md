@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.2
+
+### Changed
+
+- Kept the ID-less lookup guidance inside the embedded quickstart instead of a
+  separate README section.
+- Added API reference documentation to the v0.2+ roadmap.
+
 ## v0.1.1
 
 ### Changed

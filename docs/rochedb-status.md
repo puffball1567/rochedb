@@ -135,6 +135,7 @@ single v0.2.0 milestone.
 - Unity official asset
 - Unreal official plugin
 - package publishing workflows for language drivers
+- API reference documentation
 - Prometheus / OpenMetrics and Datadog metrics adapters
 - Universe redundancy: mirror manifests, verification, object-storage adapters, warp lanes, parity, and PITR
 - Cluster repair protocol: checksums, scrub, replica comparison, and repair metrics
