@@ -7,6 +7,12 @@ protocol and CLI:
 bin/rochecli metrics --peers=127.0.0.1:7301,127.0.0.1:7302,127.0.0.1:7303
 ```
 
+Recovery mirrors can be verified as a separate operational check:
+
+```sh
+bin/rochecli recovery-verify --mirror=/backup/rochedb-a --metrics
+```
+
 This is intentionally not a Prometheus, OpenMetrics, Datadog, or CloudWatch
 exporter yet. The output is a stable key/value line that can be scraped by a
 sidecar, init script, cron job, or managed-agent integration on AWS, GCP, and
@@ -36,6 +42,23 @@ similar platforms.
 | `clusterTxPending` | Committed but unapplied cluster transaction intents | Retry backlog / owner failure signal |
 | `clumps` | Field-state clump count | Query/index state growth |
 
+## Recovery Mirror Metrics
+
+`rochecli recovery-verify --metrics` emits one key/value line when the recovery
+mirror is valid. It exits non-zero when the mirror is missing, corrupt,
+undecryptable, or inconsistent with its manifest.
+
+| Metric | Meaning | Operational use |
+|---|---|---|
+| `recoveryMirrorHealthy` | `1` when verification succeeds | Alert when the command exits non-zero or this value is missing |
+| `recoveryMirrorEncrypted` | `1` when verified with encrypted backup mode | Confirm the expected backup policy |
+| `recoveryMirrorBytes` | Backup artifact size | Detect missing, truncated, or unexpectedly large mirrors |
+| `recoveryMirrorItems` | Live item count in the recovery snapshot | Compare against source-side item trends |
+| `recoveryMirrorRings` | Ring metadata count in the recovery snapshot | Detect incomplete domain metadata |
+| `recoveryMirrorNames` | Ring name count in the recovery snapshot | Detect incomplete ring map metadata |
+| `recoveryMirrorClusterTx` | Cluster transaction intents in the mirror | Recovery backlog / landing-state visibility |
+| `recoveryMirrorWarpJobs` | Warp jobs in the mirror | Delayed update recovery visibility |
+
 ## Suggested Alerts
 
 Start with conservative alerts:
@@ -45,6 +68,9 @@ Start with conservative alerts:
 - `errors` increases quickly compared with `requests`.
 - `authFailures` or `authzDenied` increase unexpectedly.
 - `walBytes` approaches the disk budget or grows much faster than `items`.
+- `recovery-verify --metrics` exits non-zero for any required mirror.
+- `recoveryMirrorItems`, `recoveryMirrorRings`, or `recoveryMirrorBytes` drops
+  unexpectedly compared with the source and previous mirrors.
 - `activeConnections` rises without returning to the normal range.
 - `uptimeSec` resets outside planned maintenance.
 
