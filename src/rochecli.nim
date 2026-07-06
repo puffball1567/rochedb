@@ -739,8 +739,14 @@ proc runRecoveryVerify(mirror, passphrase: string) =
     let manifest = parseFile(manifestPath)
     if manifest.hasKey("encrypted") and manifest["encrypted"].getBool() != encrypted:
       raise newException(IOError, "recovery manifest encryption mode mismatch")
+    if manifest.hasKey("bytes") and manifest["bytes"].getBiggestInt() != stats.bytes:
+      raise newException(IOError, "recovery manifest byte count mismatch")
     if manifest.hasKey("items") and manifest["items"].getInt() != stats.items:
       raise newException(IOError, "recovery manifest item count mismatch")
+    if manifest.hasKey("rings") and manifest["rings"].getInt() != stats.ringMeta:
+      raise newException(IOError, "recovery manifest ring count mismatch")
+    if manifest.hasKey("names") and manifest["names"].getInt() != stats.ringNames:
+      raise newException(IOError, "recovery manifest ring name count mismatch")
   echo &"recovery-verify OK mirror={mirror} encrypted={encrypted} bytes={stats.bytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames}"
 
 proc runDump(dataDir, outPath: string, includeVectors: bool) =
