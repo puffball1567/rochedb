@@ -565,6 +565,8 @@ suite "永続化":
     )
     let backupStats = db.backup(backupDir)
     check backupStats.items == 1
+    let verifyStats = verifyBackup(backupDir)
+    check verifyStats.items == 1
     db.close()
 
     removeDir(restoredDir)
@@ -604,6 +606,8 @@ suite "永続化":
                     vec = @[1.0'f32, 0.0'f32])
     let backupStats = db.backupEncrypted(backupDir, "passphrase")
     check backupStats.items == 1
+    let verifyStats = verifyEncryptedBackup(backupDir, "passphrase")
+    check verifyStats.items == 1
     db.close()
 
     removeDir(restoredDir)

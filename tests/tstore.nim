@@ -324,6 +324,8 @@ suite "store persistence":
     st.remove(3'u64, 0'u32)
     let backupStats = st.backup(backupDir)
     check backupStats.items == 1
+    let verifyStats = verifyBackup(backupDir)
+    check verifyStats.items == 1
     st.close()
 
     removeDir(restoredDir)
@@ -363,6 +365,8 @@ suite "store persistence":
               "P 10 1 60.0 0.0 2.0 7 0\npartial")
 
     expect IOError:
+      discard verifyBackup(backupDir)
+    expect IOError:
       discard restoreBackup(backupDir, targetDir, overwrite = true)
 
     var target = openStore(targetDir)
@@ -386,6 +390,8 @@ suite "store persistence":
                        vec: @[1.0'f32, 0.0'f32])
     let backupStats = st.backupEncrypted(backupDir, "correct-passphrase")
     check backupStats.items == 1
+    let verifyStats = verifyEncryptedBackup(backupDir, "correct-passphrase")
+    check verifyStats.items == 1
     check fileExists(backupDir / "roche.backup")
     check not readFile(backupDir / "roche.backup").contains("secret")
     st.close()
@@ -414,6 +420,8 @@ suite "store persistence":
     writeFile(targetDir / "roche.log",
               "P 11 0 60.0 0.0 1.0 6 0\nstable\n")
 
+    expect IOError:
+      discard verifyEncryptedBackup(backupDir, "passphrase")
     expect IOError:
       discard restoreEncryptedBackup(backupDir, targetDir, "passphrase",
                                      overwrite = true)

@@ -467,6 +467,14 @@ proc backupEncrypted*(db: RocheDb, dstDir, passphrase: string): BackupStats =
     raise newException(ValueError, "cluster connection cannot backup remote stores")
   db.st.backupEncrypted(dstDir, passphrase)
 
+proc verifyBackup*(backupDir: string): BackupStats =
+  ## backupDir の WAL snapshot を復元前に strict 検証する。
+  store.verifyBackup(backupDir)
+
+proc verifyEncryptedBackup*(backupDir, passphrase: string): BackupStats =
+  ## backupDir の encrypted backup を復号し、復元前に strict 検証する。
+  store.verifyEncryptedBackup(backupDir, passphrase)
+
 proc restoreBackup*(backupDir, dataDir: string, overwrite = false): BackupStats =
   ## backupDir の WAL を dataDir へ復元する。dataDir が既存の場合は overwrite が必要。
   store.restoreBackup(backupDir, dataDir, overwrite = overwrite)

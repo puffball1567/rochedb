@@ -476,10 +476,6 @@ proc replay(s: Store, path: string, repair = true) =
   if repairTo >= 0:
     truncateLog(path, repairTo.int64)
 
-proc validateSnapshotFile(path: string) =
-  var s = Store(lastFlush: getMonoTime(), nextTxId: 1)
-  s.replay(path, repair = false)
-
 proc recoverCompaction(path: string) =
   let tmp = path & ".compact"
   let bak = path & ".bak"
@@ -618,6 +614,11 @@ proc snapshotStats(s: Store, path: string, source = ""): StoreBackupStats =
                    source: source,
                    destination: path)
 
+proc snapshotStatsFromFile(path, source: string): StoreBackupStats =
+  var s = Store(lastFlush: getMonoTime(), nextTxId: 1)
+  s.replay(path, repair = false)
+  result = s.snapshotStats(path, source)
+
 proc compact*(s: Store): StoreCompactStats =
   ## 生存レコードだけで WAL を再構築する。
   ## append-only の読みやすさを保ちながら、削除済み/上書き済みログの肥大化を抑える。
@@ -700,6 +701,38 @@ proc backupEncrypted*(s: Store, dstDir, passphrase: string): StoreBackupStats =
     if fileExists(tmpEnc):
       removeFile(tmpEnc)
 
+proc verifyBackup*(backupDir: string): StoreBackupStats =
+  ## backupDir/roche.log を復元前に strict 検証する。通常 openStore の
+  ## tail repair とは違い、backup 検証では壊れた snapshot を拒否する。
+  if backupDir.len == 0:
+    raise newException(ValueError, "backup directory is required")
+  let src = backupDir / "roche.log"
+  if not fileExists(src):
+    raise newException(IOError, "backup roche.log not found: " & src)
+  result = snapshotStatsFromFile(src, src)
+
+proc verifyEncryptedBackup*(backupDir, passphrase: string): StoreBackupStats =
+  ## backupDir/roche.backup を復号し、復元前に strict 検証する。
+  if backupDir.len == 0:
+    raise newException(ValueError, "backup directory is required")
+  let src = backupDir / "roche.backup"
+  if not fileExists(src):
+    raise newException(IOError, "encrypted backup not found: " & src)
+  let blob = readFile(src)
+  if not blob.startsWith(EncryptedBackupMagic):
+    raise newException(IOError, "invalid encrypted backup header")
+  let plaintext = decryptSecretBox(blob[EncryptedBackupMagic.len .. ^1],
+                                   backupKey(passphrase))
+  let validateTmp = backupDir / "roche.verify.tmp"
+  writeFile(validateTmp, plaintext)
+  try:
+    result = snapshotStatsFromFile(validateTmp, src)
+    result.bytes = getFileSize(src)
+    result.destination = src
+  finally:
+    if fileExists(validateTmp):
+      removeFile(validateTmp)
+
 proc restoreBackup*(backupDir, targetDir: string, overwrite = false): StoreBackupStats =
   ## backupDir/roche.log を targetDir/roche.log として復元する。
   ## 既存 target は overwrite=true のときだけ置き換える。
@@ -708,7 +741,7 @@ proc restoreBackup*(backupDir, targetDir: string, overwrite = false): StoreBacku
   let src = backupDir / "roche.log"
   if not fileExists(src):
     raise newException(IOError, "backup roche.log not found: " & src)
-  validateSnapshotFile(src)
+  discard verifyBackup(backupDir)
   createDir(targetDir)
   let dst = targetDir / "roche.log"
   if fileExists(dst) and not overwrite:
@@ -735,13 +768,7 @@ proc restoreEncryptedBackup*(backupDir, targetDir, passphrase: string,
     raise newException(IOError, "invalid encrypted backup header")
   let plaintext = decryptSecretBox(blob[EncryptedBackupMagic.len .. ^1],
                                    backupKey(passphrase))
-  let validateTmp = backupDir / "roche.restore-validate.tmp"
-  writeFile(validateTmp, plaintext)
-  try:
-    validateSnapshotFile(validateTmp)
-  finally:
-    if fileExists(validateTmp):
-      removeFile(validateTmp)
+  discard verifyEncryptedBackup(backupDir, passphrase)
   createDir(targetDir)
   let dst = targetDir / "roche.log"
   if fileExists(dst) and not overwrite:

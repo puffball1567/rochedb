@@ -21,6 +21,8 @@
 ##   rochecli restore --backup=DIR --data=DIR [--overwrite]
 ##   rochecli backup-encrypted --data=DIR --backup=DIR --passphrase=TEXT
 ##   rochecli restore-encrypted --backup=DIR --data=DIR --passphrase=TEXT [--overwrite]
+##   rochecli recovery-backup --data=DIR --mirror=DIR [--mirror=DIR...] [--passphrase=TEXT]
+##   rochecli recovery-verify --mirror=DIR [--passphrase=TEXT]
 ##   rochecli dump --data=DIR [--out=FILE] [--no-vectors]
 ##   rochecli import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING] [--payload-field=FIELD] [--vec-field=FIELD] [--ring-prefix=PREFIX]
 
@@ -682,6 +684,65 @@ proc runRestoreEncrypted(backupDir, dataDir, passphrase: string,
                                      overwrite = overwrite)
   echo &"restore-encrypted OK bytes={stats.bytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames} from={stats.source} to={stats.destination}"
 
+proc recoveryManifest(encrypted: bool, mirror, backupFile: string,
+                      stats: BackupStats): JsonNode =
+  %*{
+    "version": 1,
+    "kind": "rochedb-recovery-mirror",
+    "createdAt": $now(),
+    "encrypted": encrypted,
+    "mirror": mirror,
+    "backupFile": backupFile,
+    "bytes": stats.bytes,
+    "items": stats.items,
+    "rings": stats.ringMeta,
+    "names": stats.ringNames,
+    "clusterTx": stats.clusterTx,
+    "appliedClusterTx": stats.appliedClusterTx,
+    "warpJobs": stats.warpJobs
+  }
+
+proc writeRecoveryManifest(mirror: string, manifest: JsonNode) =
+  writeFile(mirror / "roche.recovery.json", pretty(manifest))
+
+proc runRecoveryBackup(dataDir: string, mirrors: seq[string],
+                       passphrase: string) =
+  if dataDir.len == 0 or mirrors.len == 0:
+    raise newException(ValueError,
+      "recovery-backup requires --data=DIR --mirror=DIR [--mirror=DIR...]")
+  var db = open(dataDir = dataDir)
+  try:
+    for mirror in mirrors:
+      let encrypted = passphrase.len > 0
+      let stats =
+        if encrypted: db.backupEncrypted(mirror, passphrase)
+        else: db.backup(mirror)
+      let verified =
+        if encrypted: verifyEncryptedBackup(mirror, passphrase)
+        else: verifyBackup(mirror)
+      let backupFile = mirror / (if encrypted: "roche.backup" else: "roche.log")
+      writeRecoveryManifest(mirror, recoveryManifest(encrypted, mirror,
+                                                    backupFile, verified))
+      echo &"recovery-backup OK mirror={mirror} encrypted={encrypted} bytes={verified.bytes} items={verified.items} source={stats.source}"
+  finally:
+    db.close()
+
+proc runRecoveryVerify(mirror, passphrase: string) =
+  if mirror.len == 0:
+    raise newException(ValueError, "recovery-verify requires --mirror=DIR")
+  let encrypted = passphrase.len > 0
+  let stats =
+    if encrypted: verifyEncryptedBackup(mirror, passphrase)
+    else: verifyBackup(mirror)
+  let manifestPath = mirror / "roche.recovery.json"
+  if fileExists(manifestPath):
+    let manifest = parseFile(manifestPath)
+    if manifest.hasKey("encrypted") and manifest["encrypted"].getBool() != encrypted:
+      raise newException(IOError, "recovery manifest encryption mode mismatch")
+    if manifest.hasKey("items") and manifest["items"].getInt() != stats.items:
+      raise newException(IOError, "recovery manifest item count mismatch")
+  echo &"recovery-verify OK mirror={mirror} encrypted={encrypted} bytes={stats.bytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames}"
+
 proc runDump(dataDir, outPath: string, includeVectors: bool) =
   if dataDir.len == 0:
     raise newException(ValueError, "dump requires --data=DIR")
@@ -708,6 +769,7 @@ when isMainModule:
   var peers = ""
   var dataDir = ""
   var backupDir = ""
+  var mirrors: seq[string] = @[]
   var outPath = ""
   var inPath = ""
   var defaultRing = "imported"
@@ -740,6 +802,7 @@ when isMainModule:
       of "peers": peers = val
       of "data": dataDir = val
       of "backup": backupDir = val
+      of "mirror": mirrors.add val
       of "out": outPath = val
       of "in": inPath = val
       of "default-ring": defaultRing = val
@@ -792,6 +855,10 @@ when isMainModule:
   of "backup-encrypted": runBackupEncrypted(dataDir, backupDir, backupPassphrase)
   of "restore-encrypted": runRestoreEncrypted(backupDir, dataDir,
                                               backupPassphrase, overwrite)
+  of "recovery-backup": runRecoveryBackup(dataDir, mirrors, backupPassphrase)
+  of "recovery-verify":
+    let mirror = if mirrors.len > 0: mirrors[0] else: backupDir
+    runRecoveryVerify(mirror, backupPassphrase)
   of "dump": runDump(dataDir, outPath, includeVectors)
   of "import-jsonl": runImportJsonl(dataDir, inPath, defaultRing, ringField,
                                     ringPrefix, payloadField, vecField, n)
@@ -802,6 +869,8 @@ when isMainModule:
     echo "       rochecli restore --backup=DIR --data=DIR [--overwrite]"
     echo "       rochecli backup-encrypted --data=DIR --backup=DIR --passphrase=TEXT"
     echo "       rochecli restore-encrypted --backup=DIR --data=DIR --passphrase=TEXT [--overwrite]"
+    echo "       rochecli recovery-backup --data=DIR --mirror=DIR [--mirror=DIR...] [--passphrase=TEXT]"
+    echo "       rochecli recovery-verify --mirror=DIR [--passphrase=TEXT]"
     echo "       rochecli dump --data=DIR [--out=FILE] [--no-vectors]"
     echo "       rochecli import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING] [--payload-field=FIELD] [--vec-field=FIELD] [--ring-prefix=PREFIX]"
     echo "       rochecli describe-galaxy --data=DIR --description=TEXT"
