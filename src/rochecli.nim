@@ -21,12 +21,15 @@
 ##   rochecli restore --backup=DIR --data=DIR [--overwrite]
 ##   rochecli backup-encrypted --data=DIR --backup=DIR --passphrase=TEXT
 ##   rochecli restore-encrypted --backup=DIR --data=DIR --passphrase=TEXT [--overwrite]
-##   rochecli recovery-backup --data=DIR --mirror=DIR [--mirror=DIR...] [--passphrase=TEXT]
+##   rochecli recovery-backup --data=DIR --mirror=DIR [--mirror=DIR...] [--passphrase=TEXT] [--lane=NAME] [--failure-domain=NAME] [--priority=N] [--snapshot-seq=N]
 ##   rochecli recovery-verify --mirror=DIR [--passphrase=TEXT] [--metrics]
+##   rochecli recovery-restore --mirror=DIR [--mirror=DIR...] --data=DIR [--passphrase=TEXT] [--overwrite]
 ##   rochecli dump --data=DIR [--out=FILE] [--no-vectors]
 ##   rochecli import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING] [--payload-field=FIELD] [--vec-field=FIELD] [--ring-prefix=PREFIX]
 
-import std/[os, strutils, strformat, json, times, monotimes, parseopt, net, dynlib]
+import std/[algorithm, os, strutils, strformat, json, times, monotimes, parseopt,
+            net, dynlib]
+import nimsodium/hash
 import rochedb
 
 const
@@ -684,15 +687,44 @@ proc runRestoreEncrypted(backupDir, dataDir, passphrase: string,
                                      overwrite = overwrite)
   echo &"restore-encrypted OK bytes={stats.bytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames} from={stats.source} to={stats.destination}"
 
-proc recoveryManifest(encrypted: bool, mirror, backupFile: string,
-                      stats: BackupStats): JsonNode =
+type
+  RecoveryCandidate = object
+    mirror: string
+    encrypted: bool
+    priority: int
+    snapshotSeq: BiggestInt
+    stats: BackupStats
+
+proc artifactChecksum(path: string): string =
+  genericHashHex(readFile(path))
+
+proc manifestInt(manifest: JsonNode, key: string, default: int): int =
+  if manifest.hasKey(key): manifest[key].getInt() else: default
+
+proc manifestBiggestInt(manifest: JsonNode, key: string,
+                        default: BiggestInt): BiggestInt =
+  if manifest.hasKey(key): manifest[key].getBiggestInt() else: default
+
+proc manifestBool(manifest: JsonNode, key: string, default: bool): bool =
+  if manifest.hasKey(key): manifest[key].getBool() else: default
+
+proc recoveryManifest(encrypted: bool, mirror, backupFile, lane,
+                      failureDomain: string, priority: int,
+                      snapshotSeq: BiggestInt, stats: BackupStats): JsonNode =
   %*{
     "version": 1,
     "kind": "rochedb-recovery-mirror",
     "createdAt": $now(),
     "encrypted": encrypted,
+    "eligibleForRestore": true,
     "mirror": mirror,
+    "lane": lane,
+    "failureDomain": failureDomain,
+    "priority": priority,
+    "snapshotSeq": snapshotSeq,
     "backupFile": backupFile,
+    "checksumAlgorithm": "blake2b",
+    "checksum": artifactChecksum(backupFile),
     "bytes": stats.bytes,
     "items": stats.items,
     "rings": stats.ringMeta,
@@ -706,7 +738,8 @@ proc writeRecoveryManifest(mirror: string, manifest: JsonNode) =
   writeFile(mirror / "roche.recovery.json", pretty(manifest))
 
 proc runRecoveryBackup(dataDir: string, mirrors: seq[string],
-                       passphrase: string) =
+                       passphrase, lane, failureDomain: string,
+                       priority: int, snapshotSeq: BiggestInt) =
   if dataDir.len == 0 or mirrors.len == 0:
     raise newException(ValueError,
       "recovery-backup requires --data=DIR --mirror=DIR [--mirror=DIR...]")
@@ -721,13 +754,16 @@ proc runRecoveryBackup(dataDir: string, mirrors: seq[string],
         if encrypted: verifyEncryptedBackup(mirror, passphrase)
         else: verifyBackup(mirror)
       let backupFile = mirror / (if encrypted: "roche.backup" else: "roche.log")
+      let laneName = if lane.len > 0: lane else: lastPathPart(mirror)
       writeRecoveryManifest(mirror, recoveryManifest(encrypted, mirror,
-                                                    backupFile, verified))
-      echo &"recovery-backup OK mirror={mirror} encrypted={encrypted} bytes={verified.bytes} items={verified.items} source={stats.source}"
+                                                    backupFile, laneName,
+                                                    failureDomain, priority,
+                                                    snapshotSeq, verified))
+      echo &"recovery-backup OK mirror={mirror} lane={laneName} encrypted={encrypted} bytes={verified.bytes} items={verified.items} source={stats.source}"
   finally:
     db.close()
 
-proc runRecoveryVerify(mirror, passphrase: string, metricsFormat: bool) =
+proc verifyRecoveryMirror(mirror, passphrase: string): RecoveryCandidate =
   if mirror.len == 0:
     raise newException(ValueError, "recovery-verify requires --mirror=DIR")
   let encrypted = passphrase.len > 0
@@ -739,18 +775,99 @@ proc runRecoveryVerify(mirror, passphrase: string, metricsFormat: bool) =
     let manifest = parseFile(manifestPath)
     if manifest.hasKey("encrypted") and manifest["encrypted"].getBool() != encrypted:
       raise newException(IOError, "recovery manifest encryption mode mismatch")
+    if manifestBool(manifest, "eligibleForRestore", true) == false:
+      raise newException(IOError, "recovery mirror is not eligible for restore")
     if manifest.hasKey("bytes") and manifest["bytes"].getBiggestInt() != stats.bytes:
       raise newException(IOError, "recovery manifest byte count mismatch")
+    let backupFile = mirror / (if encrypted: "roche.backup" else: "roche.log")
+    if manifest.hasKey("checksum") and
+        manifest["checksum"].getStr() != artifactChecksum(backupFile):
+      raise newException(IOError, "recovery manifest checksum mismatch")
     if manifest.hasKey("items") and manifest["items"].getInt() != stats.items:
       raise newException(IOError, "recovery manifest item count mismatch")
     if manifest.hasKey("rings") and manifest["rings"].getInt() != stats.ringMeta:
       raise newException(IOError, "recovery manifest ring count mismatch")
     if manifest.hasKey("names") and manifest["names"].getInt() != stats.ringNames:
       raise newException(IOError, "recovery manifest ring name count mismatch")
+    result.priority = manifestInt(manifest, "priority", 0)
+    result.snapshotSeq = manifestBiggestInt(manifest, "snapshotSeq", 0)
+  result.mirror = mirror
+  result.encrypted = encrypted
+  result.stats = stats
+
+proc runRecoveryVerify(mirror, passphrase: string, metricsFormat: bool) =
+  let candidate = verifyRecoveryMirror(mirror, passphrase)
+  let stats = candidate.stats
   if metricsFormat:
-    echo &"recoveryMirrorHealthy 1 recoveryMirrorEncrypted {int(encrypted)} recoveryMirrorBytes {stats.bytes} recoveryMirrorItems {stats.items} recoveryMirrorRings {stats.ringMeta} recoveryMirrorNames {stats.ringNames} recoveryMirrorClusterTx {stats.clusterTx} recoveryMirrorWarpJobs {stats.warpJobs}"
+    echo &"recoveryMirrorHealthy 1 recoveryMirrorEncrypted {int(candidate.encrypted)} recoveryMirrorBytes {stats.bytes} recoveryMirrorItems {stats.items} recoveryMirrorRings {stats.ringMeta} recoveryMirrorNames {stats.ringNames} recoveryMirrorClusterTx {stats.clusterTx} recoveryMirrorWarpJobs {stats.warpJobs} recoveryMirrorPriority {candidate.priority} recoveryMirrorSnapshotSeq {candidate.snapshotSeq}"
   else:
-    echo &"recovery-verify OK mirror={mirror} encrypted={encrypted} bytes={stats.bytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames}"
+    echo &"recovery-verify OK mirror={mirror} encrypted={candidate.encrypted} bytes={stats.bytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames} priority={candidate.priority} snapshotSeq={candidate.snapshotSeq}"
+
+proc replaceRecoveryLog(stageDir, dataDir: string) =
+  createDir(dataDir)
+  let src = stageDir / "roche.log"
+  let dst = dataDir / "roche.log"
+  let tmp = dst & ".recovery-tmp"
+  let bak = dst & ".recovery-bak"
+  copyFile(src, tmp)
+  try:
+    if fileExists(dst):
+      if fileExists(bak):
+        removeFile(bak)
+      moveFile(dst, bak)
+    moveFile(tmp, dst)
+    if fileExists(bak):
+      removeFile(bak)
+  except CatchableError:
+    if fileExists(tmp):
+      removeFile(tmp)
+    if fileExists(bak) and not fileExists(dst):
+      moveFile(bak, dst)
+    raise
+
+proc runRecoveryRestore(mirrors: seq[string], dataDir, passphrase: string,
+                        overwrite: bool) =
+  if dataDir.len == 0 or mirrors.len == 0:
+    raise newException(ValueError,
+      "recovery-restore requires --mirror=DIR [--mirror=DIR...] --data=DIR")
+  let dst = dataDir / "roche.log"
+  if fileExists(dst) and not overwrite:
+    raise newException(IOError, "target roche.log already exists: " & dst)
+
+  var candidates: seq[RecoveryCandidate] = @[]
+  var lastError = ""
+  for mirror in mirrors:
+    try:
+      candidates.add verifyRecoveryMirror(mirror, passphrase)
+    except CatchableError:
+      lastError = mirror & ": " & getCurrentExceptionMsg()
+
+  if candidates.len == 0:
+    raise newException(IOError, "no eligible recovery mirror" &
+      (if lastError.len > 0: " (" & lastError & ")" else: ""))
+
+  candidates.sort(proc(a, b: RecoveryCandidate): int =
+    result = cmp(b.priority, a.priority)
+    if result == 0:
+      result = cmp(b.snapshotSeq, a.snapshotSeq)
+    if result == 0:
+      result = cmp(a.mirror, b.mirror)
+  )
+  let chosen = candidates[0]
+  let stageDir = dataDir & ".recovery-stage"
+  if dirExists(stageDir):
+    removeDir(stageDir)
+  try:
+    if chosen.encrypted:
+      discard restoreEncryptedBackup(chosen.mirror, stageDir, passphrase,
+                                     overwrite = true)
+    else:
+      discard restoreBackup(chosen.mirror, stageDir, overwrite = true)
+    replaceRecoveryLog(stageDir, dataDir)
+  finally:
+    if dirExists(stageDir):
+      removeDir(stageDir)
+  echo &"recovery-restore OK mirror={chosen.mirror} data={dataDir} encrypted={chosen.encrypted} priority={chosen.priority} snapshotSeq={chosen.snapshotSeq} bytes={chosen.stats.bytes} items={chosen.stats.items}"
 
 proc runDump(dataDir, outPath: string, includeVectors: bool) =
   if dataDir.len == 0:
@@ -797,6 +914,8 @@ when isMainModule:
   var secretKey = ""
   var backupPassphrase = ""
   var galaxy = ""
+  var lane = ""
+  var failureDomain = ""
   var redisEndpoint = "127.0.0.1:6379"
   var n = 10_000
   var queries = 50
@@ -804,6 +923,8 @@ when isMainModule:
   var routedBudget = 3
   var ringCount = 100
   var payloadBytes = 100
+  var priority = 0
+  var snapshotSeq: BiggestInt = 0
   for kind, key, val in getopt():
     case kind
     of cmdArgument: cmd = key
@@ -831,6 +952,8 @@ when isMainModule:
       of "secret-key": secretKey = val
       of "passphrase": backupPassphrase = val
       of "galaxy": galaxy = val
+      of "lane": lane = val
+      of "failure-domain": failureDomain = val
       of "redis": redisEndpoint = val
       of "n": n = parseInt(val)
       of "queries": queries = parseInt(val)
@@ -838,6 +961,8 @@ when isMainModule:
       of "routed-budget": routedBudget = parseInt(val)
       of "rings": ringCount = parseInt(val)
       of "payload-bytes": payloadBytes = parseInt(val)
+      of "priority": priority = parseInt(val)
+      of "snapshot-seq": snapshotSeq = parseBiggestInt(val)
       else: discard
     else: discard
   case cmd
@@ -866,10 +991,14 @@ when isMainModule:
   of "backup-encrypted": runBackupEncrypted(dataDir, backupDir, backupPassphrase)
   of "restore-encrypted": runRestoreEncrypted(backupDir, dataDir,
                                               backupPassphrase, overwrite)
-  of "recovery-backup": runRecoveryBackup(dataDir, mirrors, backupPassphrase)
+  of "recovery-backup": runRecoveryBackup(dataDir, mirrors, backupPassphrase,
+                                          lane, failureDomain, priority,
+                                          snapshotSeq)
   of "recovery-verify":
     let mirror = if mirrors.len > 0: mirrors[0] else: backupDir
     runRecoveryVerify(mirror, backupPassphrase, metricsFormat)
+  of "recovery-restore": runRecoveryRestore(mirrors, dataDir, backupPassphrase,
+                                            overwrite)
   of "dump": runDump(dataDir, outPath, includeVectors)
   of "import-jsonl": runImportJsonl(dataDir, inPath, defaultRing, ringField,
                                     ringPrefix, payloadField, vecField, n)
@@ -880,8 +1009,9 @@ when isMainModule:
     echo "       rochecli restore --backup=DIR --data=DIR [--overwrite]"
     echo "       rochecli backup-encrypted --data=DIR --backup=DIR --passphrase=TEXT"
     echo "       rochecli restore-encrypted --backup=DIR --data=DIR --passphrase=TEXT [--overwrite]"
-    echo "       rochecli recovery-backup --data=DIR --mirror=DIR [--mirror=DIR...] [--passphrase=TEXT]"
+    echo "       rochecli recovery-backup --data=DIR --mirror=DIR [--mirror=DIR...] [--passphrase=TEXT] [--lane=NAME] [--failure-domain=NAME] [--priority=N] [--snapshot-seq=N]"
     echo "       rochecli recovery-verify --mirror=DIR [--passphrase=TEXT] [--metrics]"
+    echo "       rochecli recovery-restore --mirror=DIR [--mirror=DIR...] --data=DIR [--passphrase=TEXT] [--overwrite]"
     echo "       rochecli dump --data=DIR [--out=FILE] [--no-vectors]"
     echo "       rochecli import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING] [--payload-field=FIELD] [--vec-field=FIELD] [--ring-prefix=PREFIX]"
     echo "       rochecli describe-galaxy --data=DIR --description=TEXT"
