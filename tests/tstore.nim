@@ -344,6 +344,37 @@ suite "store persistence":
     removeDir(backupDir)
     removeDir(restoredDir)
 
+  test "壊れた plain backup は restore 前に拒否され target を壊さない":
+    let srcDir = createTempDir("roche-store", "backup-corrupt-src")
+    let backupDir = createTempDir("roche-store", "backup-corrupt")
+    let targetDir = createTempDir("roche-store", "backup-corrupt-target")
+
+    var src = openStore(srcDir)
+    src.upsert Particle(parent: 10'u64, seq: 0'u32, period: 60.0, head: 0.0,
+                        tWrite: 1.0, payload: "source")
+    discard src.backup(backupDir)
+    src.close()
+
+    createDir(targetDir)
+    writeFile(targetDir / "roche.log",
+              "P 9 0 60.0 0.0 1.0 6 0\nstable\n")
+    writeFile(backupDir / "roche.log",
+              readFile(backupDir / "roche.log") &
+              "P 10 1 60.0 0.0 2.0 7 0\npartial")
+
+    expect IOError:
+      discard restoreBackup(backupDir, targetDir, overwrite = true)
+
+    var target = openStore(targetDir)
+    check target.count() == 1
+    check target.items[(9'u64, 0'u32)].payload == "stable"
+    check not target.contains(10'u64, 0'u32)
+    target.close()
+
+    removeDir(srcDir)
+    removeDir(backupDir)
+    removeDir(targetDir)
+
   test "encrypted backup/restore は passphrase が一致すると復元できる":
     let dir = createTempDir("roche-store", "enc-backup-src")
     let backupDir = createTempDir("roche-store", "enc-backup")
@@ -373,6 +404,27 @@ suite "store persistence":
     removeDir(dir)
     removeDir(backupDir)
     removeDir(restoredDir)
+
+  test "壊れた encrypted backup は restore 前に拒否され target を壊さない":
+    let backupDir = createTempDir("roche-store", "enc-corrupt-backup")
+    let targetDir = createTempDir("roche-store", "enc-corrupt-target")
+
+    writeFile(backupDir / "roche.backup", "not-a-rochedb-encrypted-backup")
+    createDir(targetDir)
+    writeFile(targetDir / "roche.log",
+              "P 11 0 60.0 0.0 1.0 6 0\nstable\n")
+
+    expect IOError:
+      discard restoreEncryptedBackup(backupDir, targetDir, "passphrase",
+                                     overwrite = true)
+
+    var target = openStore(targetDir)
+    check target.count() == 1
+    check target.items[(11'u64, 0'u32)].payload == "stable"
+    target.close()
+
+    removeDir(backupDir)
+    removeDir(targetDir)
 
   test "galaxy は data dir に固定され、違う galaxy では開けない":
     let dir = createTempDir("roche-store", "galaxy")

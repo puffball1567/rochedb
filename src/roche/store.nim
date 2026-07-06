@@ -324,8 +324,11 @@ proc truncateMissingFinalNewline(path: string) =
   finally:
     f.close()
 
-proc replay(s: Store, path: string) =
-  truncateMissingFinalNewline(path)
+proc replay(s: Store, path: string, repair = true) =
+  if repair:
+    truncateMissingFinalNewline(path)
+  elif not endsWithNewline(path):
+    raise newException(IOError, "WAL snapshot is missing final newline")
   let fs = newFileStream(path, fmRead)
   if fs.isNil: return
   var line = ""
@@ -463,11 +466,19 @@ proc replay(s: Store, path: string) =
         discard   # 不明レコードは読み飛ばし（前方互換）
       lastGood = fs.getPosition()
     except CatchableError:
-      repairTo = lastGood
-      break
+      if repair:
+        repairTo = lastGood
+        break
+      fs.close()
+      raise newException(IOError, "invalid WAL snapshot near byte " &
+        $lastGood & ": " & getCurrentExceptionMsg())
   fs.close()
   if repairTo >= 0:
     truncateLog(path, repairTo.int64)
+
+proc validateSnapshotFile(path: string) =
+  var s = Store(lastFlush: getMonoTime(), nextTxId: 1)
+  s.replay(path, repair = false)
 
 proc recoverCompaction(path: string) =
   let tmp = path & ".compact"
@@ -697,6 +708,7 @@ proc restoreBackup*(backupDir, targetDir: string, overwrite = false): StoreBacku
   let src = backupDir / "roche.log"
   if not fileExists(src):
     raise newException(IOError, "backup roche.log not found: " & src)
+  validateSnapshotFile(src)
   createDir(targetDir)
   let dst = targetDir / "roche.log"
   if fileExists(dst) and not overwrite:
@@ -723,6 +735,13 @@ proc restoreEncryptedBackup*(backupDir, targetDir, passphrase: string,
     raise newException(IOError, "invalid encrypted backup header")
   let plaintext = decryptSecretBox(blob[EncryptedBackupMagic.len .. ^1],
                                    backupKey(passphrase))
+  let validateTmp = backupDir / "roche.restore-validate.tmp"
+  writeFile(validateTmp, plaintext)
+  try:
+    validateSnapshotFile(validateTmp)
+  finally:
+    if fileExists(validateTmp):
+      removeFile(validateTmp)
   createDir(targetDir)
   let dst = targetDir / "roche.log"
   if fileExists(dst) and not overwrite:
