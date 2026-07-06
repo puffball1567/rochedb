@@ -67,7 +67,7 @@ Translations:
 | Dynamic membership / epoch migration | Planned | Current peer list is static |
 | Cluster transaction coordinator redundancy | Planned | Remove node0 as a single point of failure |
 | Read-your-writes for cluster tx | PoC | `get/query/batchGet` fallback to node0 landing intent before owner apply; cluster smoke covers update/delete |
-| Cluster repair protocol | Planned | Detect and repair node/WAL/replica damage inside one cluster before universe DR is needed |
+| Fault-tolerance improvements | Planned | Post-v0.1 work; public details intentionally stay high-level |
 | Multi-VM / multi-AZ benchmark | Planned | Real-world latency and failure behavior |
 
 ## Drivers / Bindings
@@ -137,5 +137,4 @@ single v0.2.0 milestone.
 - package publishing workflows for language drivers
 - API reference documentation
 - Prometheus / OpenMetrics and Datadog metrics adapters
-- Universe redundancy: mirror manifests, verification, object-storage adapters, warp lanes, parity, and PITR
-- Cluster repair protocol: checksums, scrub, replica comparison, and repair metrics
+- Fault-tolerance improvements

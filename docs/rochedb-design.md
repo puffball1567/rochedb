@@ -268,12 +268,8 @@ Compaction writes a compact representation of live state. Backup and restore use
 compact WAL snapshots. Human-readable dump is available for inspection and
 migration, not for crash recovery.
 
-Universe redundancy is a v0.2.0 design direction above backup/restore. It is a
-logical disaster-recovery boundary across independent server groups, not
-cluster-internal corruption repair. Cluster repair should fix node/WAL/replica
-damage inside one serving topology; universe lanes should keep independent
-recovery copies across lanes such as separate regions, availability zones,
-racks, accounts, or other server-group boundaries.
+Additional fault-tolerance work is a v0.2+ direction. Public documentation
+intentionally keeps this area high-level.
 
 Durability modes:
 

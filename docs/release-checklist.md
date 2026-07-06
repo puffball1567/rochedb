@@ -63,8 +63,8 @@ These are important, but should not block the first technical preview:
 - FlowBrigade / FlowLogbook adapter
 - enterprise plugin features
 - package publication to npm / PyPI / Cargo / Composer / NuGet / Maven
-- online universe replication / object-storage mirror adapters / PITR
-- cluster repair protocol: checksums, scrub, replica comparison, and repair metrics
+- fault-tolerance improvements
+- cluster repair and integrity verification
 
 ## Post-v0.1 Direction
 
