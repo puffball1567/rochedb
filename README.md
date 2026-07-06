@@ -52,6 +52,53 @@ corpus size toward semantic working-set size.
 - Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 - Contribution policy: [CONTRIBUTING.md](CONTRIBUTING.md)
 
+## Installation
+
+RocheDB v0.1.x is a technical preview. Registry packages are not published yet,
+so the current installation path is a local clone.
+
+Prerequisites:
+
+- Nim `2.0.0` or newer
+- `git`
+- `gcc` or another C compiler supported by Nim
+
+Clone and verify the embedded database:
+
+```sh
+git clone https://github.com/puffball1567/rochedb.git
+cd rochedb
+scripts/test_core.sh
+```
+
+Use RocheDB from a Nim program in this repository by importing the public module:
+
+```nim
+import rochedb
+```
+
+For command-line tools and demos, build the binaries:
+
+```sh
+nim c -d:release --nimcache:/tmp/nimcache_rochecli -o:bin/rochecli src/rochecli.nim
+nim c -d:release --nimcache:/tmp/nimcache_roched -o:src/roched src/roched.nim
+```
+
+Optional FAISS vector backend:
+
+```sh
+scripts/fetch_faiss.sh
+scripts/setup_faiss_toolchain.sh   # only needed when system CMake is too old
+scripts/build_faiss_bridge.sh
+bin/rochecli doctor
+```
+
+The built-in exact vector backend works without FAISS. FAISS is recommended for
+production-style broad vector reads when the bridge is available. See
+[docs/driver-installation.md](docs/driver-installation.md) for language drivers
+and [docs/faiss-versioning.md](docs/faiss-versioning.md) for FAISS version
+control.
+
 ## Quickstart: Embedded Mode
 
 ```nim
@@ -247,80 +294,117 @@ int node = roche_locate(db, id, -1.0);
 
 ## Build and Verification
 
+### Core Test Suite
+
 ```sh
-# Core tests
 scripts/test_core.sh
-
-# Cluster, authz, RBAC, wire fuzz, and smoke checks
 scripts/test_all_smoke.sh
+```
 
-# Include driver compatibility checks where local toolchains are available
+Include driver compatibility checks when local toolchains are available:
+
+```sh
 ROCHE_TEST_DRIVERS=1 scripts/test_all_smoke.sh
+```
 
-# PoC simulation and mechanism benchmark
+### Simulation And Mechanism Benchmarks
+
+```sh
 nim c -d:danger -o:bin/rochesim src/rochesim.nim
 bin/rochesim all
+
 nim c -d:danger -o:bin/rochebench src/rochebench.nim
 bin/rochebench
+```
 
-# Working-set and memory-pressure benchmarks
+### Working-Set, Memory, And RAG Benchmarks
+
+```sh
 nim c -d:release -o:bin/rochecli src/rochecli.nim
 bin/rochecli working-set-bench --n=100000 --rings=100 --queries=50 --budget=20
 bin/rochecli memory-pressure-bench --n=100000 --rings=100 --queries=50 --budget=20 --payload-bytes=512
 RUN_REDIS=0 examples/memory_pressure_case_study.sh
-
-# AI/RAG case study with generated JSONL corpus
 examples/ai_rag_case_study.sh
+```
 
-# Local Redis comparison, when Redis is already running
+### Redis Comparison
+
+Use an existing local Redis server:
+
+```sh
 bin/rochecli redis-bench --n=100000 --payload-bytes=100 --redis=127.0.0.1:6379
+```
 
-# Docker Redis comparison
+Or use the Docker-based smoke comparison:
+
+```sh
 examples/redis_bench.sh
-
-# Redis TCP / Redis pipeline / RocheDB TCP comparison
 ROCHED=1 examples/redis_bench.sh
+```
 
-# Server and client binaries
+### Server Options
+
+```sh
 nim c -d:release -o:bin/roched src/roched.nim
 nim c -d:release -o:bin/rochecli src/rochecli.nim
+```
 
-# Strong durability mode
+Strong durability mode:
+
+```sh
 bin/roched --id=0 --peers=127.0.0.1:7301 --data=/var/lib/roche --durability=strong
+```
 
-# Ring-prefix authorization
+Ring-prefix authorization:
+
+```sh
 bin/roched --id=0 --peers=127.0.0.1:7301 --user=alice --password=secret --allow-ring=allowed
+```
 
-# Minimal RBAC plus ring-prefix authorization
+Minimal RBAC plus ring-prefix authorization:
+
+```sh
 bin/roched --id=0 --peers=127.0.0.1:7301 \
   --role=reader:read:reader:allowed \
   --role=writer:write:writer:allowed \
   --role=admin:admin:admin:allowed
+```
 
-# Encrypted backup / restore
+Encrypted backup / restore:
+
+```sh
 bin/rochecli backup-encrypted --data=data --backup=backup.enc --passphrase=change-me
 bin/rochecli restore-encrypted --backup=backup.enc --data=restored --passphrase=change-me
+```
 
-# Python native wire driver
+### Driver Checks
+
+```sh
 python3 -m unittest discover -s drivers/python/tests
-
-# Node.js native wire driver
 node --test drivers/node/test/*.test.js
+```
 
-# Cluster demo
+Cluster demo:
+
+```sh
 ./examples/cluster_demo.sh
+```
 
-# C ABI
+### C ABI
+
+```sh
 nim c --app:lib -d:release -o:lib/librochedb.so src/rochedb_capi.nim
 gcc examples/demo.c -Iinclude -Llib -lrochedb -Wl,-rpath,'$ORIGIN/../lib' -o bin/demo
 bin/demo
+```
 
-# FAISS vector backend bridge setup
+### FAISS Vector Backend
+
+```sh
 scripts/fetch_faiss.sh
 scripts/setup_faiss_toolchain.sh
 scripts/build_faiss_bridge.sh
 bin/rochecli doctor
-# optional Exact vs FAISS smoke comparison
 examples/vector_backend_bench.sh
 ```
 
