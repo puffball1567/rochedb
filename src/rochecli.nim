@@ -23,6 +23,7 @@
 ##   rochecli restore-encrypted --backup=DIR --data=DIR --passphrase=TEXT [--overwrite]
 ##   rochecli recovery-backup --data=DIR --mirror=DIR [--mirror=DIR...] [--passphrase=TEXT] [--lane=NAME] [--failure-domain=NAME] [--priority=N] [--snapshot-seq=N]
 ##   rochecli recovery-verify --mirror=DIR [--passphrase=TEXT] [--metrics]
+##   rochecli recovery-status --mirror=DIR [--mirror=DIR...] [--passphrase=TEXT] [--required-healthy=N] [--metrics]
 ##   rochecli recovery-restore --mirror=DIR [--mirror=DIR...] --data=DIR [--passphrase=TEXT] [--overwrite]
 ##   rochecli dump --data=DIR [--out=FILE] [--no-vectors]
 ##   rochecli import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING] [--payload-field=FIELD] [--vec-field=FIELD] [--ring-prefix=PREFIX]
@@ -695,6 +696,12 @@ type
     snapshotSeq: BiggestInt
     stats: BackupStats
 
+  RecoveryLaneStatus = object
+    mirror: string
+    healthy: bool
+    candidate: RecoveryCandidate
+    error: string
+
 proc artifactChecksum(path: string): string =
   genericHashHex(readFile(path))
 
@@ -803,6 +810,54 @@ proc runRecoveryVerify(mirror, passphrase: string, metricsFormat: bool) =
   else:
     echo &"recovery-verify OK mirror={mirror} encrypted={candidate.encrypted} bytes={stats.bytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames} priority={candidate.priority} snapshotSeq={candidate.snapshotSeq}"
 
+proc recoveryCandidateCmp(a, b: RecoveryCandidate): int =
+  result = cmp(b.priority, a.priority)
+  if result == 0:
+    result = cmp(b.snapshotSeq, a.snapshotSeq)
+  if result == 0:
+    result = cmp(a.mirror, b.mirror)
+
+proc runRecoveryStatus(mirrors: seq[string], passphrase: string,
+                       requiredHealthy: int, metricsFormat: bool) =
+  if mirrors.len == 0:
+    raise newException(ValueError,
+      "recovery-status requires --mirror=DIR [--mirror=DIR...]")
+  if requiredHealthy < 1:
+    raise newException(ValueError, "recovery-status requires --required-healthy >= 1")
+
+  var statuses: seq[RecoveryLaneStatus] = @[]
+  var candidates: seq[RecoveryCandidate] = @[]
+  for mirror in mirrors:
+    var lane = RecoveryLaneStatus(mirror: mirror)
+    try:
+      lane.candidate = verifyRecoveryMirror(mirror, passphrase)
+      lane.healthy = true
+      candidates.add lane.candidate
+    except CatchableError:
+      lane.error = getCurrentExceptionMsg()
+    statuses.add lane
+
+  candidates.sort(recoveryCandidateCmp)
+  let healthy = candidates.len
+  let failed = statuses.len - healthy
+  let ok = healthy >= requiredHealthy
+  let best =
+    if candidates.len > 0: candidates[0]
+    else: RecoveryCandidate()
+
+  if metricsFormat:
+    echo &"recoveryUniverseHealthy {int(ok)} recoveryHealthyLanes {healthy} recoveryRequiredHealthyLanes {requiredHealthy} recoveryFailedLanes {failed} recoveryBestPriority {best.priority} recoveryBestSnapshotSeq {best.snapshotSeq} recoveryBestBytes {best.stats.bytes} recoveryBestItems {best.stats.items}"
+  else:
+    echo &"recovery-status {(if ok: \"OK\" else: \"FAIL\")} healthy={healthy} required={requiredHealthy} failed={failed} bestMirror={best.mirror} priority={best.priority} snapshotSeq={best.snapshotSeq}"
+    for lane in statuses:
+      if lane.healthy:
+        echo &"  lane OK mirror={lane.mirror} priority={lane.candidate.priority} snapshotSeq={lane.candidate.snapshotSeq} bytes={lane.candidate.stats.bytes} items={lane.candidate.stats.items}"
+      else:
+        echo &"  lane FAIL mirror={lane.mirror} error={lane.error}"
+
+  if not ok:
+    quit(1)
+
 proc replaceRecoveryLog(stageDir, dataDir: string) =
   createDir(dataDir)
   let src = stageDir / "roche.log"
@@ -846,13 +901,7 @@ proc runRecoveryRestore(mirrors: seq[string], dataDir, passphrase: string,
     raise newException(IOError, "no eligible recovery mirror" &
       (if lastError.len > 0: " (" & lastError & ")" else: ""))
 
-  candidates.sort(proc(a, b: RecoveryCandidate): int =
-    result = cmp(b.priority, a.priority)
-    if result == 0:
-      result = cmp(b.snapshotSeq, a.snapshotSeq)
-    if result == 0:
-      result = cmp(a.mirror, b.mirror)
-  )
+  candidates.sort(recoveryCandidateCmp)
   let chosen = candidates[0]
   let stageDir = dataDir & ".recovery-stage"
   if dirExists(stageDir):
@@ -925,6 +974,7 @@ when isMainModule:
   var payloadBytes = 100
   var priority = 0
   var snapshotSeq: BiggestInt = 0
+  var requiredHealthy = 1
   for kind, key, val in getopt():
     case kind
     of cmdArgument: cmd = key
@@ -963,6 +1013,7 @@ when isMainModule:
       of "payload-bytes": payloadBytes = parseInt(val)
       of "priority": priority = parseInt(val)
       of "snapshot-seq": snapshotSeq = parseBiggestInt(val)
+      of "required-healthy": requiredHealthy = parseInt(val)
       else: discard
     else: discard
   case cmd
@@ -997,6 +1048,8 @@ when isMainModule:
   of "recovery-verify":
     let mirror = if mirrors.len > 0: mirrors[0] else: backupDir
     runRecoveryVerify(mirror, backupPassphrase, metricsFormat)
+  of "recovery-status": runRecoveryStatus(mirrors, backupPassphrase,
+                                          requiredHealthy, metricsFormat)
   of "recovery-restore": runRecoveryRestore(mirrors, dataDir, backupPassphrase,
                                             overwrite)
   of "dump": runDump(dataDir, outPath, includeVectors)
@@ -1011,6 +1064,7 @@ when isMainModule:
     echo "       rochecli restore-encrypted --backup=DIR --data=DIR --passphrase=TEXT [--overwrite]"
     echo "       rochecli recovery-backup --data=DIR --mirror=DIR [--mirror=DIR...] [--passphrase=TEXT] [--lane=NAME] [--failure-domain=NAME] [--priority=N] [--snapshot-seq=N]"
     echo "       rochecli recovery-verify --mirror=DIR [--passphrase=TEXT] [--metrics]"
+    echo "       rochecli recovery-status --mirror=DIR [--mirror=DIR...] [--passphrase=TEXT] [--required-healthy=N] [--metrics]"
     echo "       rochecli recovery-restore --mirror=DIR [--mirror=DIR...] --data=DIR [--passphrase=TEXT] [--overwrite]"
     echo "       rochecli dump --data=DIR [--out=FILE] [--no-vectors]"
     echo "       rochecli import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING] [--payload-field=FIELD] [--vec-field=FIELD] [--ring-prefix=PREFIX]"

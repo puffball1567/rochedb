@@ -45,6 +45,18 @@ grep -q "recoveryMirrorSnapshotSeq 42" <<<"$plain_metrics"
 
 bin/rochecli recovery-verify --mirror="$TMP/plain-b" >/dev/null
 
+status_metrics="$(bin/rochecli recovery-status \
+  --mirror="$TMP/plain-a" \
+  --mirror="$TMP/plain-b" \
+  --required-healthy=2 \
+  --metrics)"
+echo "$status_metrics"
+grep -q "recoveryUniverseHealthy 1" <<<"$status_metrics"
+grep -q "recoveryHealthyLanes 2" <<<"$status_metrics"
+grep -q "recoveryRequiredHealthyLanes 2" <<<"$status_metrics"
+grep -q "recoveryBestPriority 10" <<<"$status_metrics"
+grep -q "recoveryBestSnapshotSeq 42" <<<"$status_metrics"
+
 echo "[recovery-smoke] restore selects eligible mirror"
 mkdir -p "$TMP/restore"
 bin/rochecli recovery-restore \
@@ -73,6 +85,17 @@ if bin/rochecli recovery-verify --mirror="$TMP/plain-a" >/dev/null 2>&1; then
   echo "recovery-verify unexpectedly accepted mismatched manifest" >&2
   exit 1
 fi
+if bin/rochecli recovery-status \
+  --mirror="$TMP/plain-a" \
+  --mirror="$TMP/plain-b" \
+  --required-healthy=2 >/dev/null 2>&1; then
+  echo "recovery-status unexpectedly accepted too few healthy mirrors" >&2
+  exit 1
+fi
+bin/rochecli recovery-status \
+  --mirror="$TMP/plain-a" \
+  --mirror="$TMP/plain-b" \
+  --required-healthy=1 >/dev/null
 
 echo "[recovery-smoke] checksum mismatch fails closed"
 printf 'x' >> "$TMP/plain-b/roche.log"
