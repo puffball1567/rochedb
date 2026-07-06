@@ -68,6 +68,36 @@ echo db.locate(id)                        # current owner, computed locally
 echo db.locate(id, at = 120.0)            # future owner, also computed locally
 ```
 
+## If You Do Not Know The ID
+
+`get(id)` is the fastest path when the application already has a RocheDB ID. If
+the ID is not known, start from a ring.
+
+```nim
+import rochedb
+
+var db = rochedb.open(dataDir = "data")
+
+discard db.put("""{"slug":"hello","title":"Hello"}""", ring = "docs/japan")
+discard db.put("""{"slug":"refund","title":"Refund guide"}""", ring = "docs/japan")
+
+for item in db.listByRing("docs/japan"):
+  echo item.payload
+```
+
+For vector/RAG-style lookup, search the ring directly:
+
+```nim
+let hits = db.retrieve(@[1.0'f32, 0.0'f32], ring = "docs/japan", budget = 3)
+
+for hit in hits:
+  echo hit.payload
+```
+
+If the right ring is not obvious, use `atlas()` and ring descriptions to choose
+the search scope first. RocheDB is designed to avoid ID-less global scans when a
+ring coordinate is available.
+
 ## Why It Helps Web Systems
 
 RocheDB is useful outside AI workflows when the application naturally has

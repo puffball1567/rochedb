@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.1
+
+### Changed
+
+- Documented how to look up records when the application does not already have a
+  RocheDB ID: start from a ring with `listByRing`, use ring-scoped `retrieve`
+  for vector/RAG lookup, and use `atlas()` / ring descriptions to choose scope.
+
 ## v0.1.0 Technical Preview
 
 Initial public technical preview target.
