@@ -68,8 +68,6 @@ echo db.locate(id)                        # current owner, computed locally
 echo db.locate(id, at = 120.0)            # future owner, also computed locally
 ```
 
-## If You Do Not Know The ID
-
 `get(id)` is the fastest path when the application already has a RocheDB ID. If
 the ID is not known, start from a ring.
 
