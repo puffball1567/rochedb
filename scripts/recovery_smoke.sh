@@ -24,15 +24,33 @@ P 1 0 60.0 0.0 1.0 5 0
 hello
 LOG
 
+cat > "$TMP/universe.json" <<JSON
+{
+  "version": 1,
+  "requiredHealthy": 2,
+  "lanes": [
+    {
+      "lane": "lane-a",
+      "mirror": "$TMP/plain-a",
+      "failureDomain": "local-a",
+      "priority": 10,
+      "snapshotSeq": 42
+    },
+    {
+      "lane": "lane-b",
+      "mirror": "$TMP/plain-b",
+      "failureDomain": "local-b",
+      "priority": 5,
+      "snapshotSeq": 41
+    }
+  ]
+}
+JSON
+
 echo "[recovery-smoke] plain mirrors"
 bin/rochecli recovery-backup \
   --data="$TMP/src" \
-  --mirror="$TMP/plain-a" \
-  --mirror="$TMP/plain-b" \
-  --lane=lane-a \
-  --failure-domain=local-smoke \
-  --priority=10 \
-  --snapshot-seq=42 >/dev/null
+  --universe-config="$TMP/universe.json" >/dev/null
 
 plain_metrics="$(bin/rochecli recovery-verify --mirror="$TMP/plain-a" --metrics)"
 echo "$plain_metrics"
@@ -46,9 +64,7 @@ grep -q "recoveryMirrorSnapshotSeq 42" <<<"$plain_metrics"
 bin/rochecli recovery-verify --mirror="$TMP/plain-b" >/dev/null
 
 status_metrics="$(bin/rochecli recovery-status \
-  --mirror="$TMP/plain-a" \
-  --mirror="$TMP/plain-b" \
-  --required-healthy=2 \
+  --universe-config="$TMP/universe.json" \
   --metrics)"
 echo "$status_metrics"
 grep -q "recoveryUniverseHealthy 1" <<<"$status_metrics"
@@ -60,8 +76,7 @@ grep -q "recoveryBestSnapshotSeq 42" <<<"$status_metrics"
 echo "[recovery-smoke] restore selects eligible mirror"
 mkdir -p "$TMP/restore"
 bin/rochecli recovery-restore \
-  --mirror="$TMP/plain-a" \
-  --mirror="$TMP/plain-b" \
+  --universe-config="$TMP/universe.json" \
   --data="$TMP/restore" >/dev/null
 grep -q "hello" "$TMP/restore/roche.log"
 
@@ -86,15 +101,12 @@ if bin/rochecli recovery-verify --mirror="$TMP/plain-a" >/dev/null 2>&1; then
   exit 1
 fi
 if bin/rochecli recovery-status \
-  --mirror="$TMP/plain-a" \
-  --mirror="$TMP/plain-b" \
-  --required-healthy=2 >/dev/null 2>&1; then
+  --universe-config="$TMP/universe.json" >/dev/null 2>&1; then
   echo "recovery-status unexpectedly accepted too few healthy mirrors" >&2
   exit 1
 fi
 bin/rochecli recovery-status \
-  --mirror="$TMP/plain-a" \
-  --mirror="$TMP/plain-b" \
+  --universe-config="$TMP/universe.json" \
   --required-healthy=1 >/dev/null
 
 echo "[recovery-smoke] checksum mismatch fails closed"

@@ -21,10 +21,10 @@
 ##   rochecli restore --backup=DIR --data=DIR [--overwrite]
 ##   rochecli backup-encrypted --data=DIR --backup=DIR --passphrase=TEXT
 ##   rochecli restore-encrypted --backup=DIR --data=DIR --passphrase=TEXT [--overwrite]
-##   rochecli recovery-backup --data=DIR --mirror=DIR [--mirror=DIR...] [--passphrase=TEXT] [--lane=NAME] [--failure-domain=NAME] [--priority=N] [--snapshot-seq=N]
+##   rochecli recovery-backup --data=DIR [--mirror=DIR...] [--universe-config=FILE] [--passphrase=TEXT] [--lane=NAME] [--failure-domain=NAME] [--priority=N] [--snapshot-seq=N]
 ##   rochecli recovery-verify --mirror=DIR [--passphrase=TEXT] [--metrics]
-##   rochecli recovery-status --mirror=DIR [--mirror=DIR...] [--passphrase=TEXT] [--required-healthy=N] [--metrics]
-##   rochecli recovery-restore --mirror=DIR [--mirror=DIR...] --data=DIR [--passphrase=TEXT] [--overwrite]
+##   rochecli recovery-status [--mirror=DIR...] [--universe-config=FILE] [--passphrase=TEXT] [--required-healthy=N] [--metrics]
+##   rochecli recovery-restore [--mirror=DIR...] [--universe-config=FILE] --data=DIR [--passphrase=TEXT] [--overwrite]
 ##   rochecli dump --data=DIR [--out=FILE] [--no-vectors]
 ##   rochecli import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING] [--payload-field=FIELD] [--vec-field=FIELD] [--ring-prefix=PREFIX]
 
@@ -696,11 +696,23 @@ type
     snapshotSeq: BiggestInt
     stats: BackupStats
 
+  RecoveryLaneConfig = object
+    mirror: string
+    lane: string
+    failureDomain: string
+    priority: int
+    snapshotSeq: BiggestInt
+    enabled: bool
+
   RecoveryLaneStatus = object
     mirror: string
     healthy: bool
     candidate: RecoveryCandidate
     error: string
+
+  RecoveryUniverseConfig = object
+    requiredHealthy: int
+    lanes: seq[RecoveryLaneConfig]
 
 proc artifactChecksum(path: string): string =
   genericHashHex(readFile(path))
@@ -714,6 +726,58 @@ proc manifestBiggestInt(manifest: JsonNode, key: string,
 
 proc manifestBool(manifest: JsonNode, key: string, default: bool): bool =
   if manifest.hasKey(key): manifest[key].getBool() else: default
+
+proc manifestStr(manifest: JsonNode, key, default: string): string =
+  if manifest.hasKey(key): manifest[key].getStr() else: default
+
+proc loadRecoveryUniverseConfig(path: string): RecoveryUniverseConfig =
+  if path.len == 0:
+    return
+  let root = parseFile(path)
+  if root.hasKey("requiredHealthy"):
+    result.requiredHealthy = root["requiredHealthy"].getInt()
+  if not root.hasKey("lanes") or root["lanes"].kind != JArray:
+    raise newException(ValueError, "universe config requires lanes array")
+  for laneNode in root["lanes"].items:
+    if laneNode.kind != JObject:
+      raise newException(ValueError, "universe config lane must be an object")
+    var lane = RecoveryLaneConfig(
+      mirror: manifestStr(laneNode, "mirror", manifestStr(laneNode, "path", "")),
+      lane: manifestStr(laneNode, "lane", ""),
+      failureDomain: manifestStr(laneNode, "failureDomain", ""),
+      priority: manifestInt(laneNode, "priority", 0),
+      snapshotSeq: manifestBiggestInt(laneNode, "snapshotSeq", 0),
+      enabled: manifestBool(laneNode, "enabled", true)
+    )
+    if lane.mirror.len == 0:
+      raise newException(ValueError, "universe config lane requires mirror")
+    if lane.enabled:
+      result.lanes.add lane
+
+proc recoveryLanesFromArgs(mirrors: seq[string], lane, failureDomain: string,
+                           priority: int,
+                           snapshotSeq: BiggestInt): seq[RecoveryLaneConfig] =
+  for mirror in mirrors:
+    result.add RecoveryLaneConfig(
+      mirror: mirror,
+      lane: lane,
+      failureDomain: failureDomain,
+      priority: priority,
+      snapshotSeq: snapshotSeq,
+      enabled: true
+    )
+
+proc recoveryLanesFromInputs(mirrors: seq[string], configPath, lane,
+                             failureDomain: string, priority: int,
+                             snapshotSeq: BiggestInt): RecoveryUniverseConfig =
+  if configPath.len > 0:
+    result = loadRecoveryUniverseConfig(configPath)
+  result.lanes.add recoveryLanesFromArgs(mirrors, lane, failureDomain, priority,
+                                         snapshotSeq)
+
+proc recoveryMirrors(lanes: seq[RecoveryLaneConfig]): seq[string] =
+  for lane in lanes:
+    result.add lane.mirror
 
 proc recoveryManifest(encrypted: bool, mirror, backupFile, lane,
                       failureDomain: string, priority: int,
@@ -744,15 +808,15 @@ proc recoveryManifest(encrypted: bool, mirror, backupFile, lane,
 proc writeRecoveryManifest(mirror: string, manifest: JsonNode) =
   writeFile(mirror / "roche.recovery.json", pretty(manifest))
 
-proc runRecoveryBackup(dataDir: string, mirrors: seq[string],
-                       passphrase, lane, failureDomain: string,
-                       priority: int, snapshotSeq: BiggestInt) =
-  if dataDir.len == 0 or mirrors.len == 0:
+proc runRecoveryBackup(dataDir: string, lanes: seq[RecoveryLaneConfig],
+                       passphrase: string) =
+  if dataDir.len == 0 or lanes.len == 0:
     raise newException(ValueError,
-      "recovery-backup requires --data=DIR --mirror=DIR [--mirror=DIR...]")
+      "recovery-backup requires --data=DIR and --mirror=DIR or --universe-config=FILE")
   var db = open(dataDir = dataDir)
   try:
-    for mirror in mirrors:
+    for laneConfig in lanes:
+      let mirror = laneConfig.mirror
       let encrypted = passphrase.len > 0
       let stats =
         if encrypted: db.backupEncrypted(mirror, passphrase)
@@ -761,11 +825,14 @@ proc runRecoveryBackup(dataDir: string, mirrors: seq[string],
         if encrypted: verifyEncryptedBackup(mirror, passphrase)
         else: verifyBackup(mirror)
       let backupFile = mirror / (if encrypted: "roche.backup" else: "roche.log")
-      let laneName = if lane.len > 0: lane else: lastPathPart(mirror)
+      let laneName =
+        if laneConfig.lane.len > 0: laneConfig.lane else: lastPathPart(mirror)
       writeRecoveryManifest(mirror, recoveryManifest(encrypted, mirror,
                                                     backupFile, laneName,
-                                                    failureDomain, priority,
-                                                    snapshotSeq, verified))
+                                                    laneConfig.failureDomain,
+                                                    laneConfig.priority,
+                                                    laneConfig.snapshotSeq,
+                                                    verified))
       echo &"recovery-backup OK mirror={mirror} lane={laneName} encrypted={encrypted} bytes={verified.bytes} items={verified.items} source={stats.source}"
   finally:
     db.close()
@@ -966,6 +1033,7 @@ when isMainModule:
   var lane = ""
   var failureDomain = ""
   var redisEndpoint = "127.0.0.1:6379"
+  var universeConfig = ""
   var n = 10_000
   var queries = 50
   var budget = 20
@@ -975,6 +1043,7 @@ when isMainModule:
   var priority = 0
   var snapshotSeq: BiggestInt = 0
   var requiredHealthy = 1
+  var requiredHealthySet = false
   for kind, key, val in getopt():
     case kind
     of cmdArgument: cmd = key
@@ -1005,6 +1074,7 @@ when isMainModule:
       of "lane": lane = val
       of "failure-domain": failureDomain = val
       of "redis": redisEndpoint = val
+      of "universe-config": universeConfig = val
       of "n": n = parseInt(val)
       of "queries": queries = parseInt(val)
       of "budget": budget = parseInt(val)
@@ -1013,7 +1083,9 @@ when isMainModule:
       of "payload-bytes": payloadBytes = parseInt(val)
       of "priority": priority = parseInt(val)
       of "snapshot-seq": snapshotSeq = parseBiggestInt(val)
-      of "required-healthy": requiredHealthy = parseInt(val)
+      of "required-healthy":
+        requiredHealthy = parseInt(val)
+        requiredHealthySet = true
       else: discard
     else: discard
   case cmd
@@ -1042,16 +1114,30 @@ when isMainModule:
   of "backup-encrypted": runBackupEncrypted(dataDir, backupDir, backupPassphrase)
   of "restore-encrypted": runRestoreEncrypted(backupDir, dataDir,
                                               backupPassphrase, overwrite)
-  of "recovery-backup": runRecoveryBackup(dataDir, mirrors, backupPassphrase,
-                                          lane, failureDomain, priority,
-                                          snapshotSeq)
+  of "recovery-backup":
+    let recoveryConfig = recoveryLanesFromInputs(mirrors, universeConfig, lane,
+                                                failureDomain, priority,
+                                                snapshotSeq)
+    runRecoveryBackup(dataDir, recoveryConfig.lanes, backupPassphrase)
   of "recovery-verify":
     let mirror = if mirrors.len > 0: mirrors[0] else: backupDir
     runRecoveryVerify(mirror, backupPassphrase, metricsFormat)
-  of "recovery-status": runRecoveryStatus(mirrors, backupPassphrase,
-                                          requiredHealthy, metricsFormat)
-  of "recovery-restore": runRecoveryRestore(mirrors, dataDir, backupPassphrase,
-                                            overwrite)
+  of "recovery-status":
+    let recoveryConfig = recoveryLanesFromInputs(mirrors, universeConfig, lane,
+                                                failureDomain, priority,
+                                                snapshotSeq)
+    let needed =
+      if requiredHealthySet: requiredHealthy
+      elif recoveryConfig.requiredHealthy > 0: recoveryConfig.requiredHealthy
+      else: requiredHealthy
+    runRecoveryStatus(recoveryMirrors(recoveryConfig.lanes), backupPassphrase,
+                      needed, metricsFormat)
+  of "recovery-restore":
+    let recoveryConfig = recoveryLanesFromInputs(mirrors, universeConfig, lane,
+                                                failureDomain, priority,
+                                                snapshotSeq)
+    runRecoveryRestore(recoveryMirrors(recoveryConfig.lanes), dataDir,
+                       backupPassphrase, overwrite)
   of "dump": runDump(dataDir, outPath, includeVectors)
   of "import-jsonl": runImportJsonl(dataDir, inPath, defaultRing, ringField,
                                     ringPrefix, payloadField, vecField, n)
@@ -1062,10 +1148,10 @@ when isMainModule:
     echo "       rochecli restore --backup=DIR --data=DIR [--overwrite]"
     echo "       rochecli backup-encrypted --data=DIR --backup=DIR --passphrase=TEXT"
     echo "       rochecli restore-encrypted --backup=DIR --data=DIR --passphrase=TEXT [--overwrite]"
-    echo "       rochecli recovery-backup --data=DIR --mirror=DIR [--mirror=DIR...] [--passphrase=TEXT] [--lane=NAME] [--failure-domain=NAME] [--priority=N] [--snapshot-seq=N]"
+    echo "       rochecli recovery-backup --data=DIR [--mirror=DIR...] [--universe-config=FILE] [--passphrase=TEXT] [--lane=NAME] [--failure-domain=NAME] [--priority=N] [--snapshot-seq=N]"
     echo "       rochecli recovery-verify --mirror=DIR [--passphrase=TEXT] [--metrics]"
-    echo "       rochecli recovery-status --mirror=DIR [--mirror=DIR...] [--passphrase=TEXT] [--required-healthy=N] [--metrics]"
-    echo "       rochecli recovery-restore --mirror=DIR [--mirror=DIR...] --data=DIR [--passphrase=TEXT] [--overwrite]"
+    echo "       rochecli recovery-status [--mirror=DIR...] [--universe-config=FILE] [--passphrase=TEXT] [--required-healthy=N] [--metrics]"
+    echo "       rochecli recovery-restore [--mirror=DIR...] [--universe-config=FILE] --data=DIR [--passphrase=TEXT] [--overwrite]"
     echo "       rochecli dump --data=DIR [--out=FILE] [--no-vectors]"
     echo "       rochecli import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING] [--payload-field=FIELD] [--vec-field=FIELD] [--ring-prefix=PREFIX]"
     echo "       rochecli describe-galaxy --data=DIR --description=TEXT"

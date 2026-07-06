@@ -13,6 +13,47 @@ Recovery mirrors can be verified as a separate operational check:
 bin/rochecli recovery-verify --mirror=/backup/rochedb-a --metrics
 ```
 
+For multi-lane recovery, keep the lane topology in a JSON file and pass
+secrets separately:
+
+```json
+{
+  "version": 1,
+  "requiredHealthy": 2,
+  "lanes": [
+    {
+      "lane": "tokyo-a",
+      "mirror": "/backup/rochedb/tokyo-a",
+      "failureDomain": "aws-ap-northeast-1",
+      "priority": 10,
+      "snapshotSeq": 1001
+    },
+    {
+      "lane": "oregon-a",
+      "mirror": "/backup/rochedb/oregon-a",
+      "failureDomain": "aws-us-west-2",
+      "priority": 5,
+      "snapshotSeq": 1000
+    }
+  ]
+}
+```
+
+```sh
+bin/rochecli recovery-backup --data=/var/lib/rochedb \
+  --universe-config=/etc/rochedb/recovery.json
+
+bin/rochecli recovery-status --universe-config=/etc/rochedb/recovery.json \
+  --metrics
+
+bin/rochecli recovery-restore --universe-config=/etc/rochedb/recovery.json \
+  --data=/var/lib/rochedb-restored
+```
+
+Do not store passphrases in the recovery topology file. Use
+`--passphrase=TEXT`, a secret manager, or a wrapper script that injects the
+secret at runtime.
+
 This is intentionally not a Prometheus, OpenMetrics, Datadog, or CloudWatch
 exporter yet. The output is a stable key/value line that can be scraped by a
 sidecar, init script, cron job, or managed-agent integration on AWS, GCP, and
@@ -59,6 +100,21 @@ undecryptable, or inconsistent with its manifest.
 | `recoveryMirrorClusterTx` | Cluster transaction intents in the mirror | Recovery backlog / landing-state visibility |
 | `recoveryMirrorWarpJobs` | Warp jobs in the mirror | Delayed update recovery visibility |
 
+`rochecli recovery-status --metrics` verifies every configured lane
+independently, counts healthy lanes, and exits non-zero when the configured
+`requiredHealthy` threshold is not met.
+
+| Metric | Meaning | Operational use |
+|---|---|---|
+| `recoveryUniverseHealthy` | `1` when enough lanes are independently valid | Page when this is `0` or the command exits non-zero |
+| `recoveryHealthyLanes` | Number of lanes that passed manifest and artifact verification | Track available recovery redundancy |
+| `recoveryRequiredHealthyLanes` | Minimum healthy lane count required by policy | Confirm the expected durability policy |
+| `recoveryFailedLanes` | Number of lanes that failed verification | Triage damaged, stale, or unreachable mirrors |
+| `recoveryBestPriority` | Priority of the currently preferred restore candidate | Confirm restore ordering |
+| `recoveryBestSnapshotSeq` | Snapshot sequence of the preferred restore candidate | Detect stale preferred mirrors |
+| `recoveryBestBytes` | Artifact size of the preferred restore candidate | Capacity and truncation sanity check |
+| `recoveryBestItems` | Item count of the preferred restore candidate | Compare with source-side item trends |
+
 ## Suggested Alerts
 
 Start with conservative alerts:
@@ -69,6 +125,8 @@ Start with conservative alerts:
 - `authFailures` or `authzDenied` increase unexpectedly.
 - `walBytes` approaches the disk budget or grows much faster than `items`.
 - `recovery-verify --metrics` exits non-zero for any required mirror.
+- `recovery-status --metrics` exits non-zero or reports
+  `recoveryUniverseHealthy 0`.
 - `recoveryMirrorItems`, `recoveryMirrorRings`, or `recoveryMirrorBytes` drops
   unexpectedly compared with the source and previous mirrors.
 - `activeConnections` rises without returning to the normal range.
