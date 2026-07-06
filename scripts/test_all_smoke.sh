@@ -10,6 +10,7 @@ scripts/cluster_failure_smoke.sh
 scripts/cluster_authz_smoke.sh
 scripts/cluster_rbac_smoke.sh
 scripts/cluster_wire_fuzz_smoke.sh
+scripts/recovery_smoke.sh
 
 if [[ "${ROCHE_TEST_DRIVERS:-0}" == "1" ]]; then
   scripts/driver_compat.sh
