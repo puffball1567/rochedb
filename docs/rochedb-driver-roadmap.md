@@ -18,10 +18,14 @@ drivers:
 roche driver list
 roche driver info rust
 roche driver install rust
+ROCHE_DRIVER_MANIFEST=/path/to/Cargo.toml roche driver install rust
 ```
 
-It prints official package/repository metadata and setup commands. It does not
-execute remote scripts or download code.
+It prints official package/repository metadata and setup commands. For Rust it
+can target a specific `Cargo.toml` with `--manifest-path`,
+`--project-dir`, `ROCHE_DRIVER_MANIFEST`, or `ROCHE_DRIVER_PROJECT`. It does
+not execute package-manager commands unless `--execute` is passed, and
+unpublished drivers are refused even with `--execute`.
 
 ## Foundation
 
