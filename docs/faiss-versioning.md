@@ -45,7 +45,7 @@ Use `ROCHE_FAISS_VERSION`:
 ```sh
 ROCHE_FAISS_VERSION=v1.14.2 scripts/fetch_faiss.sh
 scripts/build_faiss_bridge.sh
-bin/rochecli doctor
+roche doctor
 ```
 
 ## Installing an Exact Commit
@@ -81,7 +81,7 @@ This is the right mode for:
 
    ```sh
    scripts/build_faiss_bridge.sh
-   bin/rochecli doctor
+   roche doctor
    scripts/test_core.sh
    ```
 
@@ -97,7 +97,7 @@ When RocheDB maintainers update the recommended default:
 
 1. Choose the new default FAISS tag.
 2. Test it with `scripts/fetch_faiss.sh`, `scripts/build_faiss_bridge.sh`,
-   `bin/rochecli doctor`, and the release smoke suite.
+   `roche doctor`, and the release smoke suite.
 3. Update the default `VERSION` in `scripts/fetch_faiss.sh`.
 4. Commit the updated `third_party/faiss.version`.
 5. Update this document and third-party notices if license or build
@@ -110,7 +110,7 @@ If FAISS publishes a security fix, users can immediately choose a patched tag:
 ```sh
 ROCHE_FAISS_VERSION=vX.Y.Z scripts/fetch_faiss.sh
 scripts/build_faiss_bridge.sh
-bin/rochecli doctor
+roche doctor
 ```
 
 RocheDB maintainers should then test the patched version and update the

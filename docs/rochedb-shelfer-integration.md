@@ -187,17 +187,17 @@ Current implementation:
 - The exact vector backend can search multiple selected rings in one pass.
 - Ring names are persisted in the WAL and hierarchy is restored after reopen.
 - Persistent embedded stores can compact the WAL with `compact` /
-  `rochecli compact --data=DIR`, keeping only live records and metadata.
+  `roche compact --data=DIR`, keeping only live records and metadata.
 - Persistent embedded stores can create and restore compact WAL backups with
-  `backup` / `restoreBackup` or `rochecli backup --data=DIR --backup=DIR` and
-  `rochecli restore --backup=DIR --data=DIR`.
+  `backup` / `restoreBackup` or `roche backup --data=DIR --backup=DIR` and
+  `roche restore --backup=DIR --data=DIR`.
 - Persistent embedded stores can export readable JSON Lines dumps with `dump`
-  or `rochecli dump --data=DIR --out=FILE`; this is for inspection and
+  or `roche dump --data=DIR --out=FILE`; this is for inspection and
   migration, not crash recovery.
 - External NoSQL JSON Lines exports can be imported with routing rules:
   `importJsonl(..., ringField = "tenant", ringPrefix = "tenant/",
   payloadField = "body", vecField = "embedding")` or
-  `rochecli import-jsonl --data=DIR --in=FILE --ring-field=tenant`.
+  `roche import-jsonl --data=DIR --in=FILE --ring-field=tenant`.
   The selected ring is created automatically, so imports can distribute
   existing documents into RocheDB's ring hierarchy during ingestion.
 - The builtin planner ranks expanded candidates with deterministic DB-local
@@ -299,7 +299,7 @@ untrusted RAG content until runtime policy accepts them.
 2. Add a small RocheDB RAG adapter for Shelfer as a separate module or plugin.
 3. Map RocheDB `RetrieveStats` into Shelfer RAG/resource utility records.
 4. Add a feedback loop that recommends ring budgets and source routing.
-5. Measure quality-fixed reductions with `rochecli rag-bench` and Shelfer
+5. Measure quality-fixed reductions with `roche rag-bench` and Shelfer
    context investment reports.
 
 The important KPI is not only latency. For AI workloads the target is:

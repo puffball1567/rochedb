@@ -4,13 +4,13 @@ RocheDB v0.1.0 exposes lightweight node metrics through the existing wire
 protocol and CLI:
 
 ```sh
-bin/rochecli metrics --peers=127.0.0.1:7301,127.0.0.1:7302,127.0.0.1:7303
+roche metrics --peers=127.0.0.1:7301,127.0.0.1:7302,127.0.0.1:7303
 ```
 
 Recovery mirrors can be verified as a separate operational check:
 
 ```sh
-bin/rochecli recovery-verify --mirror=/backup/rochedb-a --metrics
+roche recovery-verify --mirror=/backup/rochedb-a --metrics
 ```
 
 For multi-universe recovery, keep the recovery topology in a JSON file and pass
@@ -77,13 +77,13 @@ secrets separately:
 ```
 
 ```sh
-bin/rochecli recovery-backup --data=/var/lib/rochedb \
+roche recovery-backup --data=/var/lib/rochedb \
   --universe-config=/etc/rochedb/recovery.json
 
-bin/rochecli recovery-status --universe-config=/etc/rochedb/recovery.json \
+roche recovery-status --universe-config=/etc/rochedb/recovery.json \
   --metrics
 
-bin/rochecli recovery-restore --universe-config=/etc/rochedb/recovery.json \
+roche recovery-restore --universe-config=/etc/rochedb/recovery.json \
   --data=/var/lib/rochedb-restored
 ```
 
@@ -166,7 +166,7 @@ similar platforms.
 
 ## Recovery Mirror Metrics
 
-`rochecli recovery-verify --metrics` emits one key/value line when the recovery
+`roche recovery-verify --metrics` emits one key/value line when the recovery
 mirror is valid. It exits non-zero when the mirror is missing, corrupt,
 undecryptable, or inconsistent with its manifest.
 
@@ -182,7 +182,7 @@ undecryptable, or inconsistent with its manifest.
 | `recoveryMirrorWarpJobs` | Warp jobs in the mirror | Delayed update recovery visibility |
 | `recoveryMirrorUniverseSyncEvents` | Universe sync outbox events in the mirror | Eventual-sync backlog recovery visibility |
 
-`rochecli recovery-status --metrics` verifies every configured universe
+`roche recovery-status --metrics` verifies every configured universe
 independently, counts healthy universes, and exits non-zero when the configured
 `requiredHealthy` threshold is not met.
 

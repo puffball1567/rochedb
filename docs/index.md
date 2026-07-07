@@ -13,6 +13,7 @@ downstream AI/RAG or application logic.
 ## Start Here
 
 - [Concept](rochedb-concept.md)
+- [Installation](installation.md)
 - [Public API](public-api.md)
 - [Configuration Reference](config-reference.md)
 - [CLI Reference](cli-reference.md)

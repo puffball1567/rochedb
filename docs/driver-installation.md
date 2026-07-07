@@ -20,7 +20,7 @@ and build FAISS after cloning:
 scripts/fetch_faiss.sh
 scripts/setup_faiss_toolchain.sh   # only needed when system CMake is too old
 scripts/build_faiss_bridge.sh
-bin/rochecli doctor
+roche doctor
 ```
 
 By default, `scripts/fetch_faiss.sh` fetches the configured FAISS tag and records

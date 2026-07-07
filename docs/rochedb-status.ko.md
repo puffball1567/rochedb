@@ -17,7 +17,7 @@ Release checklist: [release-checklist.md](./release-checklist.md)
 | Vector retrieve | Done | FAISS bridge is the intended production path; exact backend remains for tests and fallback |
 | Ring / hierarchy | Done | `ring = "a/b/c"` and child-ring expansion |
 | Galaxy isolation | Done | Separate data dir / peer list / credential boundary |
-| Atlas / ring map | Done | `atlas()` and `rochecli atlas` |
+| Atlas / ring map | Done | `atlas()` and `roche atlas` |
 | Retrieval tuning profile | Done | amount / scope / depth |
 | FAISS vector backend | PoC | Dynamic bridge via `libroche_faiss.so`; default fetch tag is FAISS `v1.14.3`; exact commit pinning is optional via `ROCHE_FAISS_COMMIT` |
 | WASM browser embedded | Post-v0.1 candidate | Browser state boundary / IndexedDB / OPFS |

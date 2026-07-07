@@ -375,7 +375,7 @@ universe: remote
 
 This is useful for explaining the concept. In production, place remote
 universes on truly independent infrastructure and validate recovery with
-`rochecli recovery-status` and restore drills.
+`roche recovery-status` and restore drills.
 
 ## Pattern 9. Durable Universe Sync Demo
 
@@ -393,17 +393,17 @@ examples/universe_sync_demo.sh
 The local demo script creates separate source and target data directories,
 enqueues a universe sync event, applies it idempotently to the target,
 acknowledges it in the source outbox, and prunes the acknowledged event. It
-then repeats the same boundary through `rochecli universe-export` and
-`rochecli universe-sync`.
+then repeats the same boundary through `roche universe-export` and
+`roche universe-sync`.
 
 Remote delivery uses the same source outbox but sends events to a running
 RocheDB server:
 
 ```sh
-bin/rochecli universe-status --data=/var/lib/roche-source
-bin/rochecli universe-sync --data=/var/lib/roche-source \
+roche universe-status --data=/var/lib/roche-source
+roche universe-sync --data=/var/lib/roche-source \
   --peers=remote-roche.internal:7301 --prune-acked
-bin/rochecli universe-status --peers=remote-roche.internal:7301
+roche universe-status --peers=remote-roche.internal:7301
 ```
 
 Runnable remote smoke:

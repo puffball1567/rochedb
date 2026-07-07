@@ -101,7 +101,7 @@ measured layer: core `27.5 ns`, public API `54.7 ns`, and C ABI `77.7 ns`.
 - RocheDB setup: three `roched` nodes, persistence enabled, single client,
   persistent TCP connection, 100-byte payload, `n=10000`
 - Reproduction: start three `roched` processes with `--id=k --peers=...
-  --data=...`, then run `bin/rochecli bench --peers=... --n=10000`
+  --data=...`, then run `roche bench --peers=... --n=10000`
 - Benchmark guard: the client chooses a stable ring whose arc ownership does not
   cross a boundary during the run, using `locate(now) == locate(now + 60s)`
 
@@ -187,7 +187,7 @@ working set can still be read in a competitive latency class.
 - Date: 2026-07-04
 - Environment: same machine, AMD Ryzen 5 5600H / Linux 6.8 / Nim 2.2.10
   `-d:release`, embedded mode, persistence disabled
-- Reproduction: `bin/rochecli working-set-bench --n=10000 --rings=100
+- Reproduction: `roche working-set-bench --n=10000 --rings=100
   --queries=10 --budget=20`
 - Purpose: measure whether ring routing reduces physically scanned records per
   query, rather than full-scanning the entire corpus faster
@@ -240,7 +240,7 @@ fewer records.
 - Date: 2026-07-05
 - Environment: same machine, AMD Ryzen 5 5600H / Linux 6.8 / Nim 2.2.10
   `-d:release`, embedded mode, persistence disabled
-- Reproduction: `bin/rochecli memory-pressure-bench --n=100000 --rings=100
+- Reproduction: `roche memory-pressure-bench --n=100000 --rings=100
   --queries=50 --budget=20 --payload-bytes=512`
 - Docker case-study script: `RUN_REDIS=0 examples/memory_pressure_case_study.sh`
 - Purpose: evaluate the demand-side memory-reduction hypothesis as candidate
@@ -273,7 +273,7 @@ Token reduction is covered by the RAG-style quality-fixed benchmark.
 - Date: 2026-07-04
 - Environment: same machine, AMD Ryzen 5 5600H / Linux 6.8 / Nim 2.2.10
   `-d:release`, embedded mode, persistence disabled
-- Reproduction: `bin/rochecli rag-bench --n=8000 --queries=80 --budget=20
+- Reproduction: `roche rag-bench --n=8000 --queries=80 --budget=20
   --routed-budget=3`
 - Purpose: test whether scanned records and estimated tokens can be reduced
   while holding recall fixed

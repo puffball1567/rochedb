@@ -17,7 +17,7 @@
 | Vector retrieve | 完了 | FAISS bridge が本番想定。Exact backend は小規模、テスト、fallback 用 |
 | Ring / hierarchy | 完了 | `ring = "a/b/c"` と child-ring expansion |
 | Galaxy isolation | 完了 | data dir / peer list / credential の境界 |
-| Atlas / ring map | 完了 | `atlas()` と `rochecli atlas` |
+| Atlas / ring map | 完了 | `atlas()` と `roche atlas` |
 | Retrieval tuning profile | 完了 | amount / scope / depth |
 | FAISS vector backend | PoC | `libroche_faiss.so` dynamic bridge。default fetch tag は FAISS `v1.14.3`; exact commit pinning は `ROCHE_FAISS_COMMIT` で optional |
 | WASM browser embedded | v0.1 後の候補 | Browser state boundary / IndexedDB / OPFS |
