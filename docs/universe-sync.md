@@ -28,7 +28,7 @@ same event is idempotent and returns `SKIPPED` instead of duplicating data.
 For offline or batch movement between two data directories:
 
 ```bash
-src/rochecli universe-sync --data=/var/lib/roche/source --target=/var/lib/roche/target
+roche universe-sync --data=/var/lib/roche/source --target=/var/lib/roche/target
 ```
 
 Use `--prune-acked` only after the target state is considered durable enough for
@@ -39,7 +39,7 @@ your recovery policy.
 For a running cluster:
 
 ```bash
-src/rochecli universe-sync \
+roche universe-sync \
   --data=/var/lib/roche/source \
   --peers=127.0.0.1:17611,127.0.0.1:17612,127.0.0.1:17613 \
   --username=admin \
@@ -70,19 +70,19 @@ such as comments can store timestamped documents and sort at read time.
 Source outbox status:
 
 ```bash
-src/rochecli universe-status --data=/var/lib/roche/source
+roche universe-status --data=/var/lib/roche/source
 ```
 
 Remote apply status:
 
 ```bash
-src/rochecli universe-status --peers=127.0.0.1:17611,127.0.0.1:17612
+roche universe-status --peers=127.0.0.1:17611,127.0.0.1:17612
 ```
 
 Metrics format:
 
 ```bash
-src/rochecli universe-status --peers=127.0.0.1:17611,127.0.0.1:17612 --metrics
+roche universe-status --peers=127.0.0.1:17611,127.0.0.1:17612 --metrics
 ```
 
 Remote status reports both durable applied event keys and process-local apply

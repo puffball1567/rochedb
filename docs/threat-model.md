@@ -93,6 +93,6 @@ drivers.
   boundary.
 - Keep ring and atlas descriptions free of secrets; they are routing metadata,
   not protected payload fields.
-- Export `rochecli metrics` output to CloudWatch, Cloud Monitoring, or a similar
+- Export `roche metrics` output to CloudWatch, Cloud Monitoring, or a similar
   system and alert on transaction backlog, error growth, auth failures, WAL
   growth, connection pressure, and unexpected restarts.

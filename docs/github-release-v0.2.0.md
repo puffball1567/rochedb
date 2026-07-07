@@ -22,7 +22,7 @@ needed for broader evaluation.
   readonly mirrors.
 - Docker Compose demos for a single galaxy, a three-node galaxy, and a
   local/remote universe-shaped topology.
-- `bin/roche` CLI CRUD workflows, ring list/count, atlas, and a minimal
+- `roche` CLI CRUD workflows, ring list/count, atlas, and a minimal
   interactive shell.
 - GitHub Pages documentation structure with public API, config, CLI, topology,
   universe sync, protocol compatibility, cloud metrics, and threat model pages.

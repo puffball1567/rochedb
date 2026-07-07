@@ -41,7 +41,7 @@ The pre-release verification pass covered:
 - `scripts/driver_compat.sh`
 - Docker-backed PHP / Swift / Kotlin driver smoke
 - `examples/ai_rag_case_study.sh`
-- `rochecli doctor` for the FAISS bridge
+- `roche doctor` for the FAISS bridge
 
 ## Known Gaps
 

@@ -47,6 +47,7 @@ corpus size toward semantic working-set size.
 ## Documents
 
 - Documentation site entry point: [docs/index.md](docs/index.md)
+- Installation: [docs/installation.md](docs/installation.md)
 - Public API reference: [docs/public-api.md](docs/public-api.md)
 - Configuration reference: [docs/config-reference.md](docs/config-reference.md)
 - CLI reference: [docs/cli-reference.md](docs/cli-reference.md)
@@ -99,25 +100,54 @@ nimble install rochedb
 roche --help
 ```
 
+When working from a source checkout before registry publication, install the
+local package onto your PATH:
+
+```sh
+nimble install -y
+roche --help
+```
+
+Nimble installs binaries into `~/.nimble/bin` by default. If `roche` is not
+found, add it to your shell PATH:
+
+```sh
+export PATH="$HOME/.nimble/bin:$PATH"
+```
+
+For server-style installs, build locally and install the binaries into
+`/usr/local/bin`, the usual source-install location for database tools:
+
+```sh
+nim c -d:release --nimcache:/tmp/nimcache_roche -o:bin/roche src/rochecli.nim
+nim c -d:release --nimcache:/tmp/nimcache_roched -o:bin/roched src/roched.nim
+sudo install -m 0755 bin/roche /usr/local/bin/roche
+sudo install -m 0755 bin/roched /usr/local/bin/roched
+```
+
+See [docs/installation.md](docs/installation.md) for PATH and system install
+details.
+
 Use RocheDB from a Nim program in this repository by importing the public module:
 
 ```nim
 import rochedb
 ```
 
-For command-line tools and demos, build the binaries:
+For command-line tools and demos that need repo-local binaries, build them under
+`bin/`:
 
 ```sh
 nim c -d:release --nimcache:/tmp/nimcache_roche -o:bin/roche src/rochecli.nim
-nim c -d:release --nimcache:/tmp/nimcache_roched -o:src/roched src/roched.nim
+nim c -d:release --nimcache:/tmp/nimcache_roched -o:bin/roched src/roched.nim
 ```
 
 Basic CLI document workflow:
 
 ```sh
-bin/roche put --data=data --ring=docs/japan --payload='{"title":"Hello"}'
-bin/roche list-ring --data=data --ring=docs/japan
-bin/roche get --data=data --id=RAW_ID
+roche put --data=data --ring=docs/japan --payload='{"title":"Hello"}'
+roche list-ring --data=data --ring=docs/japan
+roche get --data=data --id=RAW_ID
 ```
 
 Optional FAISS vector backend:
@@ -126,7 +156,7 @@ Optional FAISS vector backend:
 scripts/fetch_faiss.sh
 scripts/setup_faiss_toolchain.sh   # only needed when system CMake is too old
 scripts/build_faiss_bridge.sh
-bin/roche doctor
+roche doctor
 ```
 
 The built-in exact vector backend works without FAISS. FAISS is recommended for
@@ -357,8 +387,8 @@ bin/rochebench
 
 ```sh
 nim c -d:release -o:bin/roche src/rochecli.nim
-bin/roche working-set-bench --n=100000 --rings=100 --queries=50 --budget=20
-bin/roche memory-pressure-bench --n=100000 --rings=100 --queries=50 --budget=20 --payload-bytes=512
+roche working-set-bench --n=100000 --rings=100 --queries=50 --budget=20
+roche memory-pressure-bench --n=100000 --rings=100 --queries=50 --budget=20 --payload-bytes=512
 RUN_REDIS=0 examples/memory_pressure_case_study.sh
 examples/ai_rag_case_study.sh
 ```
@@ -368,7 +398,7 @@ examples/ai_rag_case_study.sh
 Use an existing local Redis server:
 
 ```sh
-bin/roche redis-bench --n=100000 --payload-bytes=100 --redis=127.0.0.1:6379
+roche redis-bench --n=100000 --payload-bytes=100 --redis=127.0.0.1:6379
 ```
 
 Or use the Docker-based smoke comparison:
@@ -409,8 +439,8 @@ bin/roched --id=0 --peers=127.0.0.1:7301 \
 Encrypted backup / restore:
 
 ```sh
-bin/roche backup-encrypted --data=data --backup=backup.enc --passphrase=change-me
-bin/roche restore-encrypted --backup=backup.enc --data=restored --passphrase=change-me
+roche backup-encrypted --data=data --backup=backup.enc --passphrase=change-me
+roche restore-encrypted --backup=backup.enc --data=restored --passphrase=change-me
 ```
 
 ### Driver Checks
@@ -452,7 +482,7 @@ bin/demo
 scripts/fetch_faiss.sh
 scripts/setup_faiss_toolchain.sh
 scripts/build_faiss_bridge.sh
-bin/roche doctor
+roche doctor
 examples/vector_backend_bench.sh
 ```
 

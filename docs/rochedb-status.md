@@ -25,10 +25,10 @@ Translations:
 | Vector retrieve | Done | FAISS bridge is the intended production vector path. Exact backend remains for small datasets, tests, and fallback |
 | Ring / hierarchy | Done | `ring = "a/b/c"` and child-ring expansion |
 | Galaxy isolation | Done | Separate data dir / peer list / credential boundary |
-| Atlas / ring map | Done | `atlas()` and `rochecli atlas` |
+| Atlas / ring map | Done | `atlas()` and `roche atlas` |
 | Galaxy/ring description | Done | Atlas map annotations, not payload text |
 | Retrieval tuning profile | Done | amount / scope / depth |
-| FAISS vector backend | PoC | Dynamic bridge via `libroche_faiss.so`; default fetch tag is FAISS `v1.14.3`, exact commit pinning is optional via `ROCHE_FAISS_COMMIT`; `rochecli doctor`, bridge build, `tests/tapi.nim`, and `examples/vector_backend_bench.sh` are verified locally |
+| FAISS vector backend | PoC | Dynamic bridge via `libroche_faiss.so`; default fetch tag is FAISS `v1.14.3`, exact commit pinning is optional via `ROCHE_FAISS_COMMIT`; `roche doctor`, bridge build, `tests/tapi.nim`, and `examples/vector_backend_bench.sh` are verified locally |
 | FAISS GPU backend | Not planned for core | RocheDB is designed to reduce the search set before ANN/LLM work. Needing GPU FAISS is treated as a placement or retrieval-profile issue first |
 | Retrieval planner | PoC | Deterministic heuristic planner. Stronger planner claims require larger real-corpus benchmarks and further tuning |
 | WASM browser embedded | Post-v0.1 candidate | Browser state boundary / IndexedDB / OPFS |
@@ -45,7 +45,7 @@ Translations:
 | Compact | Done | Rebuilds WAL from live records |
 | Backup / restore | Done | Backup as compacted WAL and restore into another data dir |
 | Dump / import-jsonl | Done | NoSQL JSONL import rules |
-| Universe sync outbox | PoC | WAL-backed eventual sync event queue with idempotent apply, ack/prune, `putSynced`, latest-only pending coalescing, delayed timestamp apply windows, `rochecli universe-export` / `universe-apply` JSONL handoff, one-shot `rochecli universe-sync` between local data dirs, remote `--peers` delivery via `UAPPLY`, and `universe-status` operational counters. It is a durable scheduler boundary, not immediate global consistency |
+| Universe sync outbox | PoC | WAL-backed eventual sync event queue with idempotent apply, ack/prune, `putSynced`, latest-only pending coalescing, delayed timestamp apply windows, `roche universe-export` / `universe-apply` JSONL handoff, one-shot `roche universe-sync` between local data dirs, remote `--peers` delivery via `UAPPLY`, and `universe-status` operational counters. It is a durable scheduler boundary, not immediate global consistency |
 | Crash recovery tests | Partial | Torn WAL tail repair, compact interruption, partial commit cases |
 | Strong durability / fsync knob | Done | `open(dataDir=..., durability=durStrong)` and `roched --durability=strong`; store/API tests cover reopen, transaction, compact |
 | Core test suite | Done | `scripts/test_core.sh` runs orbital core, selection, field, store, and public API tests |
@@ -122,7 +122,7 @@ Translations:
 | Galaxy isolation | Done | Limits blast radius by galaxy |
 | TLS | Planned | Required for public-network deployments |
 | Ring/galaxy authz | PoC | Ring prefix authorization is implemented for named-ring wire operations; richer role policy is pending |
-| Backup encryption | Done | `backupEncrypted` / `restoreEncryptedBackup` and `rochecli backup-encrypted` / `restore-encrypted` use nimsodium secretbox |
+| Backup encryption | Done | `backupEncrypted` / `restoreEncryptedBackup` and `roche backup-encrypted` / `restore-encrypted` use nimsodium secretbox |
 | General audit log | Planned | Full append-only access/change audit for enterprise / regulated workloads. Warp jobs already persist attempts / retryAt / ack / dead-letter state, but that is job state, not a database-wide audit log |
 | Threat model document | Draft | `docs/threat-model.md` covers assets, trust boundaries, current controls, and known gaps |
 

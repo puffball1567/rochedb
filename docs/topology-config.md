@@ -30,13 +30,13 @@ The topology file is JSON.
 Run:
 
 ```sh
-bin/rochecli recovery-backup --data=/var/lib/rochedb \
+roche recovery-backup --data=/var/lib/rochedb \
   --universe-config=/etc/rochedb/topology.json
 
-bin/rochecli recovery-status --universe-config=/etc/rochedb/topology.json \
+roche recovery-status --universe-config=/etc/rochedb/topology.json \
   --metrics
 
-bin/rochecli recovery-restore --universe-config=/etc/rochedb/topology.json \
+roche recovery-restore --universe-config=/etc/rochedb/topology.json \
   --data=/var/lib/rochedb-restored
 ```
 
@@ -212,7 +212,7 @@ excluded as write targets during `recovery-backup`.
 The recovery CLI can create entries without a topology file:
 
 ```sh
-bin/rochecli recovery-backup --data=/var/lib/rochedb \
+roche recovery-backup --data=/var/lib/rochedb \
   --mirror=/backup/app-main \
   --universe=local-a \
   --galaxy=app-main \
