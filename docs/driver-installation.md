@@ -8,6 +8,17 @@ RocheDB drivers currently use two paths:
 - Native TCP wire drivers for cluster-oriented use.
 - C ABI wrappers for embedded/local use and language binding stability.
 
+The CLI provides a small driver discovery surface:
+
+```sh
+roche driver list
+roche driver info rust
+roche driver install rust
+```
+
+`driver install` prints the official package/repository path and setup command.
+It does not execute remote scripts or download code.
+
 The Nim package is available through Nimble. Non-Nim drivers are still
 repository-local foundations, so the driver examples below assume a local clone
 of this repository.
@@ -123,19 +134,13 @@ await db.close();
 
 ## Rust
 
-The Rust driver is a C ABI wrapper.
+The Rust driver is being split out into a separate driver package and
+repository. It is the first external driver publication target in the driver
+roadmap. The Cargo package link and installation command will be added here
+when it is published.
 
-```sh
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
-cargo test --manifest-path drivers/rust/Cargo.toml
-```
-
-Use a local path dependency:
-
-```toml
-[dependencies]
-rochedb = { path = "../drivers/rust" }
-```
+Until then, Rust integrations can bind to the stable C ABI exposed through
+`include/rochedb.h` and `lib/librochedb.so`.
 
 ## Go
 

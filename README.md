@@ -241,13 +241,15 @@ priority for language packages is tracked in
 | Python | `drivers/python` | Native TCP wire driver | unittest wire smoke |
 | Node.js / TypeScript | `drivers/node` | Native TCP wire driver, ESM | `node --test` |
 | Bun | `drivers/node` | Node-compatible TCP wire driver | `bun test` |
-| Rust | `drivers/rust` | C ABI wrapper | `cargo test` |
 | Go | `drivers/go` | C ABI wrapper | `go test` |
 | PHP | `drivers/php` | FFI / C ABI wrapper | Docker smoke |
 | Swift | `drivers/swift` | SwiftPM C ABI wrapper | Linux Docker smoke |
 | C# | `drivers/csharp` | Generic .NET C ABI wrapper | contract smoke |
 | C++ | `drivers/cpp` | C++17 C ABI wrapper | contract smoke |
 | Kotlin/JVM | `drivers/kotlin` | JNI / C ABI wrapper | Docker smoke |
+
+Rust is the first external driver publication target and is being split out of
+the core repository. Its package link will be added when published.
 
 Detailed setup notes are in
 [docs/driver-installation.md](docs/driver-installation.md). Nimble package

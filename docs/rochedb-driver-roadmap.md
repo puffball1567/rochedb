@@ -11,6 +11,18 @@ RocheDB drivers are developed on two tracks.
    - Foundation for embedded mode, high-speed local use, and language bindings.
    - Based on `include/rochedb.h` and `src/rochedb_capi.nim`.
 
+The `roche driver` command is the stable discovery surface for official
+drivers:
+
+```sh
+roche driver list
+roche driver info rust
+roche driver install rust
+```
+
+It prints official package/repository metadata and setup commands. It does not
+execute remote scripts or download code.
+
 ## Foundation
 
 The C ABI / FFI layer is the shared foundation for embedded mode, high-speed
@@ -23,7 +35,7 @@ and atlas access.
 
 | Priority | Target | Reason | Status |
 |---:|---|---|---|
-| 1 | Rust driver | High-performance infrastructure, gateway, and systems integration path | Minimal C ABI wrapper done. Native wire comes later |
+| 1 | Rust driver | High-performance infrastructure, gateway, and systems integration path | Split out of core repo; external package in preparation |
 | 2 | Node.js / TypeScript / Bun native wire driver | Web API, SaaS, Studio, GUI, and local AI client entry point | Minimal done; Bun smoke added |
 | 3 | PHP driver | Laravel and existing business web systems | Minimal FFI / C ABI wrapper done. Docker smoke added |
 | 4 | C++ driver | Generic native and engine integration base. Unreal plugin stays separate | Minimal C ABI wrapper done |

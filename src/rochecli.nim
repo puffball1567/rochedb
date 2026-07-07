@@ -9,6 +9,7 @@
 ##   roche health --peers=host:port,...
 ##   roche metrics --peers=host:port,...
 ##   roche atlas [--data=DIR | --peers=host:port,...]
+##   roche driver list|info|install [LANG]
 ##   roche doctor
 
 import std/[algorithm, os, strutils, strformat, json, times, monotimes, parseopt,
@@ -20,6 +21,109 @@ import roche/wire
 const
   RagTopics = 8
   RagGoldSlots = 128
+
+type
+  DriverInfo = object
+    name: string
+    status: string
+    mode: string
+    repository: string
+    packageName: string
+    installHint: string
+    notes: string
+
+proc driverRegistry(): seq[DriverInfo] =
+  @[
+    DriverInfo(
+      name: "rust",
+      status: "externalizing",
+      mode: "C ABI wrapper first; native wire later",
+      repository: "https://github.com/rochedb/rochedb-rust",
+      packageName: "rochedb",
+      installHint: "cargo add rochedb",
+      notes: "First external driver publication target. Link is provisional until the package is published."
+    ),
+    DriverInfo(
+      name: "node",
+      status: "repository-local",
+      mode: "native TCP wire driver, ESM",
+      repository: "drivers/node",
+      packageName: "@rochedb/rochedb",
+      installHint: "npm install @rochedb/rochedb",
+      notes: "Repository-local foundation. Package publication is future work."
+    ),
+    DriverInfo(
+      name: "php",
+      status: "repository-local",
+      mode: "FFI / C ABI wrapper",
+      repository: "drivers/php",
+      packageName: "rochedb/rochedb",
+      installHint: "composer require rochedb/rochedb",
+      notes: "Repository-local foundation. Package publication is future work."
+    ),
+    DriverInfo(
+      name: "python",
+      status: "repository-local",
+      mode: "native TCP wire driver",
+      repository: "drivers/python",
+      packageName: "rochedb",
+      installHint: "pip install rochedb",
+      notes: "Repository-local foundation. Package publication is future work."
+    ),
+    DriverInfo(
+      name: "go",
+      status: "repository-local",
+      mode: "C ABI wrapper",
+      repository: "drivers/go",
+      packageName: "github.com/rochedb/rochedb-go",
+      installHint: "go get github.com/rochedb/rochedb-go",
+      notes: "Repository-local foundation. Package publication is future work."
+    )
+  ]
+
+proc findDriver(name: string): DriverInfo =
+  for driver in driverRegistry():
+    if driver.name == name.toLowerAscii():
+      return driver
+  raise newException(ValueError, "unknown driver: " & name)
+
+proc runDriver(args: seq[string]) =
+  if args.len == 0 or args[0] in ["help", "--help", "-h"]:
+    echo "Usage:"
+    echo "  roche driver list"
+    echo "  roche driver info LANG"
+    echo "  roche driver install LANG"
+    echo ""
+    echo "The install command prints the official package/repository path and setup"
+    echo "commands. It does not execute remote scripts or download code."
+    return
+
+  case args[0]
+  of "list":
+    echo "language\tstatus\tmode"
+    for driver in driverRegistry():
+      echo driver.name, "\t", driver.status, "\t", driver.mode
+  of "info", "install":
+    if args.len < 2:
+      raise newException(ValueError, "requires LANG")
+    let driver = findDriver(args[1])
+    echo "name: ", driver.name
+    echo "status: ", driver.status
+    echo "mode: ", driver.mode
+    echo "repository: ", driver.repository
+    echo "package: ", driver.packageName
+    echo "install: ", driver.installHint
+    echo "notes: ", driver.notes
+    if args[0] == "install":
+      echo ""
+      echo "Next steps:"
+      if driver.status == "repository-local":
+        echo "  Use the repository-local driver path until package publication."
+      else:
+        echo "  Use the package command after the driver package is published."
+      echo "  Run the driver smoke test described in docs/driver-installation.md."
+  else:
+    raise newException(ValueError, "unknown driver command: " & args[0])
 
 proc ringVec(ring, ringCount: int): seq[float32] =
   result = newSeq[float32](ringCount)
@@ -1577,6 +1681,7 @@ proc printHelp() =
   echo "  roche shell [--data=DIR | --peers=host:port,...]"
   echo "  roche atlas [--data=DIR | --peers=host:port,...]"
   echo "  roche health|metrics|rings --peers=host:port,..."
+  echo "  roche driver list|info|install [LANG]"
   echo "  roche compact --data=DIR"
   echo "  roche backup --data=DIR --backup=DIR"
   echo "  roche restore --backup=DIR --data=DIR [--overwrite]"
@@ -1642,13 +1747,16 @@ proc main() =
   var requiredHealthySet = false
   var help = false
   var limit = 100
+  var positionals: seq[string] = @[]
   for kind, key, val in getopt():
     case kind
     of cmdArgument:
       if key == "help":
         help = true
       else:
-        cmd = key
+        if cmd.len == 0:
+          cmd = key
+        positionals.add key
     of cmdLongOption:
       case key
       of "help": help = true
@@ -1741,6 +1849,8 @@ proc main() =
   of "memory-pressure-bench": runMemoryPressureBench(n, ringCount, queries,
                                                      budget, payloadBytes)
   of "doctor": runDoctor()
+  of "driver":
+    runDriver(positionals[1 .. ^1])
   of "compact": runCompact(dataDir)
   of "backup": runBackup(dataDir, backupDir)
   of "restore": runRestore(backupDir, dataDir, overwrite)

@@ -60,10 +60,12 @@
 | C ABI | 完了 | ABI version / last error / put/get/retrieve/batch/atlas |
 | Python | 完了 | Native wire minimal |
 | Node.js / TypeScript / Bun | 完了 | ESM native wire minimal |
-| Rust / Go | 完了 | C ABI wrapper minimal |
+| Rust | 進行中 | core repo から分離中。外部 driver package を優先予定 |
+| Go | 完了 | C ABI wrapper minimal |
 | PHP / Swift / Kotlin | 完了 | Docker smoke あり |
 | C# / C++ | 完了 | OSS generic wrappers。Unity / Unreal 公式 asset は別候補 |
 | React Native / WASM | v0.1 後の候補 | Browser / local state boundary |
+| Driver discovery CLI | 完了 | `roche driver list/info/install` が公式 driver metadata と setup command を表示。remote script は実行しない |
 | Nimble package publishing | 完了 | `nimble install rochedb` が利用可能。非Nimレジストリは今後の作業 |
 
 ## Benchmarks / Demos
