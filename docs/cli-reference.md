@@ -81,18 +81,28 @@ packages. External drivers can live outside the core repository while the
 roche driver list
 roche driver info rust
 roche driver install rust
+roche driver install rust --manifest-path=/path/to/Cargo.toml
 ```
 
-`driver install` currently prints the official repository/package path and setup
-command. It does not execute remote scripts or download code. This keeps the
-bootstrap path safe while preserving a single command surface for Rust, Node,
-PHP, Python, Go, and later drivers.
+`driver install` currently prints the official repository/package path and
+package-manager command. It does not execute remote scripts or download code.
+For Rust it resolves the target `Cargo.toml` in this order:
+
+1. `--manifest-path=FILE`
+2. `ROCHE_DRIVER_MANIFEST`
+3. `--project-dir=DIR`
+4. `ROCHE_DRIVER_PROJECT`
+5. `Cargo.toml` in the current directory
+
+Pass `--execute` to run the package-manager command after the driver package is
+published. Until then, RocheDB refuses to execute `cargo add` for unpublished
+drivers and prints the command instead.
 
 | Command | Purpose |
 |---|---|
 | `driver list` | Show known official driver targets and their publication status. |
 | `driver info LANG` | Show repository, package name, mode, and notes for one driver. |
-| `driver install LANG` | Print the recommended setup command and follow-up smoke-test path. |
+| `driver install LANG` | Print the recommended setup command and target project path. |
 
 ## Document Commands
 

@@ -9,11 +9,11 @@
 ##   roche health --peers=host:port,...
 ##   roche metrics --peers=host:port,...
 ##   roche atlas [--data=DIR | --peers=host:port,...]
-##   roche driver list|info|install [LANG]
+##   roche driver list|info|install [LANG] [--manifest-path=FILE] [--execute]
 ##   roche doctor
 
-import std/[algorithm, os, strutils, strformat, json, times, monotimes, parseopt,
-            net, dynlib]
+import std/[algorithm, os, osproc, strutils, strformat, json, times, monotimes,
+            parseopt, net, dynlib]
 import nimsodium/hash
 import rochedb
 import roche/wire
@@ -87,15 +87,80 @@ proc findDriver(name: string): DriverInfo =
       return driver
   raise newException(ValueError, "unknown driver: " & name)
 
-proc runDriver(args: seq[string]) =
+proc shellQuote(s: string): string =
+  if s.len == 0:
+    return "''"
+  for ch in s:
+    if not (ch.isAlphaNumeric or ch in {'_', '-', '.', '/', ':', '@'}):
+      return "'" & s.replace("'", "'\\''") & "'"
+  s
+
+proc cargoManifestPath(manifestPath, projectDir: string): string =
+  if manifestPath.len > 0:
+    return manifestPath
+  let envManifest = getEnv("ROCHE_DRIVER_MANIFEST")
+  if envManifest.len > 0:
+    return envManifest
+  var dir = projectDir
+  if dir.len == 0:
+    dir = getEnv("ROCHE_DRIVER_PROJECT")
+  if dir.len > 0:
+    return dir / "Cargo.toml"
+  if fileExists("Cargo.toml"):
+    return "Cargo.toml"
+  ""
+
+proc printCargoAdd(driver: DriverInfo, manifestPath, projectDir: string,
+                   executeInstall: bool) =
+  let manifest = cargoManifestPath(manifestPath, projectDir)
+  var cargoArgs = @["add", driver.packageName]
+  if manifest.len > 0:
+    cargoArgs.add "--manifest-path"
+    cargoArgs.add manifest
+
+  var printableArgs: seq[string] = @[]
+  for arg in cargoArgs:
+    printableArgs.add shellQuote(arg)
+  echo "command: cargo ", printableArgs.join(" ")
+  if manifest.len == 0:
+    echo "target: no Cargo.toml found"
+    echo "hint: run from a Rust project, pass --manifest-path=FILE, or set ROCHE_DRIVER_MANIFEST"
+  else:
+    echo "target: ", manifest
+
+  if not executeInstall:
+    echo "execute: false"
+    echo "hint: add --execute to run cargo"
+    return
+
+  if driver.status != "published":
+    raise newException(ValueError,
+      "driver package is not published yet; refusing to execute cargo")
+  if manifest.len == 0:
+    raise newException(ValueError, "cannot execute without Cargo.toml")
+  if not fileExists(manifest):
+    raise newException(ValueError, "Cargo.toml not found: " & manifest)
+  if findExe("cargo").len == 0:
+    raise newException(ValueError, "cargo is not installed or not on PATH")
+
+  let p = startProcess("cargo", args = cargoArgs, options = {poUsePath})
+  let code = p.waitForExit()
+  p.close()
+  if code != 0:
+    raise newException(OSError, "cargo failed with exit code " & $code)
+
+proc runDriver(args: seq[string], manifestPath = "", projectDir = "",
+               executeInstall = false) =
   if args.len == 0 or args[0] in ["help", "--help", "-h"]:
     echo "Usage:"
     echo "  roche driver list"
     echo "  roche driver info LANG"
-    echo "  roche driver install LANG"
+    echo "  roche driver install LANG [--manifest-path=FILE] [--project-dir=DIR] [--execute]"
     echo ""
-    echo "The install command prints the official package/repository path and setup"
-    echo "commands. It does not execute remote scripts or download code."
+    echo "The install command prints official package/repository metadata and the"
+    echo "package-manager command. For Rust, it can target Cargo.toml via"
+    echo "--manifest-path, --project-dir, ROCHE_DRIVER_MANIFEST, or ROCHE_DRIVER_PROJECT."
+    echo "It does not execute package-manager commands unless --execute is passed."
     return
 
   case args[0]
@@ -116,12 +181,15 @@ proc runDriver(args: seq[string]) =
     echo "notes: ", driver.notes
     if args[0] == "install":
       echo ""
-      echo "Next steps:"
-      if driver.status == "repository-local":
-        echo "  Use the repository-local driver path until package publication."
+      if driver.name == "rust":
+        printCargoAdd(driver, manifestPath, projectDir, executeInstall)
       else:
-        echo "  Use the package command after the driver package is published."
-      echo "  Run the driver smoke test described in docs/driver-installation.md."
+        echo "Next steps:"
+        if driver.status == "repository-local":
+          echo "  Use the repository-local driver path until package publication."
+        else:
+          echo "  Use the package command after the driver package is published."
+        echo "  Run the driver smoke test described in docs/driver-installation.md."
   else:
     raise newException(ValueError, "unknown driver command: " & args[0])
 
@@ -1681,7 +1749,7 @@ proc printHelp() =
   echo "  roche shell [--data=DIR | --peers=host:port,...]"
   echo "  roche atlas [--data=DIR | --peers=host:port,...]"
   echo "  roche health|metrics|rings --peers=host:port,..."
-  echo "  roche driver list|info|install [LANG]"
+  echo "  roche driver list|info|install [LANG] [--manifest-path=FILE] [--execute]"
   echo "  roche compact --data=DIR"
   echo "  roche backup --data=DIR --backup=DIR"
   echo "  roche restore --backup=DIR --data=DIR [--overwrite]"
@@ -1735,6 +1803,8 @@ proc main() =
   var authRef = ""
   var redisEndpoint = "127.0.0.1:6379"
   var universeConfig = ""
+  var driverManifestPath = ""
+  var driverProjectDir = ""
   var n = 10_000
   var queries = 50
   var budget = 20
@@ -1746,12 +1816,13 @@ proc main() =
   var requiredHealthy = 1
   var requiredHealthySet = false
   var help = false
+  var executeDriverInstall = false
   var limit = 100
   var positionals: seq[string] = @[]
   for kind, key, val in getopt():
     case kind
     of cmdArgument:
-      if key == "help":
+      if key == "help" and cmd.len == 0:
         help = true
       else:
         if cmd.len == 0:
@@ -1781,6 +1852,7 @@ proc main() =
       of "overwrite": overwrite = true
       of "prune-acked": pruneAcked = true
       of "readonly": readonly = true
+      of "execute": executeDriverInstall = true
       of "metrics": metricsFormat = true
       of "no-vectors": includeVectors = false
       of "user": username = val
@@ -1793,6 +1865,8 @@ proc main() =
       of "location": universeLocation = val
       of "failure-domain": failureDomain = val
       of "auth-ref": authRef = val
+      of "manifest-path": driverManifestPath = val
+      of "project-dir": driverProjectDir = val
       of "redis": redisEndpoint = val
       of "universe-config": universeConfig = val
       of "n": n = parseInt(val)
@@ -1850,7 +1924,9 @@ proc main() =
                                                      budget, payloadBytes)
   of "doctor": runDoctor()
   of "driver":
-    runDriver(positionals[1 .. ^1])
+    let driverArgs = if positionals.len > 1: positionals[1 .. ^1] else: @[]
+    runDriver(driverArgs, driverManifestPath, driverProjectDir,
+              executeDriverInstall)
   of "compact": runCompact(dataDir)
   of "backup": runBackup(dataDir, backupDir)
   of "restore": runRestore(backupDir, dataDir, overwrite)

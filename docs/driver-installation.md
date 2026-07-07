@@ -14,10 +14,13 @@ The CLI provides a small driver discovery surface:
 roche driver list
 roche driver info rust
 roche driver install rust
+roche driver install rust --manifest-path=/path/to/Cargo.toml
 ```
 
 `driver install` prints the official package/repository path and setup command.
-It does not execute remote scripts or download code.
+For Rust, target selection is shell-friendly: use `--manifest-path=FILE`,
+`--project-dir=DIR`, `ROCHE_DRIVER_MANIFEST`, or `ROCHE_DRIVER_PROJECT`.
+It does not execute package-manager commands unless `--execute` is passed.
 
 The Nim package is available through Nimble. Non-Nim drivers are still
 repository-local foundations, so the driver examples below assume a local clone
