@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.3
+
+### Fixed
+
+- Removed the `roched` selector `getData` path that triggered Nim's
+  `ProveInit` warning during server builds.
+- Bumped package metadata to `0.2.3`.
+
 ## v0.2.2
 
 ### Changed

@@ -1030,7 +1030,9 @@ proc main() =
         else: " auth=off")
 
   var sel = newSelector[int]()
-  sel.registerHandle(listener.getFd, {Event.Read}, -1)
+  let listenerFd = listener.getFd
+  let listenerFdInt = listenerFd.int
+  sel.registerHandle(listenerFd, {Event.Read}, 0)
   var conns = initTable[int, Socket]()
 
   var lastTick = getMonoTime()
@@ -1040,7 +1042,7 @@ proc main() =
       if ev.errorCode.int != 0:
         continue
       let fd = ev.fd
-      if sel.getData(fd) == -1:
+      if fd == listenerFdInt:
         var client: Socket
         listener.accept(client)
         client.setSockOpt(OptNoDelay, true, level = IPPROTO_TCP.cint)
