@@ -917,7 +917,35 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     sock.sendFrame("ERR unknown")
   true
 
+proc printUsage() =
+  echo "RocheDB node server"
+  echo ""
+  echo "Usage:"
+  echo "  roched --id=N --peers=host:port[,host:port...] [options]"
+  echo ""
+  echo "Options:"
+  echo "  --data=DIR                    Enable WAL-backed persistence"
+  echo "  --slow-tick=SECONDS           Background maintenance interval"
+  echo "  --durability=buffered|strong  Buffered WAL or fsync-on-write durability"
+  echo "  --user=NAME                   Username for cluster auth"
+  echo "  --password=TEXT               Password for cluster auth"
+  echo "  --auth-token=TEXT             Token-style auth shortcut"
+  echo "  --secret-key=TEXT             Additional secret-key gate"
+  echo "  --galaxy=NAME                 Expected galaxy name"
+  echo "  --allow-ring=PREFIX[,PREFIX]  Ring-prefix authorization"
+  echo "  --role=user:password:role[:prefixes]"
+  echo "                                Role entry: reader, writer, or admin"
+  echo "  -h, --help                    Show this help"
+  echo ""
+  echo "Example:"
+  echo "  roched --id=0 --peers=127.0.0.1:7301 --data=/var/lib/roche"
+
 proc main() =
+  for arg in commandLineParams():
+    if arg == "--help" or arg == "-h":
+      printUsage()
+      return
+
   var id = -1
   var peersStr = ""
   var dataDir = ""

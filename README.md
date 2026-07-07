@@ -76,8 +76,8 @@ corpus size toward semantic working-set size.
 
 ## Installation
 
-RocheDB v0.2.x is a technical preview. Registry packages are not published yet,
-so the current installation path is a local clone.
+RocheDB v0.2.x is a technical preview. The Nim package is available through
+Nimble, while non-Nim language packages are still repository-local foundations.
 
 Prerequisites:
 
@@ -85,27 +85,21 @@ Prerequisites:
 - `git`
 - `gcc` or another C compiler supported by Nim
 
-Clone and verify the embedded database:
-
-```sh
-git clone https://github.com/puffball1567/rochedb.git
-cd rochedb
-scripts/test_core.sh
-```
-
-After Nimble registry publication, the intended install path is:
+Install the CLI and Nim library:
 
 ```sh
 nimble install rochedb
 roche --help
 ```
 
-When working from a source checkout before registry publication, install the
-local package onto your PATH:
+Clone the repository when you want to run the full source test suite, examples,
+or driver smoke tests:
 
 ```sh
+git clone https://github.com/puffball1567/rochedb.git
+cd rochedb
+scripts/test_core.sh
 nimble install -y
-roche --help
 ```
 
 Nimble installs binaries into `~/.nimble/bin` by default. If `roche` is not
@@ -252,9 +246,9 @@ rules.
 | Kotlin/JVM | `drivers/kotlin` | JNI / C ABI wrapper | Docker smoke |
 
 Detailed setup notes are in
-[docs/driver-installation.md](docs/driver-installation.md). Package publishing
-to npm, PyPI, Cargo, Composer, NuGet, Maven, and other registries is a post-v0.1
-roadmap item and is not part of the current technical-preview claim.
+[docs/driver-installation.md](docs/driver-installation.md). Nimble package
+registration is complete. Package publishing to npm, PyPI, Cargo, Composer,
+NuGet, Maven, and other non-Nim registries remains a post-v0.2 roadmap item.
 
 ## Cluster Mode
 

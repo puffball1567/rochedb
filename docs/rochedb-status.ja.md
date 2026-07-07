@@ -64,7 +64,7 @@
 | PHP / Swift / Kotlin | 完了 | Docker smoke あり |
 | C# / C++ | 完了 | OSS generic wrappers。Unity / Unreal 公式 asset は別候補 |
 | React Native / WASM | v0.1 後の候補 | Browser / local state boundary |
-| Package publishing | v0.1 後の候補 | npm / PyPI / Cargo / Composer / NuGet / Maven |
+| Nimble package publishing | 完了 | `nimble install rochedb` が利用可能。非Nimレジストリは今後の作業 |
 
 ## Benchmarks / Demos
 

@@ -12,8 +12,7 @@ nimble install rochedb
 roche --help
 ```
 
-When working from a source checkout before registry publication, install the
-local package onto your PATH:
+When working from a source checkout, install the local package onto your PATH:
 
 ```sh
 nimble install -y
