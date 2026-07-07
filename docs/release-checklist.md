@@ -91,6 +91,7 @@ under the documented conditions.
 | Docker Compose demos | Single galaxy, three-node galaxy, and local/remote universe demos build, start, pass health checks, and cleanly stop | Done |
 | CLI usability | CRUD, shell, help, and user-facing auth error smoke checks pass | Done |
 | Package metadata | `rochedb.nimble` is valid and versioned for v0.2.0 | Done |
+| Nimble CLI entrypoint | `src/roche.nim` builds the user-facing `roche` command for Nimble installs | Done |
 | Production boundary | README/status/design avoid claiming enterprise production readiness before TLS, audit, coordinator redundancy, and mixed-version tests | Done |
 | Planner boundary | Heuristic planner status and benchmark dependency are documented | Done |
 
@@ -138,3 +139,4 @@ Before tagging:
 7. Review license and third-party notices.
 8. Remove generated binaries and temporary artifacts.
 9. Confirm README and status docs describe v0.2.0 as technical preview.
+10. Prepare the `nim-lang/packages` PR after the v0.2.0 tag exists.

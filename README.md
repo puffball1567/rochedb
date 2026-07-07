@@ -92,6 +92,13 @@ cd rochedb
 scripts/test_core.sh
 ```
 
+After Nimble registry publication, the intended install path is:
+
+```sh
+nimble install rochedb
+roche --help
+```
+
 Use RocheDB from a Nim program in this repository by importing the public module:
 
 ```nim
