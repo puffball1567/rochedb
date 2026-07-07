@@ -11,22 +11,46 @@ RocheDB drivers are developed on two tracks.
    - Foundation for embedded mode, high-speed local use, and language bindings.
    - Based on `include/rochedb.h` and `src/rochedb_capi.nim`.
 
-## Priority
+## Foundation
+
+The C ABI / FFI layer is the shared foundation for embedded mode, high-speed
+local use, and non-Nim language bindings. It is not treated as one language
+driver in the publication priority list. The current C ABI already covers ABI
+versioning, last-error handling, vector put, auth connect, retrieve, batch get,
+and atlas access.
+
+## Publication Priority
 
 | Priority | Target | Reason | Status |
 |---:|---|---|---|
-| 1 | Python native wire driver | AI/RAG/research/data-processing entry point | Minimal done |
-| 2 | Node.js / TypeScript / Bun native wire driver | Web API / SaaS / Studio / GUI / local AI client entry point | Minimal done; Bun smoke added |
-| 3 | C ABI / FFI | Embedded / extension / language binding foundation | ABI version / last error / vector put / auth connect / retrieve / batch get / atlas added |
-| 4 | Rust driver | High-performance infrastructure / proxy / gateway | Minimal C ABI wrapper done. Native wire comes later |
-| 5 | Go driver | Cloud backend / ops tooling | Minimal C ABI wrapper done. Native wire comes later |
-| 6 | PHP driver | Laravel / existing business web systems | Minimal FFI / C ABI wrapper done. Docker smoke added |
-| 7 | Swift driver | Apple local AI client / browser companion / app state | Minimal C ABI wrapper done. Docker smoke added |
-| 8 | C# driver | Generic .NET / backend entry point. Unity asset stays separate | Minimal C ABI wrapper done |
-| 9 | C++ driver | Generic native / engine integration base. Unreal plugin stays separate | Minimal C ABI wrapper done |
-| 10 | Kotlin-first JVM driver | JVM backend and Android path, Java-compatible | Minimal JNI / C ABI wrapper done |
-| 11 | DB trust work | Crash recovery, compatibility suite, failure benchmarks, operational docs | Next |
-| 12 | React Native / WASM local state | Browser and React Native local/global state boundary | Post-v0.1 candidate; handled with WASM line |
+| 1 | Rust driver | High-performance infrastructure, gateway, and systems integration path | Minimal C ABI wrapper done. Native wire comes later |
+| 2 | Node.js / TypeScript / Bun native wire driver | Web API, SaaS, Studio, GUI, and local AI client entry point | Minimal done; Bun smoke added |
+| 3 | PHP driver | Laravel and existing business web systems | Minimal FFI / C ABI wrapper done. Docker smoke added |
+| 4 | C++ driver | Generic native and engine integration base. Unreal plugin stays separate | Minimal C ABI wrapper done |
+| 5 | Python native wire driver | AI/RAG and broad scripting entry point without making big-data positioning the first message | Minimal done |
+| 6 | Swift driver | Apple local AI client, browser companion, and app state path | Minimal C ABI wrapper done. Docker smoke added |
+| 7 | Kotlin-first JVM driver | JVM backend and Android path, Java-compatible | Minimal JNI / C ABI wrapper done |
+| 8 | Go driver | Cloud backend and ops tooling; lower initial priority than Rust/Node/PHP for RocheDB positioning | Minimal C ABI wrapper done. Native wire comes later |
+| 9 | C# driver | Generic .NET backend entry point. Unity official asset stays separate | Minimal C ABI wrapper done |
+| 10 | DB trust work | Crash recovery, compatibility suite, failure benchmarks, operational docs | Ongoing core work |
+
+## Browser / Wasm Track
+
+Wasm is tracked separately from language-driver publication priority. It is a
+frontend and local-state deployment path, not just another server-side driver.
+The goal is to make RocheDB usable inside browser-like sandboxed runtimes for
+local context/state management while keeping the same ring-oriented data model.
+
+Current target:
+
+- Browser / Wasm embedded RocheDB
+- React Native local/global state boundary
+- IndexedDB / OPFS-style persistence exploration
+- Local-first context windows and client-side retrieval experiments
+
+This track may be pulled forward if browser/local-state demand becomes the
+clearest adoption path. It is kept separate so the server-side driver
+publication order can remain stable while Wasm moves opportunistically.
 
 ## Minimum Common API
 
@@ -42,7 +66,7 @@ Each native driver first aligns on the following API:
 - one reconnect retry
 
 The next layer adds auth / secret-key transport, connection pooling, package
-publishing, and protocol compatibility tests.
+publishing, and protocol compatibility tests in the publication order above.
 
 The C ABI uses `examples/cabi_contract.c` as its contract smoke test.
 Rust, Go, PHP, Swift, C#, and C++ first wrap the C ABI safely. Native TCP drivers can

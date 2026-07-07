@@ -230,6 +230,10 @@ high-level wire frames such as `PUTR`, `GETID`, `QRYID`, `BGET`, and
 `RETRIEVE`; they do not need to reimplement RocheDB's ring-key, orbit, or ID
 rules.
 
+The table below lists current repository-local driver foundations. Publication
+priority for language packages is tracked in
+[docs/rochedb-driver-roadmap.md](docs/rochedb-driver-roadmap.md).
+
 | Language / runtime | Driver path | Current mode | Smoke status |
 |---|---|---|---|
 | Nim | `src/rochedb.nim` | Native embedded and cluster API | core tests |
