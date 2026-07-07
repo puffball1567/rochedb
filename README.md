@@ -31,6 +31,12 @@ Writes are intentionally light. A human, application, or import rule places data
 into a ring. Reads use the ring, hierarchy, centroid, coherence, mass, retrieval
 profile, and projection to keep the candidate set small.
 
+RocheDB is NoSQL, but it is not a MongoDB-compatible or ad-hoc aggregation
+database. The main difference is that a `ring` is not just a collection name; it
+is part of the read path. RocheDB expects applications, routes, tenants, import
+rules, or operators to place data into meaningful rings so later reads can avoid
+unrelated working sets. See [How RocheDB Differs From Typical NoSQL](docs/nosql-positioning.md).
+
 RocheDB's main bet is not "scan the entire corpus faster." It is "avoid reading
 unneeded data in the first place." Training data, document corpora, and
 application histories tend to grow. Systems that keep scanning wider datasets
@@ -44,6 +50,7 @@ corpus size toward semantic working-set size.
 - Public API reference: [docs/public-api.md](docs/public-api.md)
 - Configuration reference: [docs/config-reference.md](docs/config-reference.md)
 - CLI reference: [docs/cli-reference.md](docs/cli-reference.md)
+- How RocheDB differs from typical NoSQL: [docs/nosql-positioning.md](docs/nosql-positioning.md)
 - Concept: [docs/rochedb-concept.md](docs/rochedb-concept.md)
 - Detailed design: [docs/rochedb-design.md](docs/rochedb-design.md)
 - Feature status / roadmap: [docs/rochedb-status.md](docs/rochedb-status.md)

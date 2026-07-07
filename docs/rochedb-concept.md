@@ -29,6 +29,11 @@ It is not currently positioned as:
 The design goal is to be narrow where the database needs to be narrow, while
 remaining useful as a general NoSQL/document store.
 
+For readers comparing RocheDB with MongoDB-style document databases, see
+[How RocheDB Differs From Typical NoSQL](nosql-positioning.md). The short
+version is that RocheDB keeps flexible documents, but treats ring placement as
+part of the read path rather than as a passive collection label.
+
 ## 2. Core Bet: Ephemeris, Not Magical Gravity
 
 The strongest database idea from celestial mechanics is not "things attract."

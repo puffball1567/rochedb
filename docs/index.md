@@ -16,6 +16,7 @@ downstream AI/RAG or application logic.
 - [Public API](public-api.md)
 - [Configuration Reference](config-reference.md)
 - [CLI Reference](cli-reference.md)
+- [How RocheDB Differs From Typical NoSQL](nosql-positioning.md)
 - [Feature Status / Roadmap](rochedb-status.md)
 - [Benchmark Notes](rochedb-bench.md)
 
