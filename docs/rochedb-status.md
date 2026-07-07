@@ -90,7 +90,7 @@ Translations:
 | Kotlin-first JVM | Done | JNI / C ABI wrapper with Docker smoke |
 | React Native / WASM local state | Post-v0.1 candidate | Browser / React Native state boundary; handled with the WASM line, not before Kotlin |
 | Driver compatibility test suite | Partial | `scripts/driver_compat.sh`; Docker-backed PHP / Swift / Kotlin are opt-in and verified |
-| Package publishing workflow | Post-v0.1 candidate | npm / PyPI / Cargo / Go / Composer / SwiftPM / NuGet / Maven |
+| Nimble package publishing | Done | `nimble install rochedb` is available. Non-Nim registries remain future work |
 
 ## Benchmarks / Demos
 

@@ -21,13 +21,14 @@ tests.
 
 ## User Install
 
-After Nimble registry publication:
+Install RocheDB from Nimble:
 
 ```sh
 nimble install rochedb
 ```
 
-Before registry publication, from a source checkout:
+Use a source checkout when you want to run the full test suite, examples, or
+driver smoke tests:
 
 ```sh
 git clone https://github.com/puffball1567/rochedb.git

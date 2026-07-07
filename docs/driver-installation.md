@@ -8,7 +8,8 @@ RocheDB drivers currently use two paths:
 - Native TCP wire drivers for cluster-oriented use.
 - C ABI wrappers for embedded/local use and language binding stability.
 
-Registry publication is not claimed yet. The examples below assume a local clone
+The Nim package is available through Nimble. Non-Nim drivers are still
+repository-local foundations, so the driver examples below assume a local clone
 of this repository.
 
 ## Optional FAISS Setup
@@ -44,8 +45,14 @@ nim c -d:release --nimcache:/tmp/nimcache_roched -o:src/roched src/roched.nim
 
 ## Nim
 
-Until registry publication, use a local clone and import the public API
-directly:
+Install from Nimble:
+
+```sh
+nimble install rochedb
+roche --help
+```
+
+Then import the public API:
 
 ```nim
 import rochedb
@@ -55,17 +62,10 @@ let id = db.put("hello", ring = "docs")
 echo db.get(id)
 ```
 
-Run:
+From a source checkout, run:
 
 ```sh
 scripts/test_core.sh
-```
-
-After Nimble registry publication, the intended install path is:
-
-```sh
-nimble install rochedb
-roche --help
 ```
 
 ## C ABI

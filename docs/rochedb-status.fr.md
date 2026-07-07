@@ -65,7 +65,7 @@ Release checklist: [release-checklist.md](./release-checklist.md)
 | PHP / Swift / Kotlin | Done | Docker smoke available |
 | C# / C++ | Done | OSS generic wrappers; Unity / Unreal official assets are separate candidates |
 | React Native / WASM | Post-v0.1 candidate | Browser / local state boundary |
-| Package publishing | Post-v0.1 candidate | npm / PyPI / Cargo / Composer / NuGet / Maven |
+| Nimble package publishing | Done | `nimble install rochedb` is available. Non-Nim registries remain future work |
 
 ## Benchmarks / Demos
 

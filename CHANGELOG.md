@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.2.2
+
+### Changed
+
+- Updated installation documentation now that RocheDB is available through
+  Nimble.
+- Clarified that non-Nim language packages remain repository-local foundations
+  while `nimble install rochedb` is the normal Nim install path.
+- Bumped package metadata to `0.2.2`.
+
+## v0.2.1
+
+### Changed
+
+- Clarified CLI installation paths and documented `~/.nimble/bin` PATH setup.
+- Added system install guidance for `/usr/local/bin/roche` and
+  `/usr/local/bin/roched`.
+- Added a dedicated installation page and linked it from README and the docs
+  index.
+
 ## v0.2.0
 
 ### Added
