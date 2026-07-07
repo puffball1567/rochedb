@@ -44,7 +44,8 @@ nim c -d:release --nimcache:/tmp/nimcache_roched -o:src/roched src/roched.nim
 
 ## Nim
 
-Use the public API directly:
+Until registry publication, use a local clone and import the public API
+directly:
 
 ```nim
 import rochedb
@@ -58,6 +59,13 @@ Run:
 
 ```sh
 scripts/test_core.sh
+```
+
+After Nimble registry publication, the intended install path is:
+
+```sh
+nimble install rochedb
+roche --help
 ```
 
 ## C ABI

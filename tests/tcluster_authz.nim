@@ -1,6 +1,6 @@
 ## 手動結合テスト: roched 3ノード起動後に実行する。
 
-import std/[net, os, unittest]
+import std/[json, net, os, unittest]
 import ../src/roche/wire
 
 const
@@ -27,6 +27,20 @@ proc expectProtocolErr(sock: Socket) =
   let r = sock.readHeader()
   check r[0] == "ERR"
 
+proc universeEventJson(ring, key, payload: string): string =
+  $(%*{
+    "eventKey": key,
+    "sourceUniverse": "tokyo",
+    "sourceGalaxy": "authz",
+    "ring": ring,
+    "op": "put",
+    "logicalKey": key,
+    "payload": payload,
+    "vec": [],
+    "timestamp": 1.0,
+    "originSeq": 1
+  })
+
 suite "cluster authz":
   test "allow-ring prefix permits matching named rings and denies others":
     let peers = getEnv("ROCHE_TEST_PEERS",
@@ -38,7 +52,7 @@ suite "cluster authz":
     check got.found
     check got.value == "ok"
 
-    expect AssertionDefect:
+    expect IOError:
       discard c.putRingReq(0, "blocked/docs", "no-with-body",
                            @[1.0'f32, 0.0'f32, 0.0'f32])
 
@@ -51,23 +65,34 @@ suite "cluster authz":
     check gotAfterDenied.value == "after-denied"
     c.close()
 
+  test "UAPPLY is idempotent by eventKey":
+    let peers = getEnv("ROCHE_TEST_PEERS",
+      "127.0.0.1:17611,127.0.0.1:17612,127.0.0.1:17613")
+    let ps = parsePeers(peers)
+    var c = newClusterClient(ps, username = "alice", password = "secret")
+    let event = universeEventJson("allowed/universe", "uapply-idempotent",
+                                  "remote-once")
+    check c.universeApplyReq(0, event) == "APPLIED"
+    check c.universeApplyReq(0, event) == "SKIPPED"
+    c.close()
+
   test "authz denial drains each framed body type and keeps the connection usable":
     let peers = getEnv("ROCHE_TEST_PEERS",
       "127.0.0.1:17611,127.0.0.1:17612,127.0.0.1:17613")
     let ps = parsePeers(peers)
     var c = newClusterClient(ps, username = "alice", password = "secret")
 
-    expect AssertionDefect:
+    expect IOError:
       discard c.putRingReq(0, "blocked/docs", "putr-body",
                            @[1.0'f32, 2.0'f32, 3.0'f32])
     c.checkAlive(0, "putr")
 
-    expect AssertionDefect:
+    expect IOError:
       discard c.putReq(0, BlockedRing, Period, Head, "put-body",
                        @[1.0'f32, 2.0'f32])
     c.checkAlive(0, "put")
 
-    expect AssertionDefect:
+    expect IOError:
       discard c.retrieveReq(0, true, BlockedRing, @[1.0'f32, 0.0'f32], 3)
     c.checkAlive(0, "retrieve")
 
@@ -83,16 +108,16 @@ suite "cluster authz":
                            "{ title }")
     c.checkAlive(0, "tx-query")
 
-    expect AssertionDefect:
+    expect IOError:
       discard c.listRingReq(0, BlockedRing, 10, "123456789")
     c.checkAlive(0, "list")
 
-    expect AssertionDefect:
+    expect IOError:
       c.transferReq(0, BlockedRing, 0'u32, Period, Head, 1.0, "trf-body",
                     @[1.0'f32, 2.0'f32], timeoutMs = 1000)
     c.checkAlive(0, "transfer")
 
-    expect AssertionDefect:
+    expect IOError:
       c.applyTxReq(0, 90'u64,
         TxWireOp(parent: BlockedRing, seq: 0'u32, period: Period,
                  head: Head, tWrite: 1.0, payload: "apply-body",
@@ -100,8 +125,13 @@ suite "cluster authz":
         timeoutMs = 1000)
     c.checkAlive(0, "applytx")
 
+    expect IOError:
+      discard c.universeApplyReq(0,
+        universeEventJson("blocked/docs", "blocked-uapply", "uapply-body"))
+    c.checkAlive(0, "uapply")
+
     let txid = c.txBeginReq(0)
-    expect AssertionDefect:
+    expect IOError:
       c.txCommitReq(0, txid, @[
         TxWireOp(parent: BlockedRing, seq: 0'u32, period: Period,
                  head: Head, tWrite: 1.0, payload: "tx-body",

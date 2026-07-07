@@ -1,0 +1,106 @@
+---
+layout: page
+title: Configuration Reference
+---
+
+# Configuration Reference
+
+This page collects the main configuration surfaces. Topology JSON has its own
+full reference in [Topology Configuration](topology-config.md).
+
+## Embedded Open
+
+| Property | Type | Default | Meaning |
+|---|---:|---:|---|
+| `nodes` | integer | `8` | Logical node count for embedded placement calculations. |
+| `dataDir` | string | `""` | Empty means memory-only. Non-empty enables WAL persistence. |
+| `durability` | enum | `durBuffered` | `durBuffered` batches flushes; `durStrong` adds flush/fsync boundaries. |
+
+## Cluster Connect
+
+| Property | Type | Default | Meaning |
+|---|---:|---:|---|
+| `peers` | string | required | Comma-separated `host:port` list. |
+| `username` | string | `""` | Username for password auth. |
+| `password` | string | `""` | Password for username auth. |
+| `authToken` | string | `""` | Token-style auth convenience path. |
+| `secretKey` | string | `""` | Additional secret-key gate and encrypted auth transport. |
+| `galaxy` | string | `""` | Expected remote galaxy name. |
+
+## `roched` Server Flags
+
+| Flag | Meaning |
+|---|---|
+| `--id=N` | Node index in the peer list. |
+| `--peers=host:port,...` | Static cluster peer list. |
+| `--data=DIR` | Persistent data directory. |
+| `--slow-tick=SECONDS` | Background handoff / maintenance tick interval. |
+| `--durability=buffered|strong` | WAL durability policy. |
+| `--user=NAME` / `--password=TEXT` | Basic username/password gate. |
+| `--secret-key=TEXT` | Secret-key gate and secure auth transport. |
+| `--auth-token=TEXT` | Token-style auth convenience path. |
+| `--galaxy=NAME` | Galaxy identity expected by clients. |
+| `--allow-ring=PREFIX[,PREFIX...]` | Ring-prefix authorization boundary. |
+| `--role=user:password:reader|writer|admin[:prefixes]` | Role and optional ring-prefix policy. |
+
+## Retrieval Tuning
+
+Prefer `SearchProfile` for application-facing settings:
+
+| Property | Values | Meaning |
+|---|---|---|
+| `amount` | `raFew`, `raNormal`, `raMany`, `raAllUseful` | How many useful results to retain. |
+| `scope` | `ssTight`, `ssNear`, `ssWide`, `ssAll` | How broadly to search related rings. |
+| `depth` | `sdShallow`, `sdNormal`, `sdDeep`, `sdVeryDeep` | How far to descend ring hierarchy. |
+
+Lower-level knobs are still available:
+
+| Property | Range / Default | Meaning |
+|---|---:|---|
+| `budget` | default `8` | Max returned retrieval hits. |
+| `focus` | `0..100` | Human-facing breadth control. It maps to effective top-ring selection. |
+| `topRings` | clamped internally | Direct top-ring candidate count for advanced tuning. |
+| `branchBudget` | `0` means default | Per-branch hierarchy breadth. |
+| `maxDepth` | `0` means no descent | Child-ring depth. |
+| `includeChildren` | `false` | Include descendant rings. |
+
+## Write Acknowledgement
+
+| Value | Meaning |
+|---|---|
+| `wamAccepted` | Return after durable landing/intake. |
+| `wamApplied` | Return after owner apply. |
+
+Use `configureWriteAckMode` for the default and
+`configureRingWriteAckMode` for ring-specific overrides.
+
+## Ring Apply Policy
+
+| Property | Type | Meaning |
+|---|---:|---|
+| `mode` | enum | Universe sync apply behavior. |
+| `historyKeep` | integer | Bounded history size for modes that keep history. |
+| `delayMs` | integer | Delay window before timestamp-ordered apply. |
+
+Modes:
+
+| Mode | Meaning |
+|---|---|
+| `ramLatestOnly` | Keep the newest logical value. |
+| `ramAppendOnly` | Append timestamped data while deduplicating event IDs. |
+| `ramBoundedHistory` | Keep bounded history for future undo/redo-style use. |
+| `ramDelayedTimestamp` | Delay application to preserve timestamp order. |
+
+## Topology JSON
+
+Use [Topology Configuration](topology-config.md) for universe / galaxy recovery
+layouts. The important top-level fields are:
+
+| Field | Meaning |
+|---|---|
+| `version` | Schema marker. Use `1`. |
+| `requiredHealthy` | Minimum healthy recovery archives. |
+| `authProfiles` | Named references to external secret locations. |
+| `universes` | Parallel placements. Each universe contains the same galaxy names. |
+
+Do not store raw `username`, `password`, or `secretKey` values in topology JSON.

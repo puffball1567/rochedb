@@ -96,9 +96,11 @@ suite "cluster transaction failure recovery":
       var id: RocheId
       var owner = 0
       for i in 0 ..< 32:
+        let ring = "cluster/failure/" & $i
+        db.configureRing(ring, 3600.0)
         tx = db.beginTransaction()
         id = tx.put($(%*{"value": "retry-value-" & $i}),
-                    ring = "cluster/failure/" & $i,
+                    ring = ring,
                     vec = @[1.0'f32, float32(i) / 32.0'f32])
         owner = db.locate(id)
         if owner != 0:

@@ -29,6 +29,11 @@ It is not currently positioned as:
 The design goal is to be narrow where the database needs to be narrow, while
 remaining useful as a general NoSQL/document store.
 
+For readers comparing RocheDB with MongoDB-style document databases, see
+[How RocheDB Differs From Typical NoSQL](nosql-positioning.md). The short
+version is that RocheDB keeps flexible documents, but treats ring placement as
+part of the read path rather than as a passive collection label.
+
 ## 2. Core Bet: Ephemeris, Not Magical Gravity
 
 The strongest database idea from celestial mechanics is not "things attract."
@@ -163,7 +168,25 @@ warp queue:
 This gives the system a replication-delay-like maintenance model without making
 cross-galaxy writes part of the core transaction path.
 
-## 10. What Makes RocheDB Different
+## 10. Ring-Local History
+
+RocheDB treats the ring as meaningful placement, not just a lookup bucket. For
+many records, strict global order is unnecessary: comments, document chunks,
+embeddings, profile snapshots, and AI context can live in the same ring with
+write-time metadata and be sorted when read.
+
+The default future synchronization policy should be order-relaxed. A record is
+placed in the right galaxy/ring with its write time and origin. If the reader
+needs chronological display, it sorts by time. If the reader needs relevance, it
+sorts by retrieval score. This keeps the common path light.
+
+Only rings whose final state depends on operation order should opt into delayed
+or strict apply. Undo/redo style data can be handled with a bounded ring-local
+history window, such as the latest N versions or recent undo/redo pairs. When
+history is not useful, RocheDB can prune older versions and keep only the latest
+state.
+
+## 11. What Makes RocheDB Different
 
 The distinctive idea is not that RocheDB has indexes. Many databases do. The
 distinctive idea is that routing, locality, authorization scope, import layout,
@@ -188,7 +211,7 @@ That route can simultaneously mean:
 This is why RocheDB can combine NoSQL flexibility with RDB-like locality for
 some workloads.
 
-## 11. Honest Boundaries
+## 12. Honest Boundaries
 
 RocheDB is not automatically better for every query. It is weak or incomplete
 when:
@@ -205,7 +228,7 @@ RocheDB can still coexist with these systems. A common shape is RocheDB for
 localized document/vector reads and another database for global analytics,
 billing ledgers, or reporting.
 
-## 12. Validation Direction
+## 13. Validation Direction
 
 The project should be judged by measured behavior, not by the metaphor. The
 important validation points are:

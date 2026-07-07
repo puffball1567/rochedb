@@ -1,18 +1,24 @@
 # RocheDB
 
-**v0.1.0 Technical Preview / research OSS.** RocheDB is not yet presented as a
+**v0.2.0 Technical Preview / research OSS.** RocheDB is not yet presented as a
 production replacement for Redis, PostgreSQL, MongoDB, Apache Arrow, or a
 dedicated vector database. The current release target is a measurable prototype
 of ring/galaxy-oriented storage, retrieval, persistence, drivers, and cluster
 smoke behavior.
 
-RocheDB uses celestial mechanics, especially orbits, encounters, rings, and
-accretion, as an algorithmic design source rather than as a naming theme. In one
-sentence:
+RocheDB's practical goal is simple: reduce the amount of data a system has to
+read, transfer, hold in memory, and pass to downstream AI/RAG or application
+logic. In one sentence:
 
 > RocheDB stores data with a coordinate-like `ring`, then uses that placement at
 > read time to reduce the amount of data that must be searched, transferred, and
 > passed to downstream systems.
+
+The celestial mechanics vocabulary, especially orbits, encounters, rings, and
+accretion, is an algorithmic design source rather than the value proposition.
+The value proposition is smaller working sets, fewer transferred bytes, fewer
+retrieval tokens, and lower infrastructure pressure when data can be placed by
+meaningful locality.
 
 It is not an AI-only database. The same model is intended to work as a general
 NoSQL/document store for web systems: users, tenants, regions, products,
@@ -25,6 +31,12 @@ Writes are intentionally light. A human, application, or import rule places data
 into a ring. Reads use the ring, hierarchy, centroid, coherence, mass, retrieval
 profile, and projection to keep the candidate set small.
 
+RocheDB is NoSQL, but it is not a MongoDB-compatible or ad-hoc aggregation
+database. The main difference is that a `ring` is not just a collection name; it
+is part of the read path. RocheDB expects applications, routes, tenants, import
+rules, or operators to place data into meaningful rings so later reads can avoid
+unrelated working sets. See [How RocheDB Differs From Typical NoSQL](docs/nosql-positioning.md).
+
 RocheDB's main bet is not "scan the entire corpus faster." It is "avoid reading
 unneeded data in the first place." Training data, document corpora, and
 application histories tend to grow. Systems that keep scanning wider datasets
@@ -34,18 +46,27 @@ corpus size toward semantic working-set size.
 
 ## Documents
 
+- Documentation site entry point: [docs/index.md](docs/index.md)
+- Public API reference: [docs/public-api.md](docs/public-api.md)
+- Configuration reference: [docs/config-reference.md](docs/config-reference.md)
+- CLI reference: [docs/cli-reference.md](docs/cli-reference.md)
+- How RocheDB differs from typical NoSQL: [docs/nosql-positioning.md](docs/nosql-positioning.md)
 - Concept: [docs/rochedb-concept.md](docs/rochedb-concept.md)
 - Detailed design: [docs/rochedb-design.md](docs/rochedb-design.md)
 - Feature status / roadmap: [docs/rochedb-status.md](docs/rochedb-status.md)
 - Release checklist: [docs/release-checklist.md](docs/release-checklist.md)
-- GitHub release draft: [docs/github-release-v0.1.0.md](docs/github-release-v0.1.0.md)
+- GitHub release draft: [docs/github-release-v0.2.0.md](docs/github-release-v0.2.0.md)
 - Driver / FFI roadmap: [docs/rochedb-driver-roadmap.md](docs/rochedb-driver-roadmap.md)
 - Driver installation guide: [docs/driver-installation.md](docs/driver-installation.md)
 - FAISS versioning policy: [docs/faiss-versioning.md](docs/faiss-versioning.md)
 - Vector backend selection: [docs/vector-backends.md](docs/vector-backends.md)
+- Protocol compatibility: [docs/protocol-compatibility.md](docs/protocol-compatibility.md)
+- Universe sync: [docs/universe-sync.md](docs/universe-sync.md)
 - Threat model: [docs/threat-model.md](docs/threat-model.md)
 - Benchmark notes: [docs/rochedb-bench.md](docs/rochedb-bench.md)
 - Cloud operations metrics: [docs/cloud-operations.md](docs/cloud-operations.md)
+- Topology configuration reference: [docs/topology-config.md](docs/topology-config.md)
+- Topology pattern catalog: [docs/topology-examples.md](docs/topology-examples.md)
 - Shelfer integration boundary: [docs/rochedb-shelfer-integration.md](docs/rochedb-shelfer-integration.md)
 - Halo capture design: [docs/rochedb-halo-capture.md](docs/rochedb-halo-capture.md)
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
@@ -54,7 +75,7 @@ corpus size toward semantic working-set size.
 
 ## Installation
 
-RocheDB v0.1.x is a technical preview. Registry packages are not published yet,
+RocheDB v0.2.x is a technical preview. Registry packages are not published yet,
 so the current installation path is a local clone.
 
 Prerequisites:
@@ -71,6 +92,13 @@ cd rochedb
 scripts/test_core.sh
 ```
 
+After Nimble registry publication, the intended install path is:
+
+```sh
+nimble install rochedb
+roche --help
+```
+
 Use RocheDB from a Nim program in this repository by importing the public module:
 
 ```nim
@@ -80,8 +108,16 @@ import rochedb
 For command-line tools and demos, build the binaries:
 
 ```sh
-nim c -d:release --nimcache:/tmp/nimcache_rochecli -o:bin/rochecli src/rochecli.nim
+nim c -d:release --nimcache:/tmp/nimcache_roche -o:bin/roche src/rochecli.nim
 nim c -d:release --nimcache:/tmp/nimcache_roched -o:src/roched src/roched.nim
+```
+
+Basic CLI document workflow:
+
+```sh
+bin/roche put --data=data --ring=docs/japan --payload='{"title":"Hello"}'
+bin/roche list-ring --data=data --ring=docs/japan
+bin/roche get --data=data --id=RAW_ID
 ```
 
 Optional FAISS vector backend:
@@ -90,7 +126,7 @@ Optional FAISS vector backend:
 scripts/fetch_faiss.sh
 scripts/setup_faiss_toolchain.sh   # only needed when system CMake is too old
 scripts/build_faiss_bridge.sh
-bin/rochecli doctor
+bin/roche doctor
 ```
 
 The built-in exact vector backend works without FAISS. FAISS is recommended for
@@ -320,9 +356,9 @@ bin/rochebench
 ### Working-Set, Memory, And RAG Benchmarks
 
 ```sh
-nim c -d:release -o:bin/rochecli src/rochecli.nim
-bin/rochecli working-set-bench --n=100000 --rings=100 --queries=50 --budget=20
-bin/rochecli memory-pressure-bench --n=100000 --rings=100 --queries=50 --budget=20 --payload-bytes=512
+nim c -d:release -o:bin/roche src/rochecli.nim
+bin/roche working-set-bench --n=100000 --rings=100 --queries=50 --budget=20
+bin/roche memory-pressure-bench --n=100000 --rings=100 --queries=50 --budget=20 --payload-bytes=512
 RUN_REDIS=0 examples/memory_pressure_case_study.sh
 examples/ai_rag_case_study.sh
 ```
@@ -332,7 +368,7 @@ examples/ai_rag_case_study.sh
 Use an existing local Redis server:
 
 ```sh
-bin/rochecli redis-bench --n=100000 --payload-bytes=100 --redis=127.0.0.1:6379
+bin/roche redis-bench --n=100000 --payload-bytes=100 --redis=127.0.0.1:6379
 ```
 
 Or use the Docker-based smoke comparison:
@@ -346,7 +382,7 @@ ROCHED=1 examples/redis_bench.sh
 
 ```sh
 nim c -d:release -o:bin/roched src/roched.nim
-nim c -d:release -o:bin/rochecli src/rochecli.nim
+nim c -d:release -o:bin/roche src/rochecli.nim
 ```
 
 Strong durability mode:
@@ -373,8 +409,8 @@ bin/roched --id=0 --peers=127.0.0.1:7301 \
 Encrypted backup / restore:
 
 ```sh
-bin/rochecli backup-encrypted --data=data --backup=backup.enc --passphrase=change-me
-bin/rochecli restore-encrypted --backup=backup.enc --data=restored --passphrase=change-me
+bin/roche backup-encrypted --data=data --backup=backup.enc --passphrase=change-me
+bin/roche restore-encrypted --backup=backup.enc --data=restored --passphrase=change-me
 ```
 
 ### Driver Checks
@@ -390,6 +426,18 @@ Cluster demo:
 ./examples/cluster_demo.sh
 ```
 
+Universe sync demo:
+
+```sh
+./examples/universe_sync_demo.sh
+./scripts/universe_sync_remote_smoke.sh
+```
+
+This shows a WAL-backed eventual sync outbox, idempotent apply, ack/prune, and
+the CLI handoff boundary between two local data directories or a remote RocheDB
+server. See [docs/topology-examples.md](docs/topology-examples.md) for topology
+patterns.
+
 ### C ABI
 
 ```sh
@@ -404,7 +452,7 @@ bin/demo
 scripts/fetch_faiss.sh
 scripts/setup_faiss_toolchain.sh
 scripts/build_faiss_bridge.sh
-bin/rochecli doctor
+bin/roche doctor
 examples/vector_backend_bench.sh
 ```
 
@@ -438,6 +486,7 @@ src/rochesim.nim       PoC verification CLI
 drivers/               language drivers and wrappers
 include/rochedb.h      C header
 examples/              C demo, cluster demo, benchmark scripts
+examples/compose/      Docker Compose topology demos
 tests/                 unit and smoke tests
 ```
 

@@ -314,7 +314,83 @@ pending -> running -> done -> acknowledged -> pruned
 This is the safe minimal mechanism for "apply this change wherever matching
 documents are found" without creating synchronous multi-ring object identity.
 
-## 15. Cluster Design
+## 15. Ring-Local History and Ordering
+
+Most RocheDB data should not require a global application order. If related
+facts are placed in the same ring, the ring itself carries the relationship:
+comments, knowledge chunks, embeddings, snapshots, and AI/RAG context can be
+stored with their write time and displayed, retrieved, or synchronized later in
+the order the reader needs.
+
+The default policy should therefore be order-relaxed:
+
+- store the data in the target ring;
+- keep write time / origin metadata with the record;
+- synchronize or export records by ring;
+- let readers sort by timestamp, score, source, or another domain attribute.
+
+This avoids turning RocheDB into a heavyweight global-order database. Strict
+ordering should be opt-in at the ring level.
+
+For rings where order changes the final state, RocheDB should use delayed
+apply:
+
+- receive the change;
+- hold it in a pending window;
+- sort by timestamp, source, or explicit sequence;
+- apply after the delay window closes.
+
+Undo/redo and recent-history use cases do not need a full global log either.
+A ring can keep a bounded history window, such as the latest N versions or the
+latest N undo/redo pairs. For many UI and document workflows, retaining around
+20 recent entries is enough; append-like data such as comments can simply be
+kept with timestamps and sorted at read time. If history is not needed, older
+versions can be pruned and only the latest value retained.
+
+Future universe synchronization should build on this model:
+
+- default: ring-local, order-relaxed transfer;
+- ordered rings: delayed apply;
+- strict rings: explicit opt-in policy;
+- append-only rings: timestamped accumulation and read-time sorting.
+
+The v0.2 implementation starts this as a durable outbox: RocheDB can persist
+universe sync events in the WAL, restore them after restart, apply them
+idempotently in another embedded store, acknowledge delivered events, and prune
+acknowledged events. `putSynced` can write locally and enqueue a universe sync
+event in the same API path when the application wants that behavior.
+
+Ring apply policies are intentionally small:
+
+- `latest-only` coalesces pending events with the same logical key before they
+  leave the source outbox;
+- `append-only` preserves event inserts and relies on read-time ordering;
+- `bounded-history` keeps only a bounded number of pending versions per logical
+  key;
+- `delayed-timestamp` keeps events unacknowledged until the target-side delay
+  window has passed.
+
+The CLI can export and apply these events as JSONL for smoke testing and
+external schedulers. It also has a one-shot local `universe-sync` command that
+moves pending events between two data directories. Long-running scheduling and
+remote transport can live outside the hot server loop.
+
+Write acknowledgement is a separate policy knob. Many rings can return once the
+change is durably accepted into the landing / pending log. Rings that need
+read-visible confirmation can wait until the change is applied inside the
+currently addressed galaxy / cluster. This is not a wait-for-every-universe
+operation.
+
+Workloads that need immediate global finality are outside the default universe
+sync model. RocheDB should keep those workloads separate instead of forcing all
+galaxies and universes into the slowest consistency mode.
+
+```nim
+db.configureWriteAckMode(wamAccepted)
+db.configureRingWriteAckMode("users/123/profile", wamApplied)
+```
+
+## 16. Cluster Design
 
 Cluster mode runs multiple `roched` nodes with a shared peer list. The client can
 connect to the peer set and use the same high-level API.
@@ -333,7 +409,11 @@ Key properties:
 The cluster implementation is technical-preview grade. It is suitable for smoke
 testing and design validation, not yet for production claims.
 
-## 16. Authentication and Authorization
+The wire protocol has an explicit `WIREVER` command and canonical little-endian
+float32 vector bytes. Compatibility policy is documented in
+[protocol-compatibility.md](./protocol-compatibility.md).
+
+## 17. Authentication and Authorization
 
 RocheDB supports username/password style authentication with an additional
 secret key concept. This is intended to feel familiar to database driver users:
@@ -351,7 +431,7 @@ Current authorization includes:
 Fine-grained enterprise policy can be built later without making the core
 database unusable.
 
-## 17. Security Boundary
+## 18. Security Boundary
 
 RocheDB data retrieved for RAG or tools is untrusted content until a host policy
 accepts it. The database should enforce storage and access boundaries, but it
@@ -360,7 +440,7 @@ authorization by itself.
 
 See [threat-model.md](./threat-model.md).
 
-## 18. Web-System Value
+## 19. Web-System Value
 
 RocheDB can reduce application complexity when routes and state scopes map to
 rings:
@@ -376,7 +456,7 @@ rings:
 This does not remove the need for validation. It can reduce the amount of custom
 query plumbing and index planning needed for locality-heavy applications.
 
-## 19. AI-System Value
+## 20. AI-System Value
 
 For AI systems, RocheDB should be used before expensive reasoning:
 
@@ -391,7 +471,7 @@ The database should not include model optimization in the core. Agents,
 operators, or external tools can inspect atlas, explain output, stats, and
 benchmarks to recommend better ring layout or profiles.
 
-## 20. Performance Gates
+## 21. Performance Gates
 
 Current gates for the technical preview:
 
@@ -406,13 +486,15 @@ Current gates for the technical preview:
 
 See [rochedb-bench.md](./rochedb-bench.md).
 
-## 21. Operational Roadmap
+## 22. Operational Roadmap
 
 Core gaps before stronger production positioning:
 
 - broader crash and corruption tests;
 - longer cluster soak tests;
 - TLS and stronger wire security;
+- richer RBAC / audit policy for enterprise environments;
+- coordinator redundancy for cluster transactions;
 - mature FAISS bridge packaging;
 - observability and admin tooling;
 - larger corpus benchmarks;

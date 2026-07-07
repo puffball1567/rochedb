@@ -14,7 +14,7 @@ suite "cluster rbac":
     check gotByWriter.found
     check gotByWriter.value == "writer-value"
 
-    expect AssertionDefect:
+    expect IOError:
       discard writer.putRingReq(0, "blocked/docs", "blocked", @[])
     writer.close()
 
@@ -23,12 +23,12 @@ suite "cluster rbac":
     check gotByReader.found
     check gotByReader.value == "writer-value"
 
-    expect AssertionDefect:
+    expect IOError:
       discard reader.putRingReq(0, "allowed/docs", "reader-write", @[])
     reader.close()
 
     writer = newClusterClient(ps, username = "writer", password = "write")
-    expect AssertionDefect:
+    expect IOError:
       discard writer.metricsReq(0)
     writer.close()
 

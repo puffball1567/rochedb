@@ -23,6 +23,9 @@
 ##   CA <txid>\n                                          cluster tx applied
 ##   WJ <jobId> <len>\n<json>\n                         warp belt job snapshot
 ##   WD <jobId>\n                                      warp belt job delete tombstone
+##   UJ <eventId> <len>\n<json>\n                    universe sync event snapshot
+##   UD <eventId>\n                                    universe sync event delete tombstone
+##   UA <len>\n<eventKey>\n                         universe sync event applied marker
 ##   Q <nextTxId>\n                                      次の transaction id
 
 import std/[tables, os, streams, strutils, monotimes, times, posix]
@@ -105,6 +108,7 @@ type
     clusterTx*: int
     appliedClusterTx*: int
     warpJobs*: int
+    universeSyncEvents*: int
 
   StoreBackupStats* = object
     bytes*: BiggestInt
@@ -115,6 +119,7 @@ type
     clusterTx*: int
     appliedClusterTx*: int
     warpJobs*: int
+    universeSyncEvents*: int
     source*: string
     destination*: string
 
@@ -131,6 +136,8 @@ type
     clusterTx*: Table[uint64, ClusterTxIntent]
     appliedClusterTx*: Table[uint64, bool]
     warpJobs*: Table[uint64, string]
+    universeSyncEvents*: Table[uint64, string]
+    appliedUniverseSyncEvents*: Table[string, bool]
     maxTWrite*: float
     nextTxId: uint64
     logFile: File
@@ -324,8 +331,11 @@ proc truncateMissingFinalNewline(path: string) =
   finally:
     f.close()
 
-proc replay(s: Store, path: string) =
-  truncateMissingFinalNewline(path)
+proc replay(s: Store, path: string, repair = true) =
+  if repair:
+    truncateMissingFinalNewline(path)
+  elif not endsWithNewline(path):
+    raise newException(IOError, "WAL snapshot is missing final newline")
   let fs = newFileStream(path, fmRead)
   if fs.isNil: return
   var line = ""
@@ -457,14 +467,29 @@ proc replay(s: Store, path: string) =
         fs.readRecordSep()
       of "WD":
         s.warpJobs.del parseBiggestUInt(parts[1]).uint64
+      of "UJ":
+        let eventId = parseBiggestUInt(parts[1]).uint64
+        let len = parseInt(parts[2])
+        s.universeSyncEvents[eventId] = fs.readExactStr(len)
+        fs.readRecordSep()
+      of "UD":
+        s.universeSyncEvents.del parseBiggestUInt(parts[1]).uint64
+      of "UA":
+        let len = parseInt(parts[1])
+        s.appliedUniverseSyncEvents[fs.readExactStr(len)] = true
+        fs.readRecordSep()
       of "Q":
         s.nextTxId = max(s.nextTxId, parseBiggestUInt(parts[1]).uint64)
       else:
         discard   # 不明レコードは読み飛ばし（前方互換）
       lastGood = fs.getPosition()
     except CatchableError:
-      repairTo = lastGood
-      break
+      if repair:
+        repairTo = lastGood
+        break
+      fs.close()
+      raise newException(IOError, "invalid WAL snapshot near byte " &
+        $lastGood & ": " & getCurrentExceptionMsg())
   fs.close()
   if repairTo >= 0:
     truncateLog(path, repairTo.int64)
@@ -588,6 +613,15 @@ proc writeSnapshotFile(s: Store, path: string) =
       file.write("WJ " & $jobId & " " & $blob.len & "\n")
       file.write(blob)
       file.write("\n")
+    for eventId, blob in s.universeSyncEvents:
+      file.write("UJ " & $eventId & " " & $blob.len & "\n")
+      file.write(blob)
+      file.write("\n")
+    for eventKey, applied in s.appliedUniverseSyncEvents:
+      if applied:
+        file.write("UA " & $eventKey.len & "\n")
+        file.write(eventKey)
+        file.write("\n")
     if s.durability == durStrong:
       file.syncFile()
     else:
@@ -604,8 +638,14 @@ proc snapshotStats(s: Store, path: string, source = ""): StoreBackupStats =
                    clusterTx: s.clusterTx.len,
                    appliedClusterTx: s.appliedClusterTx.len,
                    warpJobs: s.warpJobs.len,
+                   universeSyncEvents: s.universeSyncEvents.len,
                    source: source,
                    destination: path)
+
+proc snapshotStatsFromFile(path, source: string): StoreBackupStats =
+  var s = Store(lastFlush: getMonoTime(), nextTxId: 1)
+  s.replay(path, repair = false)
+  result = s.snapshotStats(path, source)
 
 proc compact*(s: Store): StoreCompactStats =
   ## 生存レコードだけで WAL を再構築する。
@@ -617,6 +657,7 @@ proc compact*(s: Store): StoreCompactStats =
   result.clusterTx = s.clusterTx.len
   result.appliedClusterTx = s.appliedClusterTx.len
   result.warpJobs = s.warpJobs.len
+  result.universeSyncEvents = s.universeSyncEvents.len
   if not s.persistent or s.logPath.len == 0:
     return
 
@@ -689,6 +730,38 @@ proc backupEncrypted*(s: Store, dstDir, passphrase: string): StoreBackupStats =
     if fileExists(tmpEnc):
       removeFile(tmpEnc)
 
+proc verifyBackup*(backupDir: string): StoreBackupStats =
+  ## backupDir/roche.log を復元前に strict 検証する。通常 openStore の
+  ## tail repair とは違い、backup 検証では壊れた snapshot を拒否する。
+  if backupDir.len == 0:
+    raise newException(ValueError, "backup directory is required")
+  let src = backupDir / "roche.log"
+  if not fileExists(src):
+    raise newException(IOError, "backup roche.log not found: " & src)
+  result = snapshotStatsFromFile(src, src)
+
+proc verifyEncryptedBackup*(backupDir, passphrase: string): StoreBackupStats =
+  ## backupDir/roche.backup を復号し、復元前に strict 検証する。
+  if backupDir.len == 0:
+    raise newException(ValueError, "backup directory is required")
+  let src = backupDir / "roche.backup"
+  if not fileExists(src):
+    raise newException(IOError, "encrypted backup not found: " & src)
+  let blob = readFile(src)
+  if not blob.startsWith(EncryptedBackupMagic):
+    raise newException(IOError, "invalid encrypted backup header")
+  let plaintext = decryptSecretBox(blob[EncryptedBackupMagic.len .. ^1],
+                                   backupKey(passphrase))
+  let validateTmp = backupDir / "roche.verify.tmp"
+  writeFile(validateTmp, plaintext)
+  try:
+    result = snapshotStatsFromFile(validateTmp, src)
+    result.bytes = getFileSize(src)
+    result.destination = src
+  finally:
+    if fileExists(validateTmp):
+      removeFile(validateTmp)
+
 proc restoreBackup*(backupDir, targetDir: string, overwrite = false): StoreBackupStats =
   ## backupDir/roche.log を targetDir/roche.log として復元する。
   ## 既存 target は overwrite=true のときだけ置き換える。
@@ -697,6 +770,7 @@ proc restoreBackup*(backupDir, targetDir: string, overwrite = false): StoreBacku
   let src = backupDir / "roche.log"
   if not fileExists(src):
     raise newException(IOError, "backup roche.log not found: " & src)
+  discard verifyBackup(backupDir)
   createDir(targetDir)
   let dst = targetDir / "roche.log"
   if fileExists(dst) and not overwrite:
@@ -723,6 +797,7 @@ proc restoreEncryptedBackup*(backupDir, targetDir, passphrase: string,
     raise newException(IOError, "invalid encrypted backup header")
   let plaintext = decryptSecretBox(blob[EncryptedBackupMagic.len .. ^1],
                                    backupKey(passphrase))
+  discard verifyEncryptedBackup(backupDir, passphrase)
   createDir(targetDir)
   let dst = targetDir / "roche.log"
   if fileExists(dst) and not overwrite:
@@ -794,6 +869,39 @@ proc deleteWarpJob*(s: Store, jobId: uint64) =
     s.logFile.write("WD " & $jobId & "\n")
     s.flushMaybe(force = true)
 
+proc putUniverseSyncEvent*(s: Store, eventId: uint64, blob: string) =
+  ## RocheDB layer が解釈する universe sync event snapshot を保存する。
+  ## Store は durable queue / compact / backup / restore だけを担当する。
+  if blob.len == 0:
+    raise newException(ValueError, "universe sync event blob is empty")
+  s.universeSyncEvents[eventId] = blob
+  if s.persistent:
+    s.logFile.write("UJ " & $eventId & " " & $blob.len & "\n")
+    s.logFile.write(blob)
+    s.logFile.write("\n")
+    s.flushMaybe(force = true)
+
+proc deleteUniverseSyncEvent*(s: Store, eventId: uint64) =
+  s.universeSyncEvents.del eventId
+  if s.persistent:
+    s.logFile.write("UD " & $eventId & "\n")
+    s.flushMaybe(force = true)
+
+proc markUniverseSyncEventApplied*(s: Store, eventKey: string) =
+  if eventKey.len == 0:
+    raise newException(ValueError, "universe sync event key is empty")
+  if s.appliedUniverseSyncEvents.getOrDefault(eventKey, false):
+    return
+  s.appliedUniverseSyncEvents[eventKey] = true
+  if s.persistent:
+    s.logFile.write("UA " & $eventKey.len & "\n")
+    s.logFile.write(eventKey)
+    s.logFile.write("\n")
+    s.flushMaybe(force = true)
+
+proc isUniverseSyncEventApplied*(s: Store, eventKey: string): bool =
+  s.appliedUniverseSyncEvents.getOrDefault(eventKey, false)
+
 proc nextSeq*(s: Store, ring: uint64): uint32 =
   result = s.seqs.getOrDefault(ring, 0'u32)
   s.seqs[ring] = result + 1
@@ -839,6 +947,13 @@ proc clusterTxApplied*(s: Store): int =
   for _, intent in s.clusterTx:
     if intent.applied:
       inc result
+
+proc isClusterTxApplied*(s: Store, txid: uint64): bool =
+  s.appliedClusterTx.getOrDefault(txid, false) or
+    (txid in s.clusterTx and s.clusterTx[txid].applied)
+
+proc hasClusterTxIntent*(s: Store, txid: uint64): bool =
+  txid in s.clusterTx
 
 proc beginTxn*(s: Store): StoreTxn =
   result = StoreTxn(store: s, id: s.nextTxId)

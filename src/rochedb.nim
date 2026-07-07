@@ -75,6 +75,22 @@ type
     raMany         ## 多めに返す
     raAllUseful    ## 有用そうなものを多めに残す
 
+  WriteAckMode* = enum
+    wamAccepted     ## durable landing / intake が完了したら返す
+    wamApplied      ## owner への apply 完了まで待ってから返す
+
+  RingApplyMode* = enum
+    ramLatestOnly       ## 新しい timestamp / sequence を最新状態として採用する
+    ramAppendOnly       ## eventId 重複だけ避け、追加データとして保存する
+    ramBoundedHistory   ## timestamp 順の履歴を bounded に保持するための足場
+    ramDelayedTimestamp ## delay window 後に timestamp 順で apply するための足場
+
+  RingApplyPolicy* = object
+    ## Universe sync / delayed apply 用の ring-local policy。
+    mode*: RingApplyMode
+    historyKeep*: int
+    delayMs*: int
+
   SearchProfile* = object
     ## 人間向けの retrieval tuning profile。
     ## RDB の optimizer hint を、RocheDB では自然な語彙で表す。
@@ -110,6 +126,24 @@ type
     acknowledged*: bool
     error*: string
 
+  UniverseSyncEvent* = object
+    ## Universe 間の durable eventual convergence 用イベント。
+    ## 即時グローバル commit ではなく、別 universe の同名 galaxy に後で配送・適用する。
+    id*: uint64
+    eventKey*: string
+    sourceUniverse*: string
+    sourceGalaxy*: string
+    ring*: string
+    op*: string
+    logicalKey*: string
+    payload*: string
+    vec*: seq[float32]
+    timestamp*: float
+    originSeq*: uint64
+    attempts*: int
+    acknowledged*: bool
+    error*: string
+
   RocheDb* = ref object
     ## DB ハンドル。所有は木構造（循環なし）— ARC 制約（設計書 §13.3）。
     mode: Mode
@@ -118,6 +152,8 @@ type
     ringNames: Table[string, uint64]
     ringKeyNames: Table[uint64, string]
     ringDescriptions: Table[uint64, string]
+    ringWriteAckModes: Table[uint64, WriteAckMode]
+    ringApplyPolicies: Table[uint64, RingApplyPolicy]
     ringChildren: Table[uint64, seq[uint64]]
     retrievalTunings: Table[string, RetrievalTuning]
     searchProfiles: Table[string, SearchProfile]
@@ -128,6 +164,7 @@ type
     st: Store
     vectorBackend: VectorBackend
     plannerBackend: PlannerBackend
+    defaultWriteAckMode: WriteAckMode
     # cluster
     client: ClusterClient
     galaxy: string
@@ -135,6 +172,8 @@ type
     # delayed maintenance jobs
     nextWarpId: uint64
     warpJobs: seq[WarpJob]
+    nextUniverseSyncId: uint64
+    universeSyncEvents: seq[UniverseSyncEvent]
 
   GalaxyRouter* = ref object
     galaxies: Table[string, RocheDb]
@@ -252,6 +291,14 @@ type
     source*: string
     defaultRing*: string
 
+  UniverseSyncStats* = object
+    read*: int
+    applied*: int
+    skipped*: int
+    acked*: int
+    pruned*: int
+    errors*: int
+
 const
   durBuffered* = store.durBuffered
   durStrong* = store.durStrong
@@ -268,6 +315,12 @@ proc ringKey(db: RocheDb, name: string, persist = true): uint64
 proc ringKeyForRead(db: RocheDb, ring: string): uint64
 proc put*(db: RocheDb, payload: string, ring: string = "default",
           vec: seq[float32] = @[]): RocheId
+proc enqueueUniverseSyncEvent*(db: RocheDb, sourceUniverse, sourceGalaxy,
+                               ring, payload: string,
+                               vec: seq[float32] = @[],
+                               op = "put", logicalKey = "",
+                               timestamp = -1.0,
+                               eventKey = ""): uint64
 
 proc defaultRetrievalTuning*(): RetrievalTuning =
   RetrievalTuning(budget: 8, focus: 0, topRings: 0, branchBudget: 0,
@@ -276,6 +329,9 @@ proc defaultRetrievalTuning*(): RetrievalTuning =
 proc defaultSearchProfile*(): SearchProfile =
   SearchProfile(amount: raNormal, scope: ssTight, depth: sdNormal,
                 note: "default")
+
+proc defaultRingApplyPolicy*(): RingApplyPolicy =
+  RingApplyPolicy(mode: ramLatestOnly, historyKeep: 1, delayMs: 0)
 
 proc tuningFromSearchProfile*(profile: SearchProfile): RetrievalTuning =
   case profile.amount
@@ -373,6 +429,35 @@ proc open*(nodes: int = 8, dataDir: string = "",
       error: raw{"error"}.getStr())
     result.warpJobs.add job
     result.nextWarpId = max(result.nextWarpId, job.id)
+  for _, blob in result.st.universeSyncEvents:
+    let raw = parseJson(blob)
+    var vec: seq[float32] = @[]
+    if raw.hasKey("vec") and raw["vec"].kind == JArray:
+      for item in raw["vec"]:
+        case item.kind
+        of JInt:
+          vec.add float32(item.getInt())
+        of JFloat:
+          vec.add float32(item.getFloat())
+        else:
+          discard
+    let event = UniverseSyncEvent(
+      id: raw["id"].getInt().uint64,
+      eventKey: raw["eventKey"].getStr(),
+      sourceUniverse: raw{"sourceUniverse"}.getStr(),
+      sourceGalaxy: raw{"sourceGalaxy"}.getStr(),
+      ring: raw["ring"].getStr(),
+      op: raw{"op"}.getStr("put"),
+      logicalKey: raw{"logicalKey"}.getStr(),
+      payload: raw{"payload"}.getStr(),
+      vec: vec,
+      timestamp: raw{"timestamp"}.getFloat(),
+      originSeq: raw{"originSeq"}.getBiggestInt().uint64,
+      attempts: raw{"attempts"}.getInt(),
+      acknowledged: raw{"acknowledged"}.getBool(),
+      error: raw{"error"}.getStr())
+    result.universeSyncEvents.add event
+    result.nextUniverseSyncId = max(result.nextUniverseSyncId, event.id)
   for key, name in result.st.ringNames:
     let parentName = parentRingName(name)
     if parentName.len > 0 and parentName in result.ringNames:
@@ -466,6 +551,14 @@ proc backupEncrypted*(db: RocheDb, dstDir, passphrase: string): BackupStats =
   if db.mode != mEmbedded:
     raise newException(ValueError, "cluster connection cannot backup remote stores")
   db.st.backupEncrypted(dstDir, passphrase)
+
+proc verifyBackup*(backupDir: string): BackupStats =
+  ## backupDir の WAL snapshot を復元前に strict 検証する。
+  store.verifyBackup(backupDir)
+
+proc verifyEncryptedBackup*(backupDir, passphrase: string): BackupStats =
+  ## backupDir の encrypted backup を復号し、復元前に strict 検証する。
+  store.verifyEncryptedBackup(backupDir, passphrase)
 
 proc restoreBackup*(backupDir, dataDir: string, overwrite = false): BackupStats =
   ## backupDir の WAL を dataDir へ復元する。dataDir が既存の場合は overwrite が必要。
@@ -769,6 +862,59 @@ proc configureRing*(db: RocheDb, ring: string, period: float) =
   if db.mode == mEmbedded:
     db.st.putRingMeta(key, period, db.rings[key].headAngle)
 
+proc configureWriteAckMode*(db: RocheDb, mode: WriteAckMode) =
+  ## cluster transaction / update / delete の既定応答タイミング。
+  ## wamAccepted は landing intent 受付で返し、wamApplied は owner apply まで待つ。
+  db.defaultWriteAckMode = mode
+
+proc configureRingWriteAckMode*(db: RocheDb, ring: string,
+                                mode: WriteAckMode) =
+  ## ring ごとに応答タイミングを上書きする。
+  ## 厳密に read-visible になってから返したい ring だけ wamApplied にできる。
+  let key = db.ringKey(ring)
+  db.ringWriteAckModes[key] = mode
+
+proc configureRingApplyPolicy*(db: RocheDb, ring: string,
+                               policy: RingApplyPolicy) =
+  ## universe sync / delayed apply の ring-local policy を設定する。
+  ## データ構造は縛らず、同期・履歴・適用順の扱いだけを ring ごとに変える。
+  if policy.historyKeep < 0:
+    raise newException(ValueError, "historyKeep must be >= 0")
+  if policy.delayMs < 0:
+    raise newException(ValueError, "delayMs must be >= 0")
+  let key = db.ringKey(ring)
+  db.ringApplyPolicies[key] = policy
+
+proc ringApplyPolicy*(db: RocheDb, ring: string): RingApplyPolicy =
+  let key = db.ringKeyForRead(ring)
+  db.ringApplyPolicies.getOrDefault(key, defaultRingApplyPolicy())
+
+proc writeAckModeForRing(db: RocheDb, ringKey: uint64): WriteAckMode =
+  db.ringWriteAckModes.getOrDefault(ringKey, db.defaultWriteAckMode)
+
+proc writeAckModeForOps(db: RocheDb, ops: seq[TxWireOp]): WriteAckMode =
+  if ops.len == 0:
+    return db.defaultWriteAckMode
+  result = wamAccepted
+  for op in ops:
+    if db.writeAckModeForRing(op.parent) == wamApplied:
+      return wamApplied
+
+proc waitClusterTxApplied*(db: RocheDb, txid: uint64, timeoutMs = 10_000,
+                           pollMs = 20): bool =
+  ## cluster landing intent が owner に apply されるまで待つ。
+  ## timeout 時は false。呼び出し側は accepted 済みとして後で status / get を再試行できる。
+  doAssert db.mode == mCluster, "waitClusterTxApplied は cluster mode 専用"
+  let deadline = epochTime() + float(timeoutMs) / 1000.0
+  while epochTime() <= deadline:
+    let status = db.client.txStatusReq(0, txid)
+    if status == "APPLIED":
+      return true
+    if status == "UNKNOWN":
+      return false
+    sleep(max(1, pollMs))
+  false
+
 proc put*(db: RocheDb, payload: string, ring: string = "default",
           vec: seq[float32] = @[]): RocheId =
   ## 書き込み。環は初回利用時に自動作成。
@@ -795,6 +941,28 @@ proc put*(db: RocheDb, doc: JsonNode, ring: string = "default",
           vec: seq[float32] = @[]): RocheId =
   ## 構造化ドキュメントの書き込み。query（選択取得）の対象になる。
   db.put($doc, ring, vec)
+
+proc putSynced*(db: RocheDb, payload: string, sourceUniverse, sourceGalaxy: string,
+                ring: string = "default", vec: seq[float32] = @[],
+                logicalKey = ""): RocheId =
+  ## embedded put と universe outbox 登録を同時に行う。
+  ## 既存 put の意味は変えず、Universe 同期したい write path だけで使う。
+  doAssert db.mode == mEmbedded, "putSynced は embedded mode 専用"
+  result = db.put(payload, ring = ring, vec = vec)
+  discard db.enqueueUniverseSyncEvent(sourceUniverse = sourceUniverse,
+                                      sourceGalaxy = sourceGalaxy,
+                                      ring = ring,
+                                      payload = payload,
+                                      vec = vec,
+                                      logicalKey = logicalKey,
+                                      timestamp = epochTime())
+
+proc putSynced*(db: RocheDb, doc: JsonNode, sourceUniverse, sourceGalaxy: string,
+                ring: string = "default", vec: seq[float32] = @[],
+                logicalKey = ""): RocheId =
+  db.putSynced($doc, sourceUniverse = sourceUniverse,
+               sourceGalaxy = sourceGalaxy, ring = ring, vec = vec,
+               logicalKey = logicalKey)
 
 # ---------------------------------------------------------------- トランザクション
 
@@ -885,7 +1053,23 @@ proc commit*(tx: RocheTx) =
       tx.db.vectorBackend.upsert p
   of mCluster:
     tx.db.client.txCommitReq(0, tx.clusterTxId, tx.clusterOps)
+    if tx.db.writeAckModeForOps(tx.clusterOps) == wamApplied:
+      if not tx.db.waitClusterTxApplied(tx.clusterTxId):
+        raise newException(IOError, "cluster transaction apply timed out")
   tx.closed = true
+
+proc commit*(tx: RocheTx, ackMode: WriteAckMode) =
+  ## この transaction だけ応答タイミングを上書きして commit する。
+  doAssert not tx.closed, "transaction is closed"
+  case tx.db.mode
+  of mEmbedded:
+    tx.commit()
+  of mCluster:
+    tx.db.client.txCommitReq(0, tx.clusterTxId, tx.clusterOps)
+    if ackMode == wamApplied:
+      if not tx.db.waitClusterTxApplied(tx.clusterTxId):
+        raise newException(IOError, "cluster transaction apply timed out")
+    tx.closed = true
 
 proc rollback*(tx: RocheTx) =
   if not tx.closed:
@@ -1005,7 +1189,10 @@ proc batchGet*(db: RocheDb, ids: seq[RocheId]): seq[string] =
       for i, value in values:
         let idx = entries[i].idx
         if not resolved[idx]:
-          result[idx] = value
+          if value.len == 0:
+            result[idx] = db.get(entries[i].id)
+          else:
+            result[idx] = value
 
 proc exists*(db: RocheDb, id: RocheId): bool =
   ## ORM / driver 向けの存在確認。cluster では get による確認。
@@ -1030,10 +1217,14 @@ proc remove*(db: RocheDb, id: RocheId) =
   of mCluster:
     let ri = db.rings[id.parent]
     let txid = db.client.txBeginReq(0)
-    db.client.txCommitReq(0, txid, @[
+    let ops = @[
       TxWireOp(delete: true, parent: id.parent, seq: id.seq,
                period: ri.period, head: ri.headAngle, tWrite: id.tWrite)
-    ])
+    ]
+    db.client.txCommitReq(0, txid, ops)
+    if db.writeAckModeForOps(ops) == wamApplied:
+      if not db.waitClusterTxApplied(txid):
+        raise newException(IOError, "cluster delete apply timed out")
 
 proc deleteById*(db: RocheDb, id: RocheId) =
   ## ORM で直感的に使うための alias。
@@ -1057,11 +1248,15 @@ proc update*(db: RocheDb, id: RocheId, payload: string,
   of mCluster:
     let ri = db.rings[id.parent]
     let txid = db.client.txBeginReq(0)
-    db.client.txCommitReq(0, txid, @[
+    let ops = @[
       TxWireOp(parent: id.parent, seq: id.seq, period: ri.period,
                head: ri.headAngle, tWrite: id.tWrite,
                payload: payload, vec: vec.normalize())
-    ])
+    ]
+    db.client.txCommitReq(0, txid, ops)
+    if db.writeAckModeForOps(ops) == wamApplied:
+      if not db.waitClusterTxApplied(txid):
+        raise newException(IOError, "cluster update apply timed out")
 
 proc update*(db: RocheDb, id: RocheId, doc: JsonNode,
              vec: seq[float32] = @[]) =
@@ -1203,6 +1398,194 @@ proc warpJobJson(job: WarpJob): JsonNode =
 proc persistWarpJob(db: RocheDb, job: WarpJob) =
   if db.mode == mEmbedded and not db.st.isNil:
     db.st.putWarpJob(job.id, $job.warpJobJson())
+
+proc universeSyncEventJson(event: UniverseSyncEvent): JsonNode =
+  %*{
+    "id": event.id,
+    "eventKey": event.eventKey,
+    "sourceUniverse": event.sourceUniverse,
+    "sourceGalaxy": event.sourceGalaxy,
+    "ring": event.ring,
+    "op": event.op,
+    "logicalKey": event.logicalKey,
+    "payload": event.payload,
+    "vec": event.vec,
+    "timestamp": event.timestamp,
+    "originSeq": event.originSeq,
+    "attempts": event.attempts,
+    "acknowledged": event.acknowledged,
+    "error": event.error
+  }
+
+proc persistUniverseSyncEvent(db: RocheDb, event: UniverseSyncEvent) =
+  if db.mode == mEmbedded and not db.st.isNil:
+    db.st.putUniverseSyncEvent(event.id, $event.universeSyncEventJson())
+
+proc makeUniverseEventKey(sourceUniverse, sourceGalaxy, ring, logicalKey: string,
+                          originSeq: uint64, timestamp: float): string =
+  sourceUniverse & "|" & sourceGalaxy & "|" & ring & "|" & logicalKey & "|" &
+    $originSeq & "|" & $timestamp
+
+proc sameUniverseLogicalStream(a: UniverseSyncEvent, sourceUniverse,
+                               sourceGalaxy, ring, op, logicalKey: string): bool =
+  a.sourceUniverse == sourceUniverse and
+    a.sourceGalaxy == sourceGalaxy and
+    a.ring == ring and
+    a.op == op and
+    a.logicalKey == logicalKey and
+    logicalKey.len > 0
+
+proc deleteUniverseSyncEventAt(db: RocheDb, idx: int) =
+  let eventId = db.universeSyncEvents[idx].id
+  db.universeSyncEvents.delete(idx)
+  if db.mode == mEmbedded and not db.st.isNil:
+    db.st.deleteUniverseSyncEvent(eventId)
+
+proc coalescePendingUniverseSyncEvents(db: RocheDb, sourceUniverse,
+                                       sourceGalaxy, ring, op,
+                                       logicalKey: string,
+                                       policy: RingApplyPolicy) =
+  if logicalKey.len == 0:
+    return
+  case policy.mode
+  of ramLatestOnly:
+    for i in countdown(db.universeSyncEvents.len - 1, 0):
+      let event = db.universeSyncEvents[i]
+      if not event.acknowledged and
+          event.sameUniverseLogicalStream(sourceUniverse, sourceGalaxy, ring,
+                                          op, logicalKey):
+        db.deleteUniverseSyncEventAt(i)
+  of ramBoundedHistory:
+    let keep = max(1, policy.historyKeep)
+    var matches: seq[tuple[idx: int, timestamp: float, originSeq: uint64]]
+    for i, event in db.universeSyncEvents:
+      if not event.acknowledged and
+          event.sameUniverseLogicalStream(sourceUniverse, sourceGalaxy, ring,
+                                          op, logicalKey):
+        matches.add (idx: i, timestamp: event.timestamp,
+                     originSeq: event.originSeq)
+    if matches.len >= keep:
+      matches.sort(proc(a, b: tuple[idx: int, timestamp: float,
+                                    originSeq: uint64]): int =
+        result = cmp(a.timestamp, b.timestamp)
+        if result == 0:
+          result = cmp(a.originSeq, b.originSeq))
+      var removeIdx: seq[int]
+      for j in 0 ..< matches.len - keep + 1:
+        removeIdx.add matches[j].idx
+      removeIdx.sort(SortOrder.Descending)
+      for idx in removeIdx:
+        db.deleteUniverseSyncEventAt(idx)
+  of ramAppendOnly, ramDelayedTimestamp:
+    discard
+
+proc universeSyncEventReady(db: RocheDb, event: UniverseSyncEvent): bool =
+  let policy = db.ringApplyPolicy(event.ring)
+  if policy.mode != ramDelayedTimestamp or policy.delayMs <= 0:
+    return true
+  epochTime() >= event.timestamp + float(policy.delayMs) / 1000.0
+
+proc enqueueUniverseSyncEvent*(db: RocheDb, sourceUniverse, sourceGalaxy,
+                               ring, payload: string,
+                               vec: seq[float32] = @[],
+                               op = "put", logicalKey = "",
+                               timestamp = -1.0,
+                               eventKey = ""): uint64 =
+  ## Universe 間の durable eventual sync 用イベントを登録する。
+  ## これは global commit ではなく、別 universe に後で配送するための WAL-backed outbox。
+  doAssert db.mode == mEmbedded, "universe sync event queue は embedded mode 専用"
+  if ring.len == 0:
+    raise newException(ValueError, "universe sync event ring is empty")
+  if op != "put":
+    raise newException(ValueError, "only put universe sync events are supported")
+  let policy = db.ringApplyPolicy(ring)
+  db.coalescePendingUniverseSyncEvents(sourceUniverse, sourceGalaxy, ring,
+                                       op, logicalKey, policy)
+  inc db.nextUniverseSyncId
+  let ts = if timestamp >= 0.0: timestamp else: epochTime()
+  let key = if eventKey.len > 0: eventKey
+            else: makeUniverseEventKey(sourceUniverse, sourceGalaxy, ring,
+                                       logicalKey, db.nextUniverseSyncId, ts)
+  let event = UniverseSyncEvent(id: db.nextUniverseSyncId,
+                                eventKey: key,
+                                sourceUniverse: sourceUniverse,
+                                sourceGalaxy: sourceGalaxy,
+                                ring: ring,
+                                op: op,
+                                logicalKey: logicalKey,
+                                payload: payload,
+                                vec: vec.normalize(),
+                                timestamp: ts,
+                                originSeq: db.nextUniverseSyncId)
+  db.universeSyncEvents.add event
+  db.persistUniverseSyncEvent(event)
+  event.id
+
+proc universeSyncEvents*(db: RocheDb,
+                         includeAcknowledged = false): seq[UniverseSyncEvent] =
+  ## 未配送/未ackの universe sync outbox を返す。配送先は core 外の scheduler/adapter が選ぶ。
+  for event in db.universeSyncEvents:
+    if includeAcknowledged or not event.acknowledged:
+      result.add event
+
+proc applyUniverseSyncEvent*(db: RocheDb, event: UniverseSyncEvent): bool =
+  ## 別 universe から受け取った event を idempotent に適用する。
+  ## true は今回適用、false は既に適用済み。
+  doAssert db.mode == mEmbedded, "universe sync event apply は embedded mode 専用"
+  if event.eventKey.len == 0:
+    raise newException(ValueError, "universe sync event key is empty")
+  if db.st.isUniverseSyncEventApplied(event.eventKey):
+    return false
+  let policy = db.ringApplyPolicy(event.ring)
+  case policy.mode
+  of ramLatestOnly, ramAppendOnly, ramBoundedHistory, ramDelayedTimestamp:
+    discard db.put(event.payload, ring = event.ring, vec = event.vec)
+  db.st.markUniverseSyncEventApplied(event.eventKey)
+  true
+
+proc ackUniverseSyncEvent*(db: RocheDb, eventId: uint64): UniverseSyncEvent =
+  ## 配送先 universe で durable に受け取られたことを outbox 側で ack する。
+  for i, event in db.universeSyncEvents:
+    if event.id == eventId:
+      var updated = event
+      updated.acknowledged = true
+      db.universeSyncEvents[i] = updated
+      db.persistUniverseSyncEvent(updated)
+      return updated
+  raise newException(KeyError, "universe sync event not found")
+
+proc pruneAckedUniverseSyncEvents*(db: RocheDb): int =
+  ## ack 済み universe sync events を outbox から削除する。
+  for i in countdown(db.universeSyncEvents.len - 1, 0):
+    if db.universeSyncEvents[i].acknowledged:
+      let eventId = db.universeSyncEvents[i].id
+      db.universeSyncEvents.delete(i)
+      if db.mode == mEmbedded and not db.st.isNil:
+        db.st.deleteUniverseSyncEvent(eventId)
+      inc result
+
+proc syncUniverseOnce*(source, target: RocheDb,
+                       pruneAcked = false): UniverseSyncStats =
+  ## source outbox から target store へ一度だけ event を配送する。
+  ## Transport / scheduling は呼び出し側が担当し、core は durable event 境界だけを提供する。
+  doAssert source.mode == mEmbedded, "source universe sync は embedded mode 専用"
+  doAssert target.mode == mEmbedded, "target universe sync は embedded mode 専用"
+  for event in source.universeSyncEvents():
+    inc result.read
+    if not target.universeSyncEventReady(event):
+      inc result.skipped
+      continue
+    try:
+      if target.applyUniverseSyncEvent(event):
+        inc result.applied
+      else:
+        inc result.skipped
+      discard source.ackUniverseSyncEvent(event.id)
+      inc result.acked
+    except CatchableError:
+      inc result.errors
+  if pruneAcked:
+    result.pruned = source.pruneAckedUniverseSyncEvents()
 
 proc enqueueWarp*(db: RocheDb, rings: seq[string], whereField: string,
                   equals: JsonNode, patchDoc: JsonNode,
@@ -2223,7 +2606,8 @@ proc metrics*(db: RocheDb): seq[string] =
                " forwarders " & $db.st.forwarders.len &
                " clusterTxCommitted " & $db.st.clusterTxCommitted &
                " clusterTxApplied " & $db.st.clusterTxApplied &
-               " clusterTxPending " & $db.st.clusterTxPending
+               " clusterTxPending " & $db.st.clusterTxPending &
+               " universeSyncEvents " & $db.st.universeSyncEvents.len
   of mCluster:
     for i in 0 ..< db.client.peers.len:
       result.add db.client.metricsReq(i)

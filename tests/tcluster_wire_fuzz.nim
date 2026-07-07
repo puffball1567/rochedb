@@ -27,6 +27,7 @@ proc tryReadResponse(sock: Socket) =
 
 proc checkAlive(peers: seq[Peer], label: string) =
   var c = newClusterClient(peers, username = "alice", password = "secret")
+  check c.wireVersionReq(0) == WireProtocolVersion
   let h = c.healthReq(0)
   check h.contains("node=0")
   let id = c.putRingReq(0, "allowed/fuzz/" & label, "ok-" & label, @[])
@@ -62,6 +63,10 @@ suite "cluster wire fuzz":
       FuzzCase(name: "negative-bget", header: "BGET 1 -1"),
       FuzzCase(name: "huge-retrieve-vector",
                header: "RETRIEVE 1 1 3 999999999"),
+      FuzzCase(name: "short-uapply", header: "UAPPLY"),
+      FuzzCase(name: "huge-uapply", header: "UAPPLY 999999999"),
+      FuzzCase(name: "bad-uapply-json", header: "UAPPLY 8",
+               payload: "not-json"),
       FuzzCase(name: "short-applytx", header: "APPLYTX"),
       FuzzCase(name: "short-trf", header: "TRF"),
       FuzzCase(name: "unknown-command", header: "WHAT_IS_THIS 1 2 3"),
