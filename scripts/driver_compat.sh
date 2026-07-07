@@ -42,7 +42,7 @@ fi
 
 if require_cmd cargo; then
   log "Rust driver"
-  cargo test --manifest-path drivers/rust/Cargo.toml
+  printf '[compat] skip: Rust driver is split out of the core repository\n'
 fi
 
 if require_cmd go; then

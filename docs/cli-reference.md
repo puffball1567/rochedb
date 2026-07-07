@@ -71,6 +71,29 @@ bin/roche --help
 | `shutdown` | Stop a server. |
 | `demo` | Run a small cluster demo. |
 
+## Driver Commands
+
+RocheDB keeps language drivers small and publishable as language-native
+packages. External drivers can live outside the core repository while the
+`roche` CLI keeps the discovery path consistent.
+
+```sh
+roche driver list
+roche driver info rust
+roche driver install rust
+```
+
+`driver install` currently prints the official repository/package path and setup
+command. It does not execute remote scripts or download code. This keeps the
+bootstrap path safe while preserving a single command surface for Rust, Node,
+PHP, Python, Go, and later drivers.
+
+| Command | Purpose |
+|---|---|
+| `driver list` | Show known official driver targets and their publication status. |
+| `driver info LANG` | Show repository, package name, mode, and notes for one driver. |
+| `driver install LANG` | Print the recommended setup command and follow-up smoke-test path. |
+
 ## Document Commands
 
 These commands work with `--data=DIR` for embedded mode and `--peers=...` for a

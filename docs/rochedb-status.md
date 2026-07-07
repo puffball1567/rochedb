@@ -81,7 +81,7 @@ Translations:
 | Python | Done | Native wire minimal |
 | Node.js / TypeScript | Done | ESM native wire minimal |
 | Bun | Done | TypeScript smoke test |
-| Rust | Done | C ABI wrapper minimal |
+| Rust | In progress | Split out of core repo; external driver package planned first |
 | Go | Done | C ABI wrapper minimal |
 | PHP | Done | FFI / C ABI wrapper with Docker smoke |
 | Swift | Done | SwiftPM C ABI wrapper with Linux Docker smoke |
@@ -89,6 +89,7 @@ Translations:
 | C++ minimal | Done | OSS generic C++ wrapper. Unreal official plugin is separate |
 | Kotlin-first JVM | Done | JNI / C ABI wrapper with Docker smoke |
 | React Native / WASM local state | Post-v0.1 candidate | Browser / React Native state boundary; handled with the WASM line, not before Kotlin |
+| Driver discovery CLI | Done | `roche driver list/info/install` prints official driver metadata and setup commands without executing remote scripts |
 | Driver compatibility test suite | Partial | `scripts/driver_compat.sh`; Docker-backed PHP / Swift / Kotlin are opt-in and verified |
 | Nimble package publishing | Done | `nimble install rochedb` is available. Non-Nim registries remain future work |
 

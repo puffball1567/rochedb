@@ -60,10 +60,12 @@ Release checklist: [release-checklist.md](./release-checklist.md)
 | C ABI | Done | ABI version / last error / put/get/retrieve/batch/atlas |
 | Python | Done | Native wire minimal |
 | Node.js / TypeScript / Bun | Done | ESM native wire minimal |
-| Rust / Go | Done | C ABI wrapper minimal |
+| Rust | In progress | Split out of core repo; external driver package planned first |
+| Go | Done | C ABI wrapper minimal |
 | PHP / Swift / Kotlin | Done | Docker smoke available |
 | C# / C++ | Done | OSS generic wrappers; Unity / Unreal official assets are separate candidates |
 | React Native / WASM | Post-v0.1 candidate | Browser / local state boundary |
+| Driver discovery CLI | Done | `roche driver list/info/install` prints official driver metadata and setup commands without executing remote scripts |
 | Nimble package publishing | Done | `nimble install rochedb` is available. Non-Nim registries remain future work |
 
 ## Benchmarks / Demos
