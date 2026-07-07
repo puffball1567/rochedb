@@ -5,7 +5,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 WORK="${TMPDIR:-/tmp}/roche-cli-crud-smoke-$$"
+BASE_PORT="${ROCHE_CLI_CRUD_BASE_PORT:-17991}"
+PIDS=()
 cleanup() {
+  if ((${#PIDS[@]} > 0)); then
+    kill "${PIDS[@]}" 2>/dev/null || true
+    wait "${PIDS[@]}" 2>/dev/null || true
+  fi
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -15,6 +21,8 @@ mkdir -p "$WORK" "$ROOT/bin"
 echo "[cli-crud] build roche"
 nim c -d:release --nimcache:/tmp/nimcache_roche_cli_crud \
   -o:bin/roche src/rochecli.nim >/dev/null
+nim c -d:release --nimcache:/tmp/nimcache_roched_cli_crud \
+  -o:src/roched src/roched.nim >/dev/null
 
 echo "[cli-crud] help"
 bin/roche --help | grep -q "roche put"
@@ -53,5 +61,21 @@ grep -q "put OK" <<<"$shell_out"
 grep -q "count=1" <<<"$shell_out"
 grep -q '"title":"Shell"' <<<"$shell_out"
 grep -q '"schema": "rochedb.atlas.v1"' <<<"$shell_out"
+
+echo "[cli-crud] auth error is user-facing"
+src/roched --id=0 --peers="127.0.0.1:${BASE_PORT}" \
+  --data="$WORK/auth-server" --user=app --password=right \
+  --secret-key=secret --slow-tick=0.05 >"$WORK/auth-server.log" 2>&1 &
+PIDS+=("$!")
+for _ in $(seq 1 50); do
+  if bin/roche health --peers="127.0.0.1:${BASE_PORT}" \
+      --user=app --password=right --secret-key=secret >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.1
+done
+auth_out="$(bin/roche health --peers="127.0.0.1:${BASE_PORT}" \
+  --user=app --password=wrong --secret-key=secret 2>&1 >/dev/null || true)"
+grep -q '^error: AUTHRESP failed: ERR auth-required$' <<<"$auth_out"
 
 echo "[cli-crud] OK"

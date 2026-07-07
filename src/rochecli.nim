@@ -1593,7 +1593,7 @@ proc printHelp() =
   echo ""
   echo "Cluster get/query requires --ring=RING so the CLI can reconstruct ring placement metadata."
 
-when isMainModule:
+proc main() =
   var cmd = ""
   var peers = ""
   var dataDir = ""
@@ -1793,4 +1793,11 @@ when isMainModule:
                       galaxy, metricsFormat)
   else:
     printHelp()
+    quit(1)
+
+when isMainModule:
+  try:
+    main()
+  except CatchableError as e:
+    stderr.writeLine("error: " & e.msg)
     quit(1)

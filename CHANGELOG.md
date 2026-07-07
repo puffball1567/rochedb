@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.2.0
+
+### Added
+
+- Added GitHub Pages documentation structure, public API/config/CLI references,
+  and topology / universe sync guides.
+- Added `bin/roche` CLI workflows for CRUD, ring listing/counting, atlas, and a
+  minimal interactive shell.
+- Added Docker Compose demos for a single galaxy, a three-node galaxy, and a
+  local/remote universe-shaped topology.
+- Added remote universe sync smoke coverage for target downtime, restart
+  recovery, applied-key persistence, and duplicate delivery idempotency.
+- Added user-facing CLI error handling for wire/auth failures.
+
+### Changed
+
+- Tightened Docker demo builds with a small build context and explicit
+  nimsodium/libsodium setup.
+- Reworked recovery topology terminology around universes and galaxies.
+
 ## v0.1.5
 
 ### Changed

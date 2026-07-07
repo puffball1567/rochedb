@@ -2,6 +2,29 @@
 
 This is the canonical release checklist for the public RocheDB repository.
 
+## v0.2.0 Positioning
+
+Release v0.2.0 as a technical preview / research OSS release with stronger
+operational demos and Universe sync coverage.
+
+Recommended wording:
+
+```text
+RocheDB v0.2.0 Technical Preview
+A ring/galaxy-oriented document and vector database prototype focused on
+smaller working sets, durable recovery boundaries, and eventual universe sync.
+```
+
+Avoid claiming that RocheDB is generally faster than Redis, PostgreSQL, or
+Apache Arrow. The current defensible claim is narrower:
+
+```text
+Local reads are being moved toward existing database speed bands, while
+RAG-style synthetic benchmarks show reduced scanned candidates and token input
+under the documented conditions. v0.2 adds stronger operational and sync
+validation for evaluation.
+```
+
 ## v0.1.0 Positioning
 
 Release v0.1.0 as a technical preview / research OSS release.
@@ -61,9 +84,13 @@ under the documented conditions.
 | Universe sync JSONL failure | Malformed JSONL rows are counted, valid rows still apply, replay is idempotent, and source ack/prune remains explicit | Done |
 | Universe sync observability | Remote apply status and process-local apply/error counters are exposed through `universe-status --peers --metrics` | Done |
 | Universe sync authz/fuzz | `UAPPLY` authz, idempotency, malformed frame, oversized body, and invalid JSON cases pass | Done |
+| Universe sync restart | Remote target restart preserves applied keys, and duplicate delivery is skipped after restart | Done |
 | Protocol compatibility | `WIREVER` exists and protocol compatibility notes document versioning and wire vector byte order | Done |
 | Driver byte order | C ABI versus TCP wire vector endian contract is documented | Done |
 | Documentation site | GitHub Pages workflow plus API / config / CLI entry pages exist under `docs/` | Done |
+| Docker Compose demos | Single galaxy, three-node galaxy, and local/remote universe demos build, start, pass health checks, and cleanly stop | Done |
+| CLI usability | CRUD, shell, help, and user-facing auth error smoke checks pass | Done |
+| Package metadata | `rochedb.nimble` is valid and versioned for v0.2.0 | Done |
 | Production boundary | README/status/design avoid claiming enterprise production readiness before TLS, audit, coordinator redundancy, and mixed-version tests | Done |
 | Planner boundary | Heuristic planner status and benchmark dependency are documented | Done |
 
@@ -103,9 +130,11 @@ all of them fit into v0.2.0:
 Before tagging:
 
 1. Run core tests.
-2. Run local cluster smoke scripts.
-3. Run selected Docker-backed driver smoke tests.
-4. Review benchmark wording.
-5. Review license and third-party notices.
-6. Remove generated binaries and temporary artifacts.
-7. Confirm README and status docs describe v0.1.0 as technical preview.
+2. Run `scripts/test_all_smoke.sh`.
+3. Run Docker Compose demo checks from `examples/compose/README.md`.
+4. Run selected Docker-backed driver smoke tests when Docker capacity allows.
+5. Run `nimble check`.
+6. Review benchmark wording.
+7. Review license and third-party notices.
+8. Remove generated binaries and temporary artifacts.
+9. Confirm README and status docs describe v0.2.0 as technical preview.

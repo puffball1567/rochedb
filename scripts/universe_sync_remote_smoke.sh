@@ -6,17 +6,37 @@ BASE_PORT="${ROCHE_UNIVERSE_SYNC_BASE_PORT:-17611}"
 PEERS="127.0.0.1:${BASE_PORT},127.0.0.1:$((BASE_PORT + 1)),127.0.0.1:$((BASE_PORT + 2))"
 WORK="${TMPDIR:-/tmp}/rochedb-universe-sync-remote-smoke-$$"
 SOURCE="$WORK/source"
+RETRY_SOURCE="$WORK/retry-source"
 TARGET="$WORK/target"
 PIDS=()
 
-cleanup() {
+stop_target() {
   if ((${#PIDS[@]} > 0)); then
     kill "${PIDS[@]}" 2>/dev/null || true
     wait "${PIDS[@]}" 2>/dev/null || true
+    PIDS=()
   fi
+}
+
+cleanup() {
+  stop_target
   rm -rf "$WORK"
 }
 trap cleanup EXIT
+
+start_target() {
+  for id in 0 1 2; do
+    src/roched --id="$id" --peers="$PEERS" --data="$TARGET/node$id" --slow-tick=0.05 &
+    PIDS+=("$!")
+  done
+  for _ in $(seq 1 50); do
+    if src/rochecli health --peers="$PEERS" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.1
+  done
+  src/rochecli health --peers="$PEERS" >/dev/null
+}
 
 cd "$ROOT"
 mkdir -p "$WORK" "$ROOT/bin"
@@ -34,6 +54,7 @@ nim c -d:release --nimcache:/tmp/nimcache_roche_universe_sync_demo \
 echo "[universe-remote] enqueue source event"
 bin/universe_sync_demo --source="$SOURCE" --target="$TARGET" --mode=enqueue
 src/rochecli universe-status --data="$SOURCE" | grep -q "pending=1"
+cp -a "$SOURCE" "$RETRY_SOURCE"
 
 echo "[universe-remote] target down keeps source pending"
 src/rochecli universe-sync --data="$SOURCE" --peers="$PEERS" --prune-acked |
@@ -41,17 +62,7 @@ src/rochecli universe-sync --data="$SOURCE" --peers="$PEERS" --prune-acked |
 src/rochecli universe-status --data="$SOURCE" | grep -q "pending=1"
 
 echo "[universe-remote] start target server"
-for id in 0 1 2; do
-  src/roched --id="$id" --peers="$PEERS" --data="$TARGET/node$id" --slow-tick=0.05 &
-  PIDS+=("$!")
-done
-for _ in $(seq 1 50); do
-  if src/rochecli health --peers="$PEERS" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.1
-done
-src/rochecli health --peers="$PEERS" >/dev/null
+start_target
 
 echo "[universe-remote] sync source to remote target"
 src/rochecli universe-sync --data="$SOURCE" --peers="$PEERS" --prune-acked |
@@ -60,5 +71,16 @@ src/rochecli universe-status --data="$SOURCE" | grep -q "pending=0"
 src/rochecli universe-status --peers="$PEERS" | grep -q "applied=1"
 src/rochecli universe-status --peers="$PEERS" --metrics | grep -q "universeApplyApplied 1"
 src/rochecli universe-status --peers="$PEERS" --metrics | grep -q "universeApplyErrors 0"
+
+echo "[universe-remote] restart target preserves applied event keys"
+stop_target
+start_target
+src/rochecli universe-status --peers="$PEERS" | grep -q "applied=1"
+
+echo "[universe-remote] duplicate delivery after restart is skipped"
+src/rochecli universe-sync --data="$RETRY_SOURCE" --peers="$PEERS" --prune-acked |
+  grep -q "read=1 applied=0 skipped=1 acked=1 pruned=1 errors=0"
+src/rochecli universe-status --peers="$PEERS" --metrics | grep -q "universeApplySkipped 1"
+src/rochecli universe-status --data="$RETRY_SOURCE" | grep -q "pending=0"
 
 echo "[universe-remote] OK"

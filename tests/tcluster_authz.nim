@@ -52,7 +52,7 @@ suite "cluster authz":
     check got.found
     check got.value == "ok"
 
-    expect AssertionDefect:
+    expect IOError:
       discard c.putRingReq(0, "blocked/docs", "no-with-body",
                            @[1.0'f32, 0.0'f32, 0.0'f32])
 
@@ -82,17 +82,17 @@ suite "cluster authz":
     let ps = parsePeers(peers)
     var c = newClusterClient(ps, username = "alice", password = "secret")
 
-    expect AssertionDefect:
+    expect IOError:
       discard c.putRingReq(0, "blocked/docs", "putr-body",
                            @[1.0'f32, 2.0'f32, 3.0'f32])
     c.checkAlive(0, "putr")
 
-    expect AssertionDefect:
+    expect IOError:
       discard c.putReq(0, BlockedRing, Period, Head, "put-body",
                        @[1.0'f32, 2.0'f32])
     c.checkAlive(0, "put")
 
-    expect AssertionDefect:
+    expect IOError:
       discard c.retrieveReq(0, true, BlockedRing, @[1.0'f32, 0.0'f32], 3)
     c.checkAlive(0, "retrieve")
 
@@ -108,16 +108,16 @@ suite "cluster authz":
                            "{ title }")
     c.checkAlive(0, "tx-query")
 
-    expect AssertionDefect:
+    expect IOError:
       discard c.listRingReq(0, BlockedRing, 10, "123456789")
     c.checkAlive(0, "list")
 
-    expect AssertionDefect:
+    expect IOError:
       c.transferReq(0, BlockedRing, 0'u32, Period, Head, 1.0, "trf-body",
                     @[1.0'f32, 2.0'f32], timeoutMs = 1000)
     c.checkAlive(0, "transfer")
 
-    expect AssertionDefect:
+    expect IOError:
       c.applyTxReq(0, 90'u64,
         TxWireOp(parent: BlockedRing, seq: 0'u32, period: Period,
                  head: Head, tWrite: 1.0, payload: "apply-body",
@@ -125,13 +125,13 @@ suite "cluster authz":
         timeoutMs = 1000)
     c.checkAlive(0, "applytx")
 
-    expect AssertionDefect:
+    expect IOError:
       discard c.universeApplyReq(0,
         universeEventJson("blocked/docs", "blocked-uapply", "uapply-body"))
     c.checkAlive(0, "uapply")
 
     let txid = c.txBeginReq(0)
-    expect AssertionDefect:
+    expect IOError:
       c.txCommitReq(0, txid, @[
         TxWireOp(parent: BlockedRing, seq: 0'u32, period: Period,
                  head: Head, tWrite: 1.0, payload: "tx-body",

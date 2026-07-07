@@ -6,7 +6,11 @@ show how the universe / galaxy model maps to running processes.
 ## Single Galaxy
 
 ```sh
-docker compose -f examples/compose/single-galaxy.compose.yml up --build
+docker compose -f examples/compose/single-galaxy.compose.yml up -d --build
+docker compose -f examples/compose/single-galaxy.compose.yml exec -T roche-main \
+  rochecli health --peers=127.0.0.1:7301 \
+  --user=app --password=change-me --secret-key=change-me-too
+docker compose -f examples/compose/single-galaxy.compose.yml down
 ```
 
 Use this when you want one RocheDB galaxy with one data directory and one
@@ -15,7 +19,11 @@ credential profile.
 ## Three-Node Galaxy
 
 ```sh
-docker compose -f examples/compose/three-node-galaxy.compose.yml up --build
+docker compose -f examples/compose/three-node-galaxy.compose.yml up -d --build
+docker compose -f examples/compose/three-node-galaxy.compose.yml exec -T roche-node0 \
+  rochecli health --peers=roche-node0:7301,roche-node1:7301,roche-node2:7301 \
+  --user=train --password=change-me --secret-key=change-me-too
+docker compose -f examples/compose/three-node-galaxy.compose.yml down
 ```
 
 Use this when you want one galaxy spread across three RocheDB nodes.
@@ -23,7 +31,14 @@ Use this when you want one galaxy spread across three RocheDB nodes.
 ## Local / Remote Universe Shape
 
 ```sh
-docker compose -f examples/compose/local-remote-universe.compose.yml up --build
+docker compose -f examples/compose/local-remote-universe.compose.yml up -d --build
+docker compose -f examples/compose/local-remote-universe.compose.yml exec -T roche-training-local \
+  rochecli health --peers=127.0.0.1:7301 \
+  --user=train --password=change-me --secret-key=change-me-too
+docker compose -f examples/compose/local-remote-universe.compose.yml exec -T roche-prompt-cache-local \
+  rochecli health --peers=127.0.0.1:7301 \
+  --user=cache --password=change-me --secret-key=change-me-too
+docker compose -f examples/compose/local-remote-universe.compose.yml down
 ```
 
 Use this as a concept demo for multiple galaxies across local and remote-style
