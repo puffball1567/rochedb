@@ -17,6 +17,8 @@ Environment summary: same machine as RocheDB, AMD Ryzen 5 5600H, Linux 6.8,
 Nim 2.2.10, PostgreSQL 14.23, local TCP, single client, 100-byte payload where
 applicable.
 
+Reproduction helper: `N=10000 examples/postgres_bench.sh`.
+
 | Group | Operation | us/op | Notes |
 |---|---|---:|---|
 | RocheDB | single-key read | 45.2-46.5 | Three `roched` nodes, persistence enabled |
