@@ -19,14 +19,34 @@ applicable.
 
 Reproduction helper: `N=10000 examples/postgres_bench.sh`.
 
+Docker reproduction helper: `N=10000 examples/postgres_docker_bench.sh`.
+
 | Group | Operation | us/op | Notes |
 |---|---|---:|---|
-| RocheDB | single-key read | 45.2-46.5 | Three `roched` nodes, persistence enabled |
-| RocheDB | single-row write | 48.5-49.0 | Three `roched` nodes, persistence enabled |
+| RocheDB | single-key read | 45.9 | Three `roched` nodes, persistence enabled |
+| RocheDB | single-row write | 47.7 | Three `roched` nodes, persistence enabled |
 | RocheDB | strong-durability write | not measured | `durStrong` / `--durability=strong` was not part of this comparison |
-| PostgreSQL 14 | primary-key `SELECT` | 75 | `pgbench -M prepared`, 13.3k tps |
-| PostgreSQL 14 | single-row write, `synchronous_commit=off` | 80 | `pgbench -M prepared`, 12.5k tps |
-| PostgreSQL 14 | single-row write, `synchronous_commit=on` | 1961 | `pgbench -M prepared`, 510 tps |
+| PostgreSQL 14.23 | primary-key `SELECT` | 67 | `pgbench -M prepared`, 14,986 tps |
+| PostgreSQL 14.23 | single-row write, `synchronous_commit=off` | 79 | `pgbench -M prepared`, 12,699 tps |
+| PostgreSQL 14.23 | single-row write, `synchronous_commit=on` | 1998 | `pgbench -M prepared`, 501 tps |
+
+## PostgreSQL Docker Reference
+
+Environment summary: same host as RocheDB, Docker `overlay2`, RocheDB image
+built from `examples/compose/Dockerfile`, PostgreSQL image `postgres:14`, same
+Docker network, single client, 100-byte payload, `n=10000`. Data directories
+are bind-mounted from the repository `.tmp` directory during the helper run.
+
+Reproduction helper: `N=10000 examples/postgres_docker_bench.sh`.
+
+| Group | Operation | us/op | Notes |
+|---|---|---:|---|
+| RocheDB Docker | single-key read | 53.5 | Three `roched` containers |
+| RocheDB Docker | single-row write | 56.4 | Three `roched` containers |
+| RocheDB Docker | query projection | 60.0 | Server-side JSON projection |
+| PostgreSQL 14 Docker | primary-key `SELECT` | 92 | `pgbench -M prepared`, 10,869 tps |
+| PostgreSQL 14 Docker | single-row write, `synchronous_commit=off` | 130 | `pgbench -M prepared`, 7,666 tps |
+| PostgreSQL 14 Docker | single-row write, `synchronous_commit=on` | 1134 | `pgbench -M prepared`, 882 tps |
 
 ## Redis Reference
 

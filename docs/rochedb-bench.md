@@ -106,6 +106,9 @@ measured layer: core `27.5 ns`, public API `54.7 ns`, and C ABI `77.7 ns`.
   three-node RocheDB cluster and a temporary local PostgreSQL cluster, then runs
   both benchmark shapes. It requires `initdb`, `pg_ctl`, `psql`, and `pgbench`
   from a local PostgreSQL installation.
+- Docker reproduction helper: `N=10000 examples/postgres_docker_bench.sh`
+  starts three RocheDB containers and one PostgreSQL container on the same
+  Docker network, then runs the same benchmark shapes from inside containers.
 - Benchmark guard: the client configures a long-period benchmark ring and
   samples `locate` across the measurement horizon. The selected ring must stay
   on one owner during the run so handoff traffic is not mixed into the local
@@ -115,38 +118,74 @@ measured layer: core `27.5 ns`, public API `54.7 ns`, and C ABI `77.7 ns`.
 
 | Operation | us/op | ops/s |
 |---|---:|---:|
-| put, location calculation + 1 RTT + append log | 48.5-49.0 | 20,388-20,601 |
-| get, location calculation + 1 RTT | 45.2-46.5 | 21,506-22,100 |
-| query, server-side JSON projection | 50.4-52.5 | 19,051-19,856 |
+| put, location calculation + 1 RTT + append log | 47.7 | 20,976 |
+| get, location calculation + 1 RTT | 45.9 | 21,797 |
+| query, server-side JSON projection | 50.2 | 19,904 |
 
 ## PostgreSQL 14 Reference
 
 Same machine, temporary local PostgreSQL 14.23 cluster, single client, single
-thread, TCP endpoint `127.0.0.1:55432`, `pgbench -M prepared`.
+thread, local TCP endpoint, `pgbench -M prepared`.
 
 ### RocheDB Measurements
 
 | Operation | us/op | Notes |
 |---|---:|---|
-| single-key read | 45.2-46.5 | Three `roched` nodes, persistence enabled |
-| single-row write | 48.5-49.0 | Three `roched` nodes, persistence enabled |
+| single-key read | 45.9 | Three `roched` nodes, persistence enabled |
+| single-row write | 47.7 | Three `roched` nodes, persistence enabled |
 | strong-durability write | not measured | `durStrong` / `--durability=strong` was not part of this comparison |
 
 ### PostgreSQL Measurements
 
 | Operation | us/op | Notes |
 |---|---:|---|
-| primary-key `SELECT` | 75 | 13.3k tps |
-| single-row write, `synchronous_commit=off` | 80 | 12.5k tps |
-| single-row write, `synchronous_commit=on` | 1961 | 510 tps |
+| primary-key `SELECT` | 67 | 14,986 tps |
+| single-row write, `synchronous_commit=off` | 79 | 12,699 tps |
+| single-row write, `synchronous_commit=on` | 1998 | 501 tps |
 
 Interpretation: this compares a thin KV/document path with a SQL RDBMS path that
 includes parsing, planning, MVCC, and index maintenance. The defensible claim is
 that RocheDB's network KV path is in the same latency class as PostgreSQL
-primary-key access and is ahead under these local conditions. RocheDB's
-durability mode in this comparison was closer to `synchronous_commit=off`.
+primary-key access and is ahead under these local conditions: PostgreSQL SELECT
+was about 1.5x slower than RocheDB read, and PostgreSQL
+`synchronous_commit=off` write was about 1.7x slower than RocheDB write in this
+run. RocheDB's durability mode in this comparison was closer to
+`synchronous_commit=off`.
 RocheDB now has `durStrong` / `--durability=strong`, but that path was not part
 of the 2026-07-08 PostgreSQL comparison.
+
+## Docker-Docker PostgreSQL Reference
+
+- Date: 2026-07-08
+- Environment: same host, Docker `overlay2`, RocheDB image built from
+  `examples/compose/Dockerfile`, PostgreSQL image `postgres:14`
+- Setup: three RocheDB containers and one PostgreSQL container on the same
+  Docker network, single client, 100-byte payload, `n=10000`
+- Data placement: RocheDB and PostgreSQL data directories are bind-mounted from
+  the repository `.tmp` directory during the helper run. They are not tmpfs
+  mounts.
+- Reproduction: `N=10000 examples/postgres_docker_bench.sh`
+
+### RocheDB Docker Measurements
+
+| Operation | us/op | ops/s |
+|---|---:|---:|
+| put, location calculation + 1 RTT + append log | 56.4 | 17,744 |
+| get, location calculation + 1 RTT | 53.5 | 18,683 |
+| query, server-side JSON projection | 60.0 | 16,665 |
+
+### PostgreSQL Docker Measurements
+
+| Operation | us/op | Notes |
+|---|---:|---|
+| primary-key `SELECT` | 92 | 10,869 tps |
+| single-row write, `synchronous_commit=off` | 130 | 7,666 tps |
+| single-row write, `synchronous_commit=on` | 1134 | 882 tps |
+
+Interpretation: this is a container-to-container comparison, not the same axis
+as the local-host PostgreSQL reference above. In this Docker run, PostgreSQL
+SELECT was about 1.7x slower than RocheDB read, and PostgreSQL
+`synchronous_commit=off` write was about 2.3x slower than RocheDB write.
 
 ## Optimization History
 
