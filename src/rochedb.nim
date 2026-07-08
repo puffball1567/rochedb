@@ -169,6 +169,7 @@ type
     client: ClusterClient
     galaxy: string
     galaxyDescription: string
+    pendingLandingReads: Table[(uint64, uint32), bool]
     # delayed maintenance jobs
     nextWarpId: uint64
     warpJobs: seq[WarpJob]
@@ -900,6 +901,19 @@ proc writeAckModeForOps(db: RocheDb, ops: seq[TxWireOp]): WriteAckMode =
     if db.writeAckModeForRing(op.parent) == wamApplied:
       return wamApplied
 
+proc markPendingLandingReads(db: RocheDb, ops: seq[TxWireOp]) =
+  if db.mode != mCluster:
+    return
+  for op in ops:
+    db.pendingLandingReads[(op.parent, op.seq)] = true
+
+proc clearPendingLandingRead(db: RocheDb, id: RocheId) =
+  if db.mode == mCluster:
+    db.pendingLandingReads.del((id.parent, id.seq))
+
+proc hasPendingLandingRead(db: RocheDb, id: RocheId): bool =
+  db.mode == mCluster and db.pendingLandingReads.getOrDefault((id.parent, id.seq), false)
+
 proc waitClusterTxApplied*(db: RocheDb, txid: uint64, timeoutMs = 10_000,
                            pollMs = 20): bool =
   ## cluster landing intent が owner に apply されるまで待つ。
@@ -1056,6 +1070,8 @@ proc commit*(tx: RocheTx) =
     if tx.db.writeAckModeForOps(tx.clusterOps) == wamApplied:
       if not tx.db.waitClusterTxApplied(tx.clusterTxId):
         raise newException(IOError, "cluster transaction apply timed out")
+    else:
+      tx.db.markPendingLandingReads(tx.clusterOps)
   tx.closed = true
 
 proc commit*(tx: RocheTx, ackMode: WriteAckMode) =
@@ -1069,6 +1085,8 @@ proc commit*(tx: RocheTx, ackMode: WriteAckMode) =
     if ackMode == wamApplied:
       if not tx.db.waitClusterTxApplied(tx.clusterTxId):
         raise newException(IOError, "cluster transaction apply timed out")
+    else:
+      tx.db.markPendingLandingReads(tx.clusterOps)
     tx.closed = true
 
 proc rollback*(tx: RocheTx) =
@@ -1104,13 +1122,16 @@ proc fetchCluster(db: RocheDb, id: RocheId, selection: string, fwdDepth = 0): st
     if r.found:
       return (true, false, r.value)
     if r.deleted:
+      db.clearPendingLandingRead(id)
       return (false, true, "")
     (false, false, "")
-  let pending = landingRead()
-  if pending.deleted:
-    raise newException(KeyError, "id は cluster tx landing intent で削除済み")
-  if pending.hit:
-    return pending.value
+  if db.hasPendingLandingRead(id):
+    let pending = landingRead()
+    if pending.deleted:
+      raise newException(KeyError, "id は cluster tx landing intent で削除済み")
+    if pending.hit:
+      return pending.value
+    db.clearPendingLandingRead(id)
   for node in [primary, (primary + n - 1) mod n, primary]:
     var r: tuple[found: bool, node: int, value: string, forwarded: bool,
                  newParent: uint64, newSeq: uint32, newTWrite: float]
@@ -1164,18 +1185,7 @@ proc batchGet*(db: RocheDb, ids: seq[RocheId]): seq[string] =
     var byNode = initTable[int, seq[tuple[idx: int, id: RocheId]]]()
     let t = epochTime()
     result = newSeq[string](ids.len)
-    var resolved = newSeq[bool](ids.len)
     for i, id in ids:
-      let ri = db.rings[id.parent]
-      let pending = db.client.txGetIdReq(0, WireId(parent: id.parent,
-        epoch: id.epoch, seq: id.seq, tWrite: id.tWrite, period: ri.period,
-        head: ri.headAngle))
-      if pending.deleted:
-        raise newException(KeyError, "id は cluster tx landing intent で削除済み")
-      if pending.found:
-        result[i] = pending.value
-        resolved[i] = true
-        continue
       let node = int(db.tbl.node(db.orbitOf(id), t))
       byNode.mgetOrPut(node, @[]).add (idx: i, id: id)
     for node, entries in byNode:
@@ -1188,11 +1198,10 @@ proc batchGet*(db: RocheDb, ids: seq[RocheId]): seq[string] =
       let values = db.client.batchGetReq(node, req)
       for i, value in values:
         let idx = entries[i].idx
-        if not resolved[idx]:
-          if value.len == 0:
-            result[idx] = db.get(entries[i].id)
-          else:
-            result[idx] = value
+        if value.len == 0:
+          result[idx] = db.get(entries[i].id)
+        else:
+          result[idx] = value
 
 proc exists*(db: RocheDb, id: RocheId): bool =
   ## ORM / driver 向けの存在確認。cluster では get による確認。
@@ -1225,6 +1234,8 @@ proc remove*(db: RocheDb, id: RocheId) =
     if db.writeAckModeForOps(ops) == wamApplied:
       if not db.waitClusterTxApplied(txid):
         raise newException(IOError, "cluster delete apply timed out")
+    else:
+      db.markPendingLandingReads(ops)
 
 proc deleteById*(db: RocheDb, id: RocheId) =
   ## ORM で直感的に使うための alias。
@@ -1257,6 +1268,8 @@ proc update*(db: RocheDb, id: RocheId, payload: string,
     if db.writeAckModeForOps(ops) == wamApplied:
       if not db.waitClusterTxApplied(txid):
         raise newException(IOError, "cluster update apply timed out")
+    else:
+      db.markPendingLandingReads(ops)
 
 proc update*(db: RocheDb, id: RocheId, doc: JsonNode,
              vec: seq[float32] = @[]) =

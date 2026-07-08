@@ -389,10 +389,19 @@ proc pickStableRing(db: RocheDb, horizon: float): string =
   ## using only the public API. This works because future location is computed.
   for i in 0 .. 20:
     result = "bench" & $i
+    db.configureRing(result, max(3600.0, horizon * 10.0))
     let probe = db.put("probe", ring = result)
-    if db.locate(probe) == db.locate(probe, at = epochTime() + horizon):
+    let t0 = epochTime()
+    let node = db.locate(probe, at = t0)
+    var stable = true
+    for step in 1 .. 10:
+      if db.locate(probe, at = t0 + horizon * float(step) / 10.0) != node:
+        stable = false
+        break
+    if stable:
       return
   result = "bench"
+  db.configureRing(result, max(3600.0, horizon * 10.0))
 
 proc runBench(peers, username, password, authToken, secretKey, galaxy: string, n: int) =
   var db = connect(peers, username = username, password = password,

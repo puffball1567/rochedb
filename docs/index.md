@@ -20,6 +20,7 @@ downstream AI/RAG or application logic.
 - [How RocheDB Differs From Typical NoSQL](nosql-positioning.md)
 - [Feature Status / Roadmap](rochedb-status.md)
 - [Benchmark Notes](rochedb-bench.md)
+- [Benchmark Comparison Tables](benchmark-comparison.md)
 
 ## Core Guides
 

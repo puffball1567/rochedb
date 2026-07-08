@@ -310,15 +310,18 @@ application processing.
 | API minimum test | 2 rings / 4 vectors | `skippedVectors` and `candidateReduction` confirm pre-filtered search scope |
 
 Reference latency results are tracked in
-[docs/rochedb-bench.md](docs/rochedb-bench.md). The short version is:
+[docs/rochedb-bench.md](docs/rochedb-bench.md), with compact comparison tables
+in [docs/benchmark-comparison.md](docs/benchmark-comparison.md). The short
+version is:
 
-- RocheDB 3-node TCP with persistence enabled measured `45.6 us` per single-key
-  read and `49.2 us` per single-key write in the local smoke benchmark.
-- PostgreSQL 14 on the same machine measured `84 us` for primary-key read and
-  `77 us` for `synchronous_commit=off` single-row write in the referenced
-  comparison.
-- A Docker Redis smoke test measured RocheDB TCP `BGET` at `1.56 us/op` and
-  Redis pipeline GET at `3.56 us/op` under the documented local conditions.
+- RocheDB 3-node TCP with persistence enabled measured `45.2-46.5 us` per
+  single-key read and `48.5-49.0 us` per single-key write in repeated local
+  benchmark runs.
+- PostgreSQL 14 on the same machine measured `75 us` for primary-key read and
+  `80 us` for `synchronous_commit=off` single-row write over local TCP.
+- Local Redis 6.0.16 measured `41.23 us/op` for single GET and `3.68 us/op`
+  for pipeline GET. RocheDB TCP GET measured `44.87 us/op`; RocheDB TCP BGET
+  measured `1.47 us/op` in the same local single-client benchmark shape.
 
 These are not universal performance claims. They show that the local read path
 is already competitive enough for the working-set reduction story to matter.
