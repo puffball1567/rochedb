@@ -102,6 +102,10 @@ measured layer: core `27.5 ns`, public API `54.7 ns`, and C ABI `77.7 ns`.
   persistent TCP connection, 100-byte payload, `n=10000`
 - Reproduction: start three `roched` processes with `--id=k --peers=...
   --data=...`, then run `roche bench --peers=... --n=10000`
+- Reproduction helper: `N=10000 examples/postgres_bench.sh` starts a temporary
+  three-node RocheDB cluster and a temporary local PostgreSQL cluster, then runs
+  both benchmark shapes. It requires `initdb`, `pg_ctl`, `psql`, and `pgbench`
+  from a local PostgreSQL installation.
 - Benchmark guard: the client configures a long-period benchmark ring and
   samples `locate` across the measurement horizon. The selected ring must stay
   on one owner during the run so handoff traffic is not mixed into the local
