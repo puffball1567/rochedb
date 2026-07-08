@@ -314,11 +314,15 @@ Reference latency results are tracked in
 in [docs/benchmark-comparison.md](docs/benchmark-comparison.md). The short
 version is:
 
-- RocheDB 3-node TCP with persistence enabled measured `45.2-46.5 us` per
-  single-key read and `48.5-49.0 us` per single-key write in repeated local
-  benchmark runs.
-- PostgreSQL 14 on the same machine measured `75 us` for primary-key read and
-  `80 us` for `synchronous_commit=off` single-row write over local TCP.
+- RocheDB 3-node TCP with persistence enabled measured `45.9 us` per
+  single-key read and `47.7 us` per single-key write in the PostgreSQL
+  comparison helper run.
+- PostgreSQL 14.23 on the same machine measured `67 us` for primary-key read
+  and `79 us` for `synchronous_commit=off` single-row write over local TCP.
+- The PostgreSQL comparison also has a Docker-Docker reproduction helper; in
+  the included run RocheDB measured `53.5 us` read / `56.4 us` write, while
+  PostgreSQL measured `92 us` primary-key read / `130 us`
+  `synchronous_commit=off` write.
 - Local Redis 6.0.16 measured `41.23 us/op` for single GET and `3.68 us/op`
   for pipeline GET. RocheDB TCP GET measured `44.87 us/op`; RocheDB TCP BGET
   measured `1.47 us/op` in the same local single-client benchmark shape.
