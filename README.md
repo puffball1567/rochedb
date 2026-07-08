@@ -401,14 +401,13 @@ examples/ai_rag_case_study.sh
 Use an existing local Redis server:
 
 ```sh
-roche redis-bench --n=100000 --payload-bytes=100 --redis=127.0.0.1:6379
+N=1000 examples/redis_local_bench.sh
 ```
 
-Or use the Docker-based smoke comparison:
+Or compare Redis and RocheDB inside the same Docker network:
 
 ```sh
-examples/redis_bench.sh
-ROCHED=1 examples/redis_bench.sh
+N=1000 examples/redis_docker_bench.sh
 ```
 
 ### Server Options

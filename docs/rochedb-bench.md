@@ -188,6 +188,11 @@ revisit fixes this because movement is forward-only.
 - Reproduction: start one local `roched`, then run
   `roche redis-bench --n=1000 --payload-bytes=100 --redis=127.0.0.1:6379
   --peers=127.0.0.1:17301`
+- Local reproduction helper: `N=1000 examples/redis_local_bench.sh` starts one
+  local `roched` and compares it with an existing local Redis endpoint.
+- Docker reproduction helper: `N=1000 examples/redis_docker_bench.sh` builds a
+  RocheDB Docker image, starts Redis and RocheDB on the same Docker network, and
+  runs the benchmark from inside that network.
 - Purpose: smoke-test whether RocheDB simple read and batch read are in the same
   latency class as Redis TCP and Redis pipeline under local constraints
 
@@ -201,7 +206,7 @@ Redis measurements under the same local benchmark shape:
 
 | Operation | us/op | Interpretation |
 |---|---:|---|
-| Redis localhost GET | 41.23 | Local Redis, non-pipelined |
+| Redis TCP GET | 41.23 | Local Redis, non-pipelined |
 | Redis pipeline GET | 3.68 | Batch size 256 |
 
 Interpretation: RocheDB TCP get is in the same latency class as non-pipelined

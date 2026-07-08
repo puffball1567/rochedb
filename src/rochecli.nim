@@ -811,8 +811,8 @@ proc runRedisBench(n, payloadBytes: int, redisEndpoint, peers, username,
     echo &"  RocheDB TCP put      {rocheTcpPutUs:8.2f} µs/op ({1e6 / rocheTcpPutUs:9.0f} ops/s)"
     echo &"  RocheDB TCP get      {rocheTcpGetUs:8.2f} µs/op ({1e6 / rocheTcpGetUs:9.0f} ops/s)"
     echo &"  RocheDB TCP batch get{rocheTcpBatchGetUs:8.2f} µs/op ({1e6 / rocheTcpBatchGetUs:9.0f} ops/s)"
-  echo &"  Redis localhost SET  {redisSetUs:8.2f} µs/op ({1e6 / redisSetUs:9.0f} ops/s)"
-  echo &"  Redis localhost GET  {redisGetUs:8.2f} µs/op ({1e6 / redisGetUs:9.0f} ops/s)"
+  echo &"  Redis TCP SET        {redisSetUs:8.2f} µs/op ({1e6 / redisSetUs:9.0f} ops/s)"
+  echo &"  Redis TCP GET        {redisGetUs:8.2f} µs/op ({1e6 / redisGetUs:9.0f} ops/s)"
   echo &"  Redis pipeline SET   {redisPipeSetUs:8.2f} µs/op ({1e6 / redisPipeSetUs:9.0f} ops/s)"
   echo &"  Redis pipeline GET   {redisPipeGetUs:8.2f} µs/op ({1e6 / redisPipeGetUs:9.0f} ops/s)"
   if peers.len > 0:

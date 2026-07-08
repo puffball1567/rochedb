@@ -35,12 +35,16 @@ Nim 2.2.10, local Redis 6.0.16, one local `roched`, persistence disabled,
 local TCP, single client, 100-byte payload, `n=1000`, Redis pipeline batch size
 256.
 
+Local reproduction helper: `N=1000 examples/redis_local_bench.sh`.
+
+Docker reproduction helper: `N=1000 examples/redis_docker_bench.sh`.
+
 | Group | Operation | us/op | Notes |
 |---|---|---:|---|
 | RocheDB | embedded get | 0.03 | In-process hot path; no TCP |
 | RocheDB | TCP GET | 44.87 | One request / one response |
 | RocheDB | TCP BGET | 1.47 | Batch read; comparable axis to Redis pipeline |
-| Redis 6.0.16 | localhost GET | 41.23 | Non-pipelined local Redis |
+| Redis 6.0.16 | TCP GET | 41.23 | Non-pipelined local Redis |
 | Redis 6.0.16 | pipeline GET | 3.68 | Batch size 256 |
 
 ## Working-Set And Token Reduction
