@@ -96,32 +96,45 @@ measured layer: core `27.5 ns`, public API `54.7 ns`, and C ABI `77.7 ns`.
 
 # Cluster Mode and PostgreSQL Reference
 
-- Date: 2026-07-04, after the initial scale-out implementation
-- Environment: same machine, AMD Ryzen 5 5600H
+- Date: 2026-07-08, after the v0.2.5 read-path and benchmark-ring fixes
+- Environment: same machine, AMD Ryzen 5 5600H / Linux 6.8 / Nim 2.2.10
 - RocheDB setup: three `roched` nodes, persistence enabled, single client,
   persistent TCP connection, 100-byte payload, `n=10000`
 - Reproduction: start three `roched` processes with `--id=k --peers=...
   --data=...`, then run `roche bench --peers=... --n=10000`
-- Benchmark guard: the client chooses a stable ring whose arc ownership does not
-  cross a boundary during the run, using `locate(now) == locate(now + 60s)`
+- Benchmark guard: the client configures a long-period benchmark ring and
+  samples `locate` across the measurement horizon. The selected ring must stay
+  on one owner during the run so handoff traffic is not mixed into the local
+  request-path measurement.
 
 ## RocheDB Cluster Path
 
 | Operation | us/op | ops/s |
 |---|---:|---:|
-| put, location calculation + 1 RTT + append log | 49.2 | 20,327 |
-| get, location calculation + 1 RTT | 45.6 | 21,947 |
-| query, server-side JSON projection | 52.5 | 19,046 |
+| put, location calculation + 1 RTT + append log | 48.5-49.0 | 20,388-20,601 |
+| get, location calculation + 1 RTT | 45.2-46.5 | 21,506-22,100 |
+| query, server-side JSON projection | 50.4-52.5 | 19,051-19,856 |
 
 ## PostgreSQL 14 Reference
 
-Same machine, single connection, TCP, measured with `pgbench`.
+Same machine, temporary local PostgreSQL 14.23 cluster, single client, single
+thread, TCP endpoint `127.0.0.1:55432`, `pgbench -M prepared`.
 
-| Operation | RocheDB | PostgreSQL 14 | Ratio |
-|---|---:|---:|---:|
-| single-key read | 45.6 us | 84 us, primary-key `SELECT`, 11.9k tps | 1.8x |
-| single-row write | 49.2 us | 77 us, `synchronous_commit=off`, 13.0k tps | 1.6x |
-| single-row write, strong durability | not measured in this comparison | 2010 us, `synchronous_commit=on`, 497 tps | n/a |
+### RocheDB Measurements
+
+| Operation | us/op | Notes |
+|---|---:|---|
+| single-key read | 45.2-46.5 | Three `roched` nodes, persistence enabled |
+| single-row write | 48.5-49.0 | Three `roched` nodes, persistence enabled |
+| strong-durability write | not measured | `durStrong` / `--durability=strong` was not part of this comparison |
+
+### PostgreSQL Measurements
+
+| Operation | us/op | Notes |
+|---|---:|---|
+| primary-key `SELECT` | 75 | 13.3k tps |
+| single-row write, `synchronous_commit=off` | 80 | 12.5k tps |
+| single-row write, `synchronous_commit=on` | 1961 | 510 tps |
 
 Interpretation: this compares a thin KV/document path with a SQL RDBMS path that
 includes parsing, planning, MVCC, and index maintenance. The defensible claim is
@@ -129,7 +142,7 @@ that RocheDB's network KV path is in the same latency class as PostgreSQL
 primary-key access and is ahead under these local conditions. RocheDB's
 durability mode in this comparison was closer to `synchronous_commit=off`.
 RocheDB now has `durStrong` / `--durability=strong`, but that path was not part
-of the 2026-07-04 PostgreSQL comparison.
+of the 2026-07-08 PostgreSQL comparison.
 
 ## Optimization History
 
@@ -138,9 +151,18 @@ An early cluster `get` measured around `1276 us`. Two issues dominated:
 1. A handoff scan ran after each ready `select`, adding roughly `200 us` of orbit
    calculation per request. This was throttled with a monotonic 100 ms gate.
 2. The benchmark accidentally chose a ring whose head angle sat on an arc
-   boundary, so 10,000 records migrated during the run. The benchmark now
-   chooses a stable ring. The storm itself was valid behavior, but reads during
-   that interval pay the wake-fallback cost.
+   boundary, so 10,000 records migrated during the run. The first guard only
+   compared `locate(now)` with `locate(now + 60s)`, which can misclassify a
+   full-period orbit as stable even when it crosses other nodes in between. The
+   benchmark now uses a long-period ring and samples intermediate points across
+   the measurement horizon. The storm itself was valid behavior, but reads
+   during that interval pay the wake-fallback cost.
+3. v0.2.4 added cluster transaction landing-zone reads. A first implementation
+   checked the landing zone before ordinary cluster GET/BGET, adding an
+   avoidable request to node0 on the normal read path. v0.2.5 tracks only IDs
+   written through accepted-but-not-yet-applied operations on the current client,
+   so ordinary reads use the direct owner path while those pending IDs can still
+   read their landing intent.
 
 During this work a TOCTOU race was found: a read could check the primary, then
 the wake, while the record moved forward and missed both. A final primary
@@ -150,29 +172,38 @@ revisit fixes this because movement is forward-only.
 
 # Redis Approximation and BGET
 
-- Date: 2026-07-04
+- Date: 2026-07-08, after the v0.2.5 landing-zone read-path fix
 - Environment: same machine, AMD Ryzen 5 5600H / Linux 6.8 / Nim 2.2.10
   `-d:release`
-- Redis: Docker `redis:7-alpine`, `--network host`, endpoint `127.0.0.1:6379`
+- Redis: local `/usr/bin/redis-server`, Redis 6.0.16, endpoint
+  `127.0.0.1:6379`
 - RocheDB TCP: local one-node `roched`, endpoint `127.0.0.1:17301`,
   persistence disabled, persistent TCP connection
 - Conditions: 100-byte payload, `n=1000`, single client, Redis pipeline batch
   size 256
-- Reproduction: `ROCHED=1 N=1000 PAYLOAD_BYTES=100 examples/redis_bench.sh`
+- Reproduction: start one local `roched`, then run
+  `roche redis-bench --n=1000 --payload-bytes=100 --redis=127.0.0.1:6379
+  --peers=127.0.0.1:17301`
 - Purpose: smoke-test whether RocheDB simple read and batch read are in the same
   latency class as Redis TCP and Redis pipeline under local constraints
 
 | Operation | us/op | Interpretation |
 |---|---:|---|
-| RocheDB embedded get | 0.05 | In-process hot path; no TCP |
-| RocheDB TCP get | 44.16 | One request / one response |
-| RocheDB TCP BGET | 1.56 | Batch read; comparable axis to Redis pipeline |
-| Redis localhost GET | 41.03 | Docker Redis, non-pipelined |
-| Redis pipeline GET | 3.56 | Batch size 256 |
+| RocheDB embedded get | 0.03 | In-process hot path; no TCP |
+| RocheDB TCP get | 44.87 | One request / one response |
+| RocheDB TCP BGET | 1.47 | Batch read; comparable axis to Redis pipeline |
+
+Redis measurements under the same local benchmark shape:
+
+| Operation | us/op | Interpretation |
+|---|---:|---|
+| Redis localhost GET | 41.23 | Local Redis, non-pipelined |
+| Redis pipeline GET | 3.68 | Batch size 256 |
 
 Interpretation: RocheDB TCP get is in the same latency class as non-pipelined
-Redis GET. In this smoke test, RocheDB TCP BGET was about 2.3x faster than Redis
-pipeline GET. This is not a claim that RocheDB is always faster than Redis.
+Redis GET, but local Redis was slightly faster for single GET. In this smoke
+test, RocheDB TCP BGET was about 2.5x faster than Redis pipeline GET. This is
+not a claim that RocheDB is always faster than Redis.
 Payload size, batch size, Redis configuration, network mode, and data size need
 broader measurement.
 

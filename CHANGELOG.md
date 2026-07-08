@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.2.5
+
+### Fixed
+
+- Restored the cluster read path after transaction landing-zone reads had added
+  an avoidable request before ordinary `GET` / `BGET` operations.
+- Kept read-your-writes behavior for accepted-but-not-yet-applied cluster
+  writes by tracking only the pending IDs written through the current client.
+- Fixed the benchmark stable-ring guard so full-period orbits are not
+  misclassified as stable during cluster latency tests.
+
+### Changed
+
+- Updated PostgreSQL and Redis benchmark documentation with the 2026-07-08
+  local retest results.
+- Added comparison-friendly benchmark tables.
+- Bumped package metadata to `0.2.5`.
+
+## v0.2.4
+
+### Added
+
+- Added driver discovery and installation guidance through `roche driver
+  list`, `roche driver info`, and `roche driver install`.
+- Added Rust driver install targeting for manifest path, project directory, and
+  environment-variable based setup.
+
+### Changed
+
+- Removed the Rust driver implementation from the core repository so language
+  drivers can be released from separate repositories.
+
 ## v0.2.3
 
 ### Fixed
