@@ -22,8 +22,9 @@ For Rust, target selection is shell-friendly: use `--manifest-path=FILE`,
 `--project-dir=DIR`, `ROCHE_DRIVER_MANIFEST`, or `ROCHE_DRIVER_PROJECT`.
 It does not execute package-manager commands unless `--execute` is passed.
 
-The Nim package is available through Nimble. Non-Nim drivers are still
-repository-local foundations, so the driver examples below assume a local clone
+The Nim package is available through Nimble. Rust and JavaScript / TypeScript
+drivers are also published as language-native packages. Other non-Nim drivers
+are still repository-local foundations, so those examples assume a local clone
 of this repository.
 
 ## Optional FAISS Setup
@@ -114,9 +115,25 @@ db.close()
 
 For package-style local development, add `drivers/python` to `PYTHONPATH`.
 
-## Node.js / TypeScript / Bun
+## JavaScript / TypeScript
 
-The Node/Bun driver is a native TCP wire driver.
+The published JavaScript / TypeScript driver is a Node-API wrapper over the
+RocheDB C ABI:
+
+- npm: [`rochedb` v0.1.2](https://www.npmjs.com/package/rochedb)
+- repository: [`puffball1567/rochedb-js`](https://github.com/puffball1567/rochedb-js)
+
+Install it in an application:
+
+```sh
+npm install rochedb
+```
+
+Build the RocheDB core shared library first and set `ROCHEDB_CORE_DIR` during
+install/rebuild. See the driver repository README for the full setup flow.
+
+The core repository also keeps a repository-local native TCP wire driver used
+for protocol smoke tests:
 
 ```sh
 nim c -d:release --nimcache:/tmp/nimcache_roched -o:src/roched src/roched.nim
@@ -124,7 +141,7 @@ node --test drivers/node/test/*.test.js
 bun test drivers/node/test-bun/*.test.ts
 ```
 
-Use the local package path until npm publication exists:
+Repository-local wire-driver example:
 
 ```js
 import { RocheClient } from "./drivers/node/src/index.js";
@@ -137,13 +154,26 @@ await db.close();
 
 ## Rust
 
-The Rust driver is being split out into a separate driver package and
-repository. It is the first external driver publication target in the driver
-roadmap. The Cargo package link and installation command will be added here
-when it is published.
+The Rust driver is published as a C ABI wrapper:
 
-Until then, Rust integrations can bind to the stable C ABI exposed through
-`include/rochedb.h` and `lib/librochedb.so`.
+- crates.io: [`rochedb` v0.1.3](https://crates.io/crates/rochedb)
+- repository: [`puffball1567/rochedb-rust`](https://github.com/puffball1567/rochedb-rust)
+
+Install it in a Rust project:
+
+```sh
+cargo add rochedb
+```
+
+Or ask the RocheDB CLI to print the official setup command:
+
+```sh
+roche driver install rust --manifest-path=/path/to/Cargo.toml
+```
+
+Build the RocheDB core shared library first and set `ROCHEDB_CORE_DIR` or
+`ROCHEDB_LIB_DIR` when building/testing the Rust project. See the Rust driver
+repository README for the full setup flow.
 
 ## Go
 

@@ -36,21 +36,21 @@ proc driverRegistry(): seq[DriverInfo] =
   @[
     DriverInfo(
       name: "rust",
-      status: "externalizing",
+      status: "published",
       mode: "C ABI wrapper first; native wire later",
-      repository: "https://github.com/rochedb/rochedb-rust",
+      repository: "https://github.com/puffball1567/rochedb-rust",
       packageName: "rochedb",
       installHint: "cargo add rochedb",
-      notes: "First external driver publication target. Link is provisional until the package is published."
+      notes: "Published on crates.io as rochedb v0.1.3. Wraps the RocheDB C ABI."
     ),
     DriverInfo(
       name: "node",
-      status: "repository-local",
-      mode: "native TCP wire driver, ESM",
-      repository: "drivers/node",
-      packageName: "@rochedb/rochedb",
-      installHint: "npm install @rochedb/rochedb",
-      notes: "Repository-local foundation. Package publication is future work."
+      status: "published",
+      mode: "Node-API C ABI wrapper, TypeScript API",
+      repository: "https://github.com/puffball1567/rochedb-js",
+      packageName: "rochedb",
+      installHint: "npm install rochedb",
+      notes: "Published on npm as rochedb v0.1.2. Bun compatibility is tested on the Node-API path, but remains experimental."
     ),
     DriverInfo(
       name: "php",
@@ -187,6 +187,8 @@ proc runDriver(args: seq[string], manifestPath = "", projectDir = "",
         echo "Next steps:"
         if driver.status == "repository-local":
           echo "  Use the repository-local driver path until package publication."
+        elif driver.status == "published":
+          echo "  Run the printed package-manager command in your target project."
         else:
           echo "  Use the package command after the driver package is published."
         echo "  Run the driver smoke test described in docs/driver-installation.md."

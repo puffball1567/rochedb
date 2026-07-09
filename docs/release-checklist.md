@@ -106,7 +106,7 @@ These are important, but should not block the first technical preview:
 - WASM browser build
 - FlowBrigade / FlowLogbook adapter
 - enterprise plugin features
-- package publication to npm / PyPI / Cargo / Composer / NuGet / Maven
+- remaining package publication to PyPI / Composer / NuGet / Maven / Go / SwiftPM
 - fault-tolerance improvements
 - cluster repair and integrity verification
 

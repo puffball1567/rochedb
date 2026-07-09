@@ -79,9 +79,9 @@ Translations:
 | Nim API | Done | Native public API |
 | C ABI | Done | ABI version / last error / put/get/retrieve/batch/atlas; C ABI vectors are host-native float arrays, while TCP wire vectors are canonical little-endian float32 |
 | Python | Done | Native wire minimal |
-| Node.js / TypeScript | Done | ESM native wire minimal |
-| Bun | Done | TypeScript smoke test |
-| Rust | In progress | Split out of core repo; external driver package planned first |
+| JavaScript / TypeScript | Published | npm [`rochedb` v0.1.2](https://www.npmjs.com/package/rochedb); repository [`puffball1567/rochedb-js`](https://github.com/puffball1567/rochedb-js); Node-API C ABI wrapper with TypeScript API |
+| Bun | Partial | The npm package uses Node-API and includes Bun compatibility verification, but Bun support remains experimental |
+| Rust | Published | crates.io [`rochedb` v0.1.3](https://crates.io/crates/rochedb); repository [`puffball1567/rochedb-rust`](https://github.com/puffball1567/rochedb-rust); C ABI wrapper |
 | Go | Done | C ABI wrapper minimal |
 | PHP | Done | FFI / C ABI wrapper with Docker smoke |
 | Swift | Done | SwiftPM C ABI wrapper with Linux Docker smoke |
@@ -91,7 +91,7 @@ Translations:
 | React Native / WASM local state | Post-v0.1 candidate | Browser / React Native state boundary; handled with the WASM line, not before Kotlin |
 | Driver discovery CLI | Done | `roche driver list/info/install` prints official driver metadata and setup commands without executing remote scripts |
 | Driver compatibility test suite | Partial | `scripts/driver_compat.sh`; Docker-backed PHP / Swift / Kotlin are opt-in and verified |
-| Nimble package publishing | Done | `nimble install rochedb` is available. Non-Nim registries remain future work |
+| Package publishing | Partial | `nimble install rochedb`, `cargo add rochedb`, and `npm install rochedb` are available. PyPI, Composer, NuGet, Maven, Go, SwiftPM, and other registry packages remain future work |
 
 ## Benchmarks / Demos
 
@@ -138,7 +138,7 @@ single v0.2.0 milestone.
 - React Native / WASM local state module
 - Unity official asset
 - Unreal official plugin
-- package publishing workflows for language drivers
+- package publishing workflows for remaining language drivers
 - API reference documentation
 - Prometheus / OpenMetrics and Datadog metrics adapters
 - Fault-tolerance improvements
