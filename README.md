@@ -77,8 +77,10 @@ corpus size toward semantic working-set size.
 ## Installation
 
 RocheDB v0.2.x is a technical preview. The Nim package is available through
-Nimble. Rust and JavaScript / TypeScript drivers are published separately, while
-the remaining non-Nim language drivers are still repository-local foundations.
+Nimble. Rust and JavaScript / TypeScript drivers are published as language
+packages. The PHP driver is released as a separate Composer/VCS repository,
+while the remaining non-Nim language drivers are still repository-local
+foundations.
 
 Prerequisites:
 
@@ -237,6 +239,7 @@ Published external drivers:
 |---|---|---:|---|---|
 | Rust | [`rochedb`](https://crates.io/crates/rochedb) | `0.1.3` | [`puffball1567/rochedb-rust`](https://github.com/puffball1567/rochedb-rust) | C ABI wrapper |
 | JavaScript / TypeScript | [`rochedb`](https://www.npmjs.com/package/rochedb) | `0.1.2` | [`puffball1567/rochedb-js`](https://github.com/puffball1567/rochedb-js) | Node-API C ABI wrapper |
+| PHP | Composer VCS package `rochedb/rochedb` | `0.1.0` | [`puffball1567/rochedb-php`](https://github.com/puffball1567/rochedb-php) | FFI / C ABI wrapper |
 
 The table below lists current core-repository driver foundations. Publication
 priority for remaining language packages is tracked in
@@ -250,7 +253,6 @@ priority for remaining language packages is tracked in
 | Node.js / TypeScript | `drivers/node` | Native TCP wire driver, ESM | `node --test` |
 | Bun | `drivers/node` | Node-compatible TCP wire driver | `bun test` |
 | Go | `drivers/go` | C ABI wrapper | `go test` |
-| PHP | `drivers/php` | FFI / C ABI wrapper | Docker smoke |
 | Swift | `drivers/swift` | SwiftPM C ABI wrapper | Linux Docker smoke |
 | C# | `drivers/csharp` | Generic .NET C ABI wrapper | contract smoke |
 | C++ | `drivers/cpp` | C++17 C ABI wrapper | contract smoke |
@@ -259,8 +261,9 @@ priority for remaining language packages is tracked in
 Detailed setup notes are in
 [docs/driver-installation.md](docs/driver-installation.md). Nimble package
 registration is complete. Rust and JavaScript / TypeScript driver packages are
-published; PyPI, Composer, NuGet, Maven, Go, SwiftPM, and other registry
-packages remain roadmap items.
+published; the PHP driver is available as a Composer VCS repository. PyPI,
+Packagist, NuGet, Maven, Go, SwiftPM, and other registry packages remain
+roadmap items.
 
 ## Cluster Mode
 

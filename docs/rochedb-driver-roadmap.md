@@ -41,7 +41,7 @@ and atlas access.
 |---:|---|---|---|
 | 1 | Rust driver | High-performance infrastructure, gateway, and systems integration path | Published: crates.io [`rochedb` v0.1.3](https://crates.io/crates/rochedb), repository [`puffball1567/rochedb-rust`](https://github.com/puffball1567/rochedb-rust) |
 | 2 | JavaScript / TypeScript driver | Web API, SaaS, Studio, GUI, and local AI client entry point | Published: npm [`rochedb` v0.1.2](https://www.npmjs.com/package/rochedb), repository [`puffball1567/rochedb-js`](https://github.com/puffball1567/rochedb-js). Bun remains experimental on the same Node-API path |
-| 3 | PHP driver | Laravel and existing business web systems | Minimal FFI / C ABI wrapper done. Docker smoke added |
+| 3 | PHP driver | Laravel and existing business web systems | Repository released: [`puffball1567/rochedb-php` v0.1.0](https://github.com/puffball1567/rochedb-php). Composer VCS install works; Packagist publication remains future work |
 | 4 | C++ driver | Generic native and engine integration base. Unreal plugin stays separate | Minimal C ABI wrapper done |
 | 5 | Python native wire driver | AI/RAG and broad scripting entry point without making big-data positioning the first message | Minimal done |
 | 6 | Swift driver | Apple local AI client, browser companion, and app state path | Minimal C ABI wrapper done. Docker smoke added |

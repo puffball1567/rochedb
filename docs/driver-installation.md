@@ -23,9 +23,10 @@ For Rust, target selection is shell-friendly: use `--manifest-path=FILE`,
 It does not execute package-manager commands unless `--execute` is passed.
 
 The Nim package is available through Nimble. Rust and JavaScript / TypeScript
-drivers are also published as language-native packages. Other non-Nim drivers
-are still repository-local foundations, so those examples assume a local clone
-of this repository.
+drivers are also published as language-native packages. The PHP driver is
+released as a Composer VCS repository. Other non-Nim drivers are still
+repository-local foundations, so those examples assume a local clone of this
+repository.
 
 ## Optional FAISS Setup
 
@@ -194,18 +195,51 @@ replace github.com/rochedb/rochedb-go => ../drivers/go
 ## PHP
 
 The PHP driver uses FFI over the C ABI. Local PHP must have `ext-ffi` enabled.
+It is released as a separate repository:
 
-```sh
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
-drivers/php/docker-test.sh
-```
+- repository: [`puffball1567/rochedb-php` v0.1.0](https://github.com/puffball1567/rochedb-php)
+- package name: `rochedb/rochedb`
+- registry status: Composer VCS install now; Packagist publication later
 
-For Composer path development:
+Install from the GitHub repository in a Composer project:
 
 ```json
 {
   "repositories": [
-    { "type": "path", "url": "../drivers/php" }
+    { "type": "vcs", "url": "https://github.com/puffball1567/rochedb-php" }
+  ],
+  "require": {
+    "rochedb/rochedb": "^0.1"
+  }
+}
+```
+
+Then run:
+
+```sh
+composer update rochedb/rochedb
+```
+
+Build the RocheDB core shared library first and point the PHP driver at it:
+
+```sh
+nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
+export ROCHEDB_CORE_DIR=/path/to/rochedb
+```
+
+For local driver development from a checkout of `rochedb-php`, use the Docker
+smoke test:
+
+```sh
+ROCHEDB_CORE_DIR=/path/to/rochedb ./docker-test.sh
+```
+
+For Composer path development against a local `rochedb-php` checkout:
+
+```json
+{
+  "repositories": [
+    { "type": "path", "url": "../rochedb-php" }
   ],
   "require": {
     "rochedb/rochedb": "*"
