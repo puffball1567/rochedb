@@ -94,9 +94,10 @@ For Rust it resolves the target `Cargo.toml` in this order:
 4. `ROCHE_DRIVER_PROJECT`
 5. `Cargo.toml` in the current directory
 
-Pass `--execute` to run the package-manager command after the driver package is
-published. Until then, RocheDB refuses to execute `cargo add` for unpublished
-drivers and prints the command instead.
+Pass `--execute` to run the package-manager command when the selected driver is
+published and the target project can be resolved. RocheDB refuses to execute
+package-manager commands for unpublished drivers and prints the command
+instead.
 
 | Command | Purpose |
 |---|---|

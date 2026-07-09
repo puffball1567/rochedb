@@ -77,7 +77,8 @@ corpus size toward semantic working-set size.
 ## Installation
 
 RocheDB v0.2.x is a technical preview. The Nim package is available through
-Nimble, while non-Nim language packages are still repository-local foundations.
+Nimble. Rust and JavaScript / TypeScript drivers are published separately, while
+the remaining non-Nim language drivers are still repository-local foundations.
 
 Prerequisites:
 
@@ -230,8 +231,15 @@ high-level wire frames such as `PUTR`, `GETID`, `QRYID`, `BGET`, and
 `RETRIEVE`; they do not need to reimplement RocheDB's ring-key, orbit, or ID
 rules.
 
-The table below lists current repository-local driver foundations. Publication
-priority for language packages is tracked in
+Published external drivers:
+
+| Language / runtime | Package | Version | Repository | Mode |
+|---|---|---:|---|---|
+| Rust | [`rochedb`](https://crates.io/crates/rochedb) | `0.1.3` | [`puffball1567/rochedb-rust`](https://github.com/puffball1567/rochedb-rust) | C ABI wrapper |
+| JavaScript / TypeScript | [`rochedb`](https://www.npmjs.com/package/rochedb) | `0.1.2` | [`puffball1567/rochedb-js`](https://github.com/puffball1567/rochedb-js) | Node-API C ABI wrapper |
+
+The table below lists current core-repository driver foundations. Publication
+priority for remaining language packages is tracked in
 [docs/rochedb-driver-roadmap.md](docs/rochedb-driver-roadmap.md).
 
 | Language / runtime | Driver path | Current mode | Smoke status |
@@ -248,13 +256,11 @@ priority for language packages is tracked in
 | C++ | `drivers/cpp` | C++17 C ABI wrapper | contract smoke |
 | Kotlin/JVM | `drivers/kotlin` | JNI / C ABI wrapper | Docker smoke |
 
-Rust is the first external driver publication target and is being split out of
-the core repository. Its package link will be added when published.
-
 Detailed setup notes are in
 [docs/driver-installation.md](docs/driver-installation.md). Nimble package
-registration is complete. Package publishing to npm, PyPI, Cargo, Composer,
-NuGet, Maven, and other non-Nim registries remains a post-v0.2 roadmap item.
+registration is complete. Rust and JavaScript / TypeScript driver packages are
+published; PyPI, Composer, NuGet, Maven, Go, SwiftPM, and other registry
+packages remain roadmap items.
 
 ## Cluster Mode
 
