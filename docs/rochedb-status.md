@@ -83,7 +83,7 @@ Translations:
 | Bun | Partial | The npm package uses Node-API and includes Bun compatibility verification, but Bun support remains experimental |
 | Rust | Published | crates.io [`rochedb` v0.1.3](https://crates.io/crates/rochedb); repository [`puffball1567/rochedb-rust`](https://github.com/puffball1567/rochedb-rust); C ABI wrapper |
 | Go | Done | C ABI wrapper minimal |
-| PHP | Done | FFI / C ABI wrapper with Docker smoke |
+| PHP | Released | Composer VCS repository [`puffball1567/rochedb-php` v0.1.0](https://github.com/puffball1567/rochedb-php); FFI / C ABI wrapper with Docker smoke; Packagist publication remains future work |
 | Swift | Done | SwiftPM C ABI wrapper with Linux Docker smoke |
 | C# minimal | Done | OSS generic C# wrapper. Unity official asset is separate |
 | C++ minimal | Done | OSS generic C++ wrapper. Unreal official plugin is separate |

@@ -54,12 +54,12 @@ proc driverRegistry(): seq[DriverInfo] =
     ),
     DriverInfo(
       name: "php",
-      status: "repository-local",
+      status: "repository-released",
       mode: "FFI / C ABI wrapper",
-      repository: "drivers/php",
+      repository: "https://github.com/puffball1567/rochedb-php",
       packageName: "rochedb/rochedb",
       installHint: "composer require rochedb/rochedb",
-      notes: "Repository-local foundation. Package publication is future work."
+      notes: "Released as rochedb-php v0.1.0 for Composer VCS installs. Packagist publication is future work."
     ),
     DriverInfo(
       name: "python",
@@ -189,6 +189,8 @@ proc runDriver(args: seq[string], manifestPath = "", projectDir = "",
           echo "  Use the repository-local driver path until package publication."
         elif driver.status == "published":
           echo "  Run the printed package-manager command in your target project."
+        elif driver.status == "repository-released":
+          echo "  Add the printed repository as a VCS/path dependency in your target project."
         else:
           echo "  Use the package command after the driver package is published."
         echo "  Run the driver smoke test described in docs/driver-installation.md."
