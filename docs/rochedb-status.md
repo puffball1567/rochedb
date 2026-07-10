@@ -78,10 +78,10 @@ Translations:
 |---|---|---|
 | Nim API | Done | Native public API |
 | C ABI | Done | ABI version / last error / put/get/retrieve/batch/atlas; C ABI vectors are host-native float arrays, while TCP wire vectors are canonical little-endian float32 |
-| Python | Done | Native wire minimal |
 | JavaScript / TypeScript | Published | npm [`rochedb` v0.1.2](https://www.npmjs.com/package/rochedb); repository [`puffball1567/rochedb-js`](https://github.com/puffball1567/rochedb-js); Node-API C ABI wrapper with TypeScript API |
 | Bun | Partial | The npm package uses Node-API and includes Bun compatibility verification, but Bun support remains experimental |
 | Rust | Published | crates.io [`rochedb` v0.1.3](https://crates.io/crates/rochedb); repository [`puffball1567/rochedb-rust`](https://github.com/puffball1567/rochedb-rust); C ABI wrapper |
+| Python | Published | PyPI [`rochedb` v0.1.2](https://pypi.org/project/rochedb/); repository [`puffball1567/rochedb-python`](https://github.com/puffball1567/rochedb-python); native TCP wire driver |
 | Go | Done | C ABI wrapper minimal |
 | PHP | Published | Packagist [`rochedb/rochedb` v0.1.1](https://packagist.org/packages/rochedb/rochedb); repository [`puffball1567/rochedb-php`](https://github.com/puffball1567/rochedb-php); FFI / C ABI wrapper with Docker smoke |
 | Swift | Done | SwiftPM C ABI wrapper with Linux Docker smoke |
@@ -91,7 +91,7 @@ Translations:
 | React Native / WASM local state | Post-v0.1 candidate | Browser / React Native state boundary; handled with the WASM line, not before Kotlin |
 | Driver discovery CLI | Done | `roche driver list/info/install` prints official driver metadata and setup commands without executing remote scripts |
 | Driver compatibility test suite | Partial | `scripts/driver_compat.sh`; Docker-backed PHP / Swift / Kotlin are opt-in and verified |
-| Package publishing | Partial | `nimble install rochedb`, `cargo add rochedb`, `npm install rochedb`, and `composer require rochedb/rochedb` are available. PyPI, NuGet, Maven, Go, SwiftPM, and other registry packages remain future work |
+| Package publishing | Partial | `nimble install rochedb`, `cargo add rochedb`, `npm install rochedb`, `composer require rochedb/rochedb`, and `python3 -m pip install rochedb` are available. NuGet, Maven, Go, SwiftPM, and other registry packages remain future work |
 
 ## Benchmarks / Demos
 
