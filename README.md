@@ -239,6 +239,7 @@ Published external drivers:
 | Rust | [`rochedb`](https://crates.io/crates/rochedb) | `0.1.3` | [`puffball1567/rochedb-rust`](https://github.com/puffball1567/rochedb-rust) | C ABI wrapper |
 | JavaScript / TypeScript | [`rochedb`](https://www.npmjs.com/package/rochedb) | `0.1.2` | [`puffball1567/rochedb-js`](https://github.com/puffball1567/rochedb-js) | Node-API C ABI wrapper |
 | PHP | [`rochedb/rochedb`](https://packagist.org/packages/rochedb/rochedb) | `0.1.1` | [`puffball1567/rochedb-php`](https://github.com/puffball1567/rochedb-php) | FFI / C ABI wrapper |
+| C++ | GitHub / CMake source package | `0.1.0` | [`puffball1567/rochedb-cpp`](https://github.com/puffball1567/rochedb-cpp) | C++17 C ABI wrapper |
 
 The table below lists current core-repository driver foundations. Publication
 priority for remaining language packages is tracked in
@@ -254,7 +255,6 @@ priority for remaining language packages is tracked in
 | Go | `drivers/go` | C ABI wrapper | `go test` |
 | Swift | `drivers/swift` | SwiftPM C ABI wrapper | Linux Docker smoke |
 | C# | `drivers/csharp` | Generic .NET C ABI wrapper | contract smoke |
-| C++ | `drivers/cpp` | C++17 C ABI wrapper | contract smoke |
 | Kotlin/JVM | `drivers/kotlin` | JNI / C ABI wrapper | Docker smoke |
 
 Detailed setup notes are in

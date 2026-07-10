@@ -62,6 +62,15 @@ proc driverRegistry(): seq[DriverInfo] =
       notes: "Published on Packagist as rochedb/rochedb v0.1.1. Wraps the RocheDB C ABI through PHP FFI."
     ),
     DriverInfo(
+      name: "cpp",
+      status: "repository-released",
+      mode: "C++17 C ABI wrapper",
+      repository: "https://github.com/puffball1567/rochedb-cpp",
+      packageName: "rochedb-cpp",
+      installHint: "git clone https://github.com/puffball1567/rochedb-cpp.git",
+      notes: "Released as rochedb-cpp v0.1.0. CMake smoke passes in CI; Conan/vcpkg publication is future work."
+    ),
+    DriverInfo(
       name: "python",
       status: "repository-local",
       mode: "native TCP wire driver",
@@ -189,6 +198,8 @@ proc runDriver(args: seq[string], manifestPath = "", projectDir = "",
           echo "  Use the repository-local driver path until package publication."
         elif driver.status == "published":
           echo "  Run the printed package-manager command in your target project."
+        elif driver.status == "repository-released":
+          echo "  Use the printed repository URL and the setup notes in docs/driver-installation.md."
         else:
           echo "  Use the package command after the driver package is published."
         echo "  Run the driver smoke test described in docs/driver-installation.md."

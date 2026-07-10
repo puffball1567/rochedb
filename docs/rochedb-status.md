@@ -86,7 +86,7 @@ Translations:
 | PHP | Published | Packagist [`rochedb/rochedb` v0.1.1](https://packagist.org/packages/rochedb/rochedb); repository [`puffball1567/rochedb-php`](https://github.com/puffball1567/rochedb-php); FFI / C ABI wrapper with Docker smoke |
 | Swift | Done | SwiftPM C ABI wrapper with Linux Docker smoke |
 | C# minimal | Done | OSS generic C# wrapper. Unity official asset is separate |
-| C++ minimal | Done | OSS generic C++ wrapper. Unreal official plugin is separate |
+| C++ | Released | Repository [`puffball1567/rochedb-cpp` v0.1.0](https://github.com/puffball1567/rochedb-cpp); C++17 C ABI wrapper with CMake smoke; Unreal official plugin is separate |
 | Kotlin-first JVM | Done | JNI / C ABI wrapper with Docker smoke |
 | React Native / WASM local state | Post-v0.1 candidate | Browser / React Native state boundary; handled with the WASM line, not before Kotlin |
 | Driver discovery CLI | Done | `roche driver list/info/install` prints official driver metadata and setup commands without executing remote scripts |
