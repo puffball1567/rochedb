@@ -77,7 +77,7 @@ corpus size toward semantic working-set size.
 ## Installation
 
 RocheDB v0.2.x is a technical preview. The Nim package is available through
-Nimble. Rust, JavaScript / TypeScript, and PHP drivers are published as
+Nimble. Rust, JavaScript / TypeScript, PHP, and Python drivers are published as
 language packages, while the remaining non-Nim language drivers are still
 repository-local foundations.
 
@@ -240,6 +240,7 @@ Published external drivers:
 | JavaScript / TypeScript | [`rochedb`](https://www.npmjs.com/package/rochedb) | `0.1.2` | [`puffball1567/rochedb-js`](https://github.com/puffball1567/rochedb-js) | Node-API C ABI wrapper |
 | PHP | [`rochedb/rochedb`](https://packagist.org/packages/rochedb/rochedb) | `0.1.1` | [`puffball1567/rochedb-php`](https://github.com/puffball1567/rochedb-php) | FFI / C ABI wrapper |
 | C++ | GitHub / CMake source package | `0.1.0` | [`puffball1567/rochedb-cpp`](https://github.com/puffball1567/rochedb-cpp) | C++17 C ABI wrapper |
+| Python | [`rochedb`](https://pypi.org/project/rochedb/) | `0.1.2` | [`puffball1567/rochedb-python`](https://github.com/puffball1567/rochedb-python) | Native TCP wire driver |
 
 The table below lists current core-repository driver foundations. Publication
 priority for remaining language packages is tracked in
@@ -249,7 +250,6 @@ priority for remaining language packages is tracked in
 |---|---|---|---|
 | Nim | `src/rochedb.nim` | Native embedded and cluster API | core tests |
 | C ABI | `include/rochedb.h` | Embedded / cluster foundation for bindings | contract smoke |
-| Python | `drivers/python` | Native TCP wire driver | unittest wire smoke |
 | Node.js / TypeScript | `drivers/node` | Native TCP wire driver, ESM | `node --test` |
 | Bun | `drivers/node` | Node-compatible TCP wire driver | `bun test` |
 | Go | `drivers/go` | C ABI wrapper | `go test` |
@@ -259,9 +259,9 @@ priority for remaining language packages is tracked in
 
 Detailed setup notes are in
 [docs/driver-installation.md](docs/driver-installation.md). Nimble package
-registration is complete. Rust, JavaScript / TypeScript, and PHP driver
-packages are published; PyPI, NuGet, Maven, Go, SwiftPM, and other registry
-packages remain roadmap items.
+registration is complete. Rust, JavaScript / TypeScript, PHP, and Python
+packages are published; NuGet, Maven, Go, SwiftPM, and other registry packages
+remain roadmap items.
 
 ## Cluster Mode
 

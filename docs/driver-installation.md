@@ -22,10 +22,10 @@ For Rust, target selection is shell-friendly: use `--manifest-path=FILE`,
 `--project-dir=DIR`, `ROCHE_DRIVER_MANIFEST`, or `ROCHE_DRIVER_PROJECT`.
 It does not execute package-manager commands unless `--execute` is passed.
 
-The Nim package is available through Nimble. Rust, JavaScript / TypeScript, and
-PHP drivers are also published as language-native packages. Other non-Nim
-drivers are still repository-local foundations, so those examples assume a
-local clone of this repository.
+The Nim package is available through Nimble. Rust, JavaScript / TypeScript, PHP,
+and Python drivers are also published as language-native packages. Other
+non-Nim drivers are still repository-local foundations, so those examples
+assume a local clone of this repository.
 
 ## Optional FAISS Setup
 
@@ -95,25 +95,27 @@ LD_LIBRARY_PATH=lib bin/cabi_contract
 
 ## Python
 
-The Python driver is a native TCP wire driver.
+The Python driver is released as a separate native TCP wire driver:
+
+- repository: [`puffball1567/rochedb-python` v0.1.2](https://github.com/puffball1567/rochedb-python)
+- mode: pure Python TCP driver for `roched`
+- PyPI: [`rochedb` v0.1.2](https://pypi.org/project/rochedb/)
 
 ```sh
-nim c -d:release --nimcache:/tmp/nimcache_roched -o:src/roched src/roched.nim
-python3 drivers/python/tests/test_driver.py
+python3 -m pip install rochedb
+ROCHEDB_CORE_DIR=/path/to/rochedb python3 -m unittest discover -s tests
 ```
 
-From an application in this repository:
+Example:
 
 ```python
-from drivers.python.rochedb import RocheClient
+from rochedb import RocheClient
 
 db = RocheClient.connect("127.0.0.1:17301")
 doc_id = db.put("docs", b'{"title":"hello"}')
 print(db.get(doc_id))
 db.close()
 ```
-
-For package-style local development, add `drivers/python` to `PYTHONPATH`.
 
 ## JavaScript / TypeScript
 

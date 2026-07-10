@@ -72,12 +72,12 @@ proc driverRegistry(): seq[DriverInfo] =
     ),
     DriverInfo(
       name: "python",
-      status: "repository-local",
+      status: "published",
       mode: "native TCP wire driver",
-      repository: "drivers/python",
+      repository: "https://github.com/puffball1567/rochedb-python",
       packageName: "rochedb",
-      installHint: "pip install rochedb",
-      notes: "Repository-local foundation. Package publication is future work."
+      installHint: "python3 -m pip install rochedb",
+      notes: "Published on PyPI as rochedb v0.1.2. Pure Python TCP driver."
     ),
     DriverInfo(
       name: "go",
