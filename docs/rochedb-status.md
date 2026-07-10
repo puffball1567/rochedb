@@ -83,7 +83,7 @@ Translations:
 | Bun | Partial | The npm package uses Node-API and includes Bun compatibility verification, but Bun support remains experimental |
 | Rust | Published | crates.io [`rochedb` v0.1.3](https://crates.io/crates/rochedb); repository [`puffball1567/rochedb-rust`](https://github.com/puffball1567/rochedb-rust); C ABI wrapper |
 | Go | Done | C ABI wrapper minimal |
-| PHP | Released | Composer VCS repository [`puffball1567/rochedb-php` v0.1.0](https://github.com/puffball1567/rochedb-php); FFI / C ABI wrapper with Docker smoke; Packagist publication remains future work |
+| PHP | Published | Packagist [`rochedb/rochedb` v0.1.1](https://packagist.org/packages/rochedb/rochedb); repository [`puffball1567/rochedb-php`](https://github.com/puffball1567/rochedb-php); FFI / C ABI wrapper with Docker smoke |
 | Swift | Done | SwiftPM C ABI wrapper with Linux Docker smoke |
 | C# minimal | Done | OSS generic C# wrapper. Unity official asset is separate |
 | C++ minimal | Done | OSS generic C++ wrapper. Unreal official plugin is separate |
@@ -91,7 +91,7 @@ Translations:
 | React Native / WASM local state | Post-v0.1 candidate | Browser / React Native state boundary; handled with the WASM line, not before Kotlin |
 | Driver discovery CLI | Done | `roche driver list/info/install` prints official driver metadata and setup commands without executing remote scripts |
 | Driver compatibility test suite | Partial | `scripts/driver_compat.sh`; Docker-backed PHP / Swift / Kotlin are opt-in and verified |
-| Package publishing | Partial | `nimble install rochedb`, `cargo add rochedb`, and `npm install rochedb` are available. PyPI, Composer, NuGet, Maven, Go, SwiftPM, and other registry packages remain future work |
+| Package publishing | Partial | `nimble install rochedb`, `cargo add rochedb`, `npm install rochedb`, and `composer require rochedb/rochedb` are available. PyPI, NuGet, Maven, Go, SwiftPM, and other registry packages remain future work |
 
 ## Benchmarks / Demos
 

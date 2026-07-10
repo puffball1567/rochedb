@@ -22,11 +22,10 @@ For Rust, target selection is shell-friendly: use `--manifest-path=FILE`,
 `--project-dir=DIR`, `ROCHE_DRIVER_MANIFEST`, or `ROCHE_DRIVER_PROJECT`.
 It does not execute package-manager commands unless `--execute` is passed.
 
-The Nim package is available through Nimble. Rust and JavaScript / TypeScript
-drivers are also published as language-native packages. The PHP driver is
-released as a Composer VCS repository. Other non-Nim drivers are still
-repository-local foundations, so those examples assume a local clone of this
-repository.
+The Nim package is available through Nimble. Rust, JavaScript / TypeScript, and
+PHP drivers are also published as language-native packages. Other non-Nim
+drivers are still repository-local foundations, so those examples assume a
+local clone of this repository.
 
 ## Optional FAISS Setup
 
@@ -195,29 +194,16 @@ replace github.com/rochedb/rochedb-go => ../drivers/go
 ## PHP
 
 The PHP driver uses FFI over the C ABI. Local PHP must have `ext-ffi` enabled.
-It is released as a separate repository:
+It is published on Packagist:
 
-- repository: [`puffball1567/rochedb-php` v0.1.0](https://github.com/puffball1567/rochedb-php)
+- Packagist: [`rochedb/rochedb` v0.1.1](https://packagist.org/packages/rochedb/rochedb)
+- repository: [`puffball1567/rochedb-php`](https://github.com/puffball1567/rochedb-php)
 - package name: `rochedb/rochedb`
-- registry status: Composer VCS install now; Packagist publication later
 
-Install from the GitHub repository in a Composer project:
-
-```json
-{
-  "repositories": [
-    { "type": "vcs", "url": "https://github.com/puffball1567/rochedb-php" }
-  ],
-  "require": {
-    "rochedb/rochedb": "^0.1"
-  }
-}
-```
-
-Then run:
+Install it in a Composer project:
 
 ```sh
-composer update rochedb/rochedb
+composer require rochedb/rochedb:^0.1
 ```
 
 Build the RocheDB core shared library first and point the PHP driver at it:

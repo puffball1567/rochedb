@@ -77,10 +77,9 @@ corpus size toward semantic working-set size.
 ## Installation
 
 RocheDB v0.2.x is a technical preview. The Nim package is available through
-Nimble. Rust and JavaScript / TypeScript drivers are published as language
-packages. The PHP driver is released as a separate Composer/VCS repository,
-while the remaining non-Nim language drivers are still repository-local
-foundations.
+Nimble. Rust, JavaScript / TypeScript, and PHP drivers are published as
+language packages, while the remaining non-Nim language drivers are still
+repository-local foundations.
 
 Prerequisites:
 
@@ -239,7 +238,7 @@ Published external drivers:
 |---|---|---:|---|---|
 | Rust | [`rochedb`](https://crates.io/crates/rochedb) | `0.1.3` | [`puffball1567/rochedb-rust`](https://github.com/puffball1567/rochedb-rust) | C ABI wrapper |
 | JavaScript / TypeScript | [`rochedb`](https://www.npmjs.com/package/rochedb) | `0.1.2` | [`puffball1567/rochedb-js`](https://github.com/puffball1567/rochedb-js) | Node-API C ABI wrapper |
-| PHP | Composer VCS package `rochedb/rochedb` | `0.1.0` | [`puffball1567/rochedb-php`](https://github.com/puffball1567/rochedb-php) | FFI / C ABI wrapper |
+| PHP | [`rochedb/rochedb`](https://packagist.org/packages/rochedb/rochedb) | `0.1.1` | [`puffball1567/rochedb-php`](https://github.com/puffball1567/rochedb-php) | FFI / C ABI wrapper |
 
 The table below lists current core-repository driver foundations. Publication
 priority for remaining language packages is tracked in
@@ -260,10 +259,9 @@ priority for remaining language packages is tracked in
 
 Detailed setup notes are in
 [docs/driver-installation.md](docs/driver-installation.md). Nimble package
-registration is complete. Rust and JavaScript / TypeScript driver packages are
-published; the PHP driver is available as a Composer VCS repository. PyPI,
-Packagist, NuGet, Maven, Go, SwiftPM, and other registry packages remain
-roadmap items.
+registration is complete. Rust, JavaScript / TypeScript, and PHP driver
+packages are published; PyPI, NuGet, Maven, Go, SwiftPM, and other registry
+packages remain roadmap items.
 
 ## Cluster Mode
 
