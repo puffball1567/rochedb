@@ -272,12 +272,17 @@ separate from this generic OSS driver.
 
 ## C++
 
-The C++ driver is a C++17 wrapper over the C ABI.
+The C++ driver is released as a separate C++17 wrapper over the C ABI:
+
+- repository: [`puffball1567/rochedb-cpp` v0.1.0](https://github.com/puffball1567/rochedb-cpp)
+- mode: C++17 RAII wrapper over `librochedb.so`
 
 ```sh
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
-g++ -std=c++17 -Iinclude -Idrivers/cpp/include drivers/cpp/examples/contract_smoke.cpp -Llib -lrochedb -o /tmp/roche_cpp_smoke
-LD_LIBRARY_PATH=lib /tmp/roche_cpp_smoke
+git clone https://github.com/puffball1567/rochedb-cpp.git
+cd rochedb-cpp
+cmake -S . -B build -DROCHEDB_CORE_DIR=/path/to/rochedb
+cmake --build build
+./build/rochedb_cpp_contract_smoke
 ```
 
 Unreal-specific module packaging, Blueprint bindings, editor tooling, and
