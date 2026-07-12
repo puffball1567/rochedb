@@ -14,7 +14,9 @@
 ##   N <ringKey> <len>\n<name>\n                               環名
 ##   RD <ringKey> <len>\n<description>\n                     環説明
 ##   R <ringKey> <period> <head>\n                             環メタ
-##   P <parent> <seq> <period> <head> <tWrite> <len>\n<payload>\n   粒子 upsert
+##   RP <ringKey> <len>\n<json>\n                              環payload profile
+##   P <parent> <seq> <period> <head> <tWrite> <len> <dim> <codec>\n<payload><vec>\n
+##                                                               粒子 upsert
 ##   E <parent> <seq> <dim>\n<dim×float32>\n                    埋め込み
 ##   F <oldParent> <oldSeq> <newParent> <newSeq> <newTWrite> <expiresAt>\n フォワーダ
 ##   D <parent> <seq>\n                                        削除（ハンドオフ退去）
@@ -28,8 +30,11 @@
 ##   UA <len>\n<eventKey>\n                         universe sync event applied marker
 ##   Q <nextTxId>\n                                      次の transaction id
 
-import std/[tables, os, streams, strutils, monotimes, times, posix]
+import std/[tables, os, streams, strutils, monotimes, times, posix, json]
 import nimsodium
+import payload
+
+export payload
 
 type
   StoreDurability* = enum
@@ -43,6 +48,7 @@ type
     head*: float
     tWrite*: float
     payload*: string
+    codec*: PayloadCodec
     vec*: seq[float32]
     # serving 状態（永続化しない）
     sentAhead*: bool
@@ -90,6 +96,7 @@ type
     head*: float
     tWrite*: float
     payload*: string
+    codec*: PayloadCodec
     vec*: seq[float32]
 
   ClusterTxIntent* = object
@@ -131,6 +138,7 @@ type
     ringMeta*: Table[uint64, tuple[period, head: float]]
     ringNames*: Table[uint64, string]
     ringDescriptions*: Table[uint64, string]
+    ringPayloadProfiles*: Table[uint64, RingPayloadProfile]
     galaxy*: string
     galaxyDescription*: string
     clusterTx*: Table[uint64, ClusterTxIntent]
@@ -231,7 +239,7 @@ proc writeParticleRecord(file: File, tag: string, txid: uint64, p: Particle) =
   let prefix = if tag.len > 0: tag & " " & $txid & " " else: "P "
   file.write(prefix & $p.parent & " " & $p.seq & " " & $p.period & " " &
              $p.head & " " & $p.tWrite & " " & $p.payload.len & " " &
-             $p.vec.len & "\n")
+             $p.vec.len & " " & p.codec.payloadCodecName & "\n")
   file.write(p.payload)
   if p.vec.len > 0:
     file.writeVec(p.vec)
@@ -241,7 +249,8 @@ proc writeClusterTxOp(file: File, txid: uint64, op: ClusterTxOp) =
   let kind = if op.kind == ctxDelete: "D" else: "P"
   file.write("CP " & $txid & " " & kind & " " & $op.parent & " " & $op.seq & " " &
              $op.period & " " & $op.head & " " & $op.tWrite & " " &
-             $op.payload.len & " " & $op.vec.len & "\n")
+             $op.payload.len & " " & $op.vec.len & " " &
+             op.codec.payloadCodecName & "\n")
   file.write(op.payload)
   if op.vec.len > 0:
     file.writeVec(op.vec)
@@ -255,6 +264,10 @@ proc readParticleRecord(fs: FileStream, parts: seq[string], firstData: int): Par
                     tWrite: parseFloat(parts[firstData + 4]))
   let len = parseInt(parts[firstData + 5])
   let dim = if parts.len > firstData + 6: parseInt(parts[firstData + 6]) else: 0
+  result.codec = if parts.len > firstData + 7:
+                   parsePayloadCodec(parts[firstData + 7])
+                 else:
+                   pcRaw
   result.payload = fs.readExactStr(len)
   result.vec = fs.readVec(dim)
   fs.readRecordSep()
@@ -272,6 +285,10 @@ proc readClusterTxOp(fs: FileStream, parts: seq[string], firstData: int): Cluste
   result.tWrite = parseFloat(parts[data + 4])
   let len = parseInt(parts[data + 5])
   let dim = if parts.len > data + 6: parseInt(parts[data + 6]) else: 0
+  result.codec = if parts.len > data + 7:
+                   parsePayloadCodec(parts[data + 7])
+                 else:
+                   pcRaw
   result.payload = fs.readExactStr(len)
   result.vec = fs.readVec(dim)
   fs.readRecordSep()
@@ -374,6 +391,15 @@ proc replay(s: Store, path: string, repair = true) =
           s.ringDescriptions.del ringKey
         else:
           s.ringDescriptions[ringKey] = desc
+        fs.readRecordSep()
+      of "RP":
+        let ringKey = parseBiggestUInt(parts[1]).uint64
+        let len = parseInt(parts[2])
+        let profile = parseJson(fs.readExactStr(len))
+        s.ringPayloadProfiles[ringKey] = RingPayloadProfile(
+          defaultCodec: parsePayloadCodec(profile{"defaultCodec"}.getStr("raw")),
+          charset: profile{"charset"}.getStr(""),
+          formatVersion: profile{"formatVersion"}.getStr(""))
         fs.readRecordSep()
       of "P":
         let p = fs.readParticleRecord(parts, 1)
@@ -591,6 +617,15 @@ proc writeSnapshotFile(s: Store, path: string) =
         file.write("RD " & $ringKey & " " & $desc.len & "\n")
         file.write(desc)
         file.write("\n")
+    for ringKey, profile in s.ringPayloadProfiles:
+      let raw = $(%*{
+        "defaultCodec": profile.defaultCodec.payloadCodecName,
+        "charset": profile.charset,
+        "formatVersion": profile.formatVersion
+      })
+      file.write("RP " & $ringKey & " " & $raw.len & "\n")
+      file.write(raw)
+      file.write("\n")
     for ringKey, meta in s.ringMeta:
       file.write("R " & $ringKey & " " & $meta.period & " " & $meta.head & "\n")
     for _, p in s.items:
@@ -851,6 +886,20 @@ proc putRingDescription*(s: Store, ringKey: uint64, description: string) =
     s.logFile.write("\n")
     s.flushMaybe(force = true)
 
+proc putRingPayloadProfile*(s: Store, ringKey: uint64,
+                            profile: RingPayloadProfile) =
+  s.ringPayloadProfiles[ringKey] = profile
+  if s.persistent:
+    let raw = $(%*{
+      "defaultCodec": profile.defaultCodec.payloadCodecName,
+      "charset": profile.charset,
+      "formatVersion": profile.formatVersion
+    })
+    s.logFile.write("RP " & $ringKey & " " & $raw.len & "\n")
+    s.logFile.write(raw)
+    s.logFile.write("\n")
+    s.flushMaybe(force = true)
+
 proc putWarpJob*(s: Store, jobId: uint64, blob: string) =
   ## RocheDB layer が解釈する warp job snapshot を保存する。
   ## Store は WAL/compact/backup/restore だけを担当し、scheduler policy は持たない。
@@ -909,13 +958,7 @@ proc nextSeq*(s: Store, ring: uint64): uint32 =
 proc upsert*(s: Store, p: Particle) =
   s.applyOp(TxOp(kind: txUpsert, p: p))
   if s.persistent:
-    if p.vec.len == 0:
-      s.logFile.write("P " & $p.parent & " " & $p.seq & " " & $p.period & " " &
-                      $p.head & " " & $p.tWrite & " " & $p.payload.len & "\n")
-      s.logFile.write(p.payload)
-      s.logFile.write("\n")
-    else:
-      s.logFile.writeParticleRecord("", 0, p)
+    s.logFile.writeParticleRecord("", 0, p)
     s.flushMaybe()
 
 proc putForwarder*(s: Store, oldParent: uint64, oldSeq: uint32, f: Forwarder) =

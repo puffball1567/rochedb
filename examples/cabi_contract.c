@@ -14,6 +14,8 @@ static int fail(const char *msg) {
 }
 
 int main(void) {
+  const char *err;
+
   roche_init();
 
   if (roche_abi_version() != ROCHE_ABI_VERSION) return fail("ABI version mismatch");
@@ -33,6 +35,137 @@ int main(void) {
   if (roche_put_vec(db, "docs/api", payload, strlen(payload), vec, 2, &id) != ROCHE_OK)
     return fail("put_vec failed");
 
+  roche_id bif_id;
+  const unsigned char bif[] = {1, 0, 0, 0};
+  if (roche_put_codec(db, "artifacts/bif", bif, sizeof(bif), ROCHE_CODEC_BIF, &bif_id) != ROCHE_OK)
+    return fail("put_codec failed");
+  size_t bif_len = 0;
+  int bif_codec = -1;
+  void *bif_out = roche_get_codec(db, bif_id, &bif_len, &bif_codec);
+  if (!bif_out || bif_len != sizeof(bif) || bif_codec != ROCHE_CODEC_BIF)
+    return fail("get_codec failed");
+  if (memcmp(bif_out, bif, sizeof(bif)) != 0) return fail("get_codec bytes differ");
+  roche_free(bif_out);
+
+  roche_id json_id;
+  const char *json_payload = "{\"title\":\"C ABI\",\"status\":\"draft\"}";
+  if (roche_put_codec(db, "docs/api", json_payload, strlen(json_payload),
+                      ROCHE_CODEC_JSON, &json_id) != ROCHE_OK)
+    return fail("put_codec json failed");
+
+  size_t read_len = 0;
+  char *read_page = roche_read_ring_json(
+    db,
+    "docs/api",
+    "{\"status\":\"draft\"}",
+    "{ title }",
+    1,
+    "",
+    0,
+    1,
+    20,
+    "time",
+    1,
+    &read_len);
+  if (!read_page || read_len == 0) return fail("read_ring_json failed");
+  if (strstr(read_page, "\"items\"") == NULL) return fail("read_ring_json misses items");
+  if (strstr(read_page, "\"count\":1") == NULL) return fail("read_ring_json misses count");
+  if (strstr(read_page, "\"title\":\"C ABI\"") == NULL)
+    return fail("read_ring_json misses selected JSON payload");
+  roche_free(read_page);
+
+  read_page = roche_read_ring_json(
+    db,
+    "artifacts/bif",
+    "",
+    "",
+    10,
+    "",
+    0,
+    1,
+    20,
+    "time",
+    1,
+    &read_len);
+  if (!read_page || strstr(read_page, "\"codec\":\"bif\"") == NULL ||
+      strstr(read_page, "\"encoding\":\"base64\"") == NULL)
+    return fail("read_ring_json should base64 encode binary payloads");
+  roche_free(read_page);
+
+  roche_id nif_id;
+  const char *nif_payload = "(object (title RocheDB))";
+  if (roche_put_codec(db, "artifacts/nif", nif_payload, strlen(nif_payload),
+                      ROCHE_CODEC_NIF, &nif_id) != ROCHE_OK)
+    return fail("put_codec nif failed");
+  read_page = roche_read_ring_json(
+    db,
+    "artifacts/nif",
+    "",
+    "",
+    10,
+    "",
+    0,
+    1,
+    20,
+    "time",
+    1,
+    &read_len);
+  if (!read_page || strstr(read_page, "\"codec\":\"nif\"") == NULL ||
+      strstr(read_page, "\"encoding\":\"base64\"") == NULL)
+    return fail("read_ring_json should preserve NIF metadata");
+  roche_free(read_page);
+
+  read_page = roche_read_ring_json(
+    db,
+    "docs/api",
+    "[]",
+    "",
+    10,
+    "",
+    0,
+    1,
+    20,
+    "time",
+    1,
+    &read_len);
+  if (read_page != NULL) return fail("read_ring_json should reject non-object filter");
+  err = roche_last_error();
+  if (!err || strstr(err, "filter") == NULL) return fail("last_error should mention filter");
+
+  read_page = roche_read_ring_json(
+    db,
+    "docs/api",
+    "",
+    "",
+    10,
+    "",
+    0,
+    1,
+    20,
+    "payload",
+    1,
+    &read_len);
+  if (read_page != NULL) return fail("read_ring_json should reject invalid sort field");
+  err = roche_last_error();
+  if (!err || strstr(err, "sort field") == NULL) return fail("last_error should mention sort field");
+
+  read_page = roche_read_ring_json(
+    db,
+    NULL,
+    "",
+    "",
+    10,
+    "",
+    0,
+    1,
+    20,
+    "time",
+    1,
+    &read_len);
+  if (read_page != NULL) return fail("read_ring_json should reject NULL ring");
+  err = roche_last_error();
+  if (!err || strstr(err, "ring") == NULL) return fail("last_error should mention read ring");
+
   size_t atlas_len = 0;
   char *atlas = roche_atlas(db, vec, 2, 8, &atlas_len);
   if (!atlas || atlas_len == 0) return fail("atlas failed");
@@ -43,7 +176,7 @@ int main(void) {
   roche_id dummy;
   if (roche_put(db, NULL, payload, strlen(payload), &dummy) != ROCHE_ERR)
     return fail("NULL ring should fail");
-  const char *err = roche_last_error();
+  err = roche_last_error();
   if (!err || strstr(err, "ring") == NULL) return fail("last_error should mention ring");
 
   roche_close(db);

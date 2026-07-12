@@ -18,6 +18,8 @@ technical preview. The canonical Nim definitions live in `src/rochedb.nim`.
 | `GalaxyRouter` | opaque router handle | Holds named galaxy connections for applications that access multiple galaxies. |
 | `RocheRecord` | `id`, `payload` | Lightweight record returned by `listByRing`. |
 | `RocheListPage` | `items`, `nextCursor` | Cursor-paginated list result. Empty `nextCursor` means there is no next page. |
+| `RocheReadOptions` | `filter`, `selection`, `limit`, `cursor`, `pagination`, `page`, `pageLimit`, `sortField`, `sortDirection` | Ring read options shared with CLI semantics. |
+| `RocheReadPage` | `ring`, `count`, `items`, `nextCursor`, `pagination`, `page`, `pageLimit`, `sortField`, `sortDirection` | Ring read result. `count` is the number of returned items; use `countByRing` for the total ring size. |
 | `RocheHit` | `id`, `score`, `payload` | Retrieval hit. `score` is cosine similarity, higher is closer. |
 
 `RocheId` should normally be treated as opaque. `toRaw` and `fromRaw` exist for
@@ -83,8 +85,11 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 |---|---|
 | `put(payload, ring = "default", vec = @[])` | Store a string payload in a ring. |
 | `put(doc: JsonNode, ring = "default", vec = @[])` | Store a JSON document. |
+| `put(encodedPayload(bytes, codec), ring, vec)` | Store `raw`, `json`, `nif`, or `bif` bytes with format metadata. |
 | `get(id)` | Fetch by RocheDB ID. |
+| `getEncoded(id)` | Fetch payload bytes together with their `PayloadCodec`. |
 | `query(id, selection)` | Fetch a JSON projection using GraphQL-style selection syntax. |
+| `prepareSelection(selection)` / `query(id, prepared)` | Validate and compile a reusable projection before execution. |
 | `exists(id)` / `contains(id)` | Check whether an ID exists. |
 | `update(id, payload)` / `update(id, doc)` | Replace an existing document. |
 | `patch(id, patchDoc)` | Apply a JSON merge patch. |
@@ -93,11 +98,15 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 | `batchGet(ids)` | Fetch multiple IDs. |
 | `batchDelete(ids)` | Delete multiple IDs. |
 
+The C ABI exposes matching additive functions: `roche_put_codec`,
+`roche_put_vec_codec`, and `roche_get_codec`. See [Payload Codecs](payload-codecs.md).
+
 ## Ring Reads
 
 | API | Purpose |
 |---|---|
 | `listByRing(ring, limit = 100, cursor = "")` | List records in one ring with cursor pagination. |
+| `readRing(ring, options = defaultReadOptions())` | Read one ring with filter, selection, cursor/page limit, and page-local sort. |
 | `countByRing(ring)` | Count records in one ring. |
 | `retrieve(queryVec, ring = "", budget = 8, ...)` | Vector/RAG-style retrieval with ring-aware planning. |
 | `retrievalPlan(...)` | Build a readable retrieval plan without executing it. |

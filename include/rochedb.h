@@ -61,7 +61,12 @@ typedef struct roche_batch_result {
 #define ROCHE_OK   0
 #define ROCHE_ERR -1
 
-#define ROCHE_ABI_VERSION 1
+#define ROCHE_ABI_VERSION 2
+
+#define ROCHE_CODEC_RAW  0
+#define ROCHE_CODEC_JSON 1
+#define ROCHE_CODEC_NIF  2
+#define ROCHE_CODEC_BIF  3
 
 /* ABI バージョンと直近エラー。last_error はスレッドローカル相当で、所有権は呼び出し側にない。 */
 int         roche_abi_version(void);
@@ -97,6 +102,10 @@ int    roche_set_ring_description(void *db, const char *ring, const char *descri
 /* 書き込み。out_id に不透明IDが入る。以後この ID だけで所在計算が閉じる。 */
 int    roche_put(void *db, const char *ring,
                  const void *data, size_t len, roche_id *out_id);
+/* Codec-aware variants are additive. NIF/BIF bytes are application-encoded. */
+int    roche_put_codec(void *db, const char *ring,
+                       const void *data, size_t len, int codec,
+                       roche_id *out_id);
 /* vector 付き書き込み。vec は呼び出しプロセスの通常の float32 配列、
  * vec_len は要素数。C ABI 境界では host-native float を受け取る。
  * TCP wire protocol は別契約で、vector bytes は canonical little-endian
@@ -105,10 +114,16 @@ int    roche_put_vec(void *db, const char *ring,
                      const void *data, size_t len,
                      const float *vec, size_t vec_len,
                      roche_id *out_id);
+int    roche_put_vec_codec(void *db, const char *ring,
+                           const void *data, size_t len, int codec,
+                           const float *vec, size_t vec_len,
+                           roche_id *out_id);
 
 /* 読み出し。NUL 終端付きの複製バッファを返す（roche_free で解放）。
  * 見つからなければ NULL。 */
 void  *roche_get(void *db, roche_id id, size_t *out_len);
+/* Returns payload bytes and persisted codec. Buffer ownership matches roche_get. */
+void  *roche_get_codec(void *db, roche_id id, size_t *out_len, int *out_codec);
 void   roche_free(void *p);
 /* 複数 ID のまとめ読み。戻り値は roche_batch_get_free で解放。 */
 roche_batch_result *roche_batch_get(void *db, const roche_id *ids, size_t ids_len);
@@ -117,6 +132,31 @@ void   roche_batch_get_free(roche_batch_result *r);
 /* 選択取得（GraphQL 風）: selection 例 "{ title author { name } }"。
  * 選択した部分の JSON 文字列を返す（roche_free で解放）。失敗時 NULL。 */
 void  *roche_query(void *db, roche_id id, const char *selection, size_t *out_len);
+
+/* Ring read page as JSON. This is the driver-friendly counterpart of
+ * `roche get --ring=...`: it returns one stable shape for one or many records.
+ *
+ * filter_json: JSON object string, or NULL/"" for no filter.
+ * selection: optional JSON projection selection.
+ * pagination: 0 = cursor/limit mode, non-zero = page/page_limit mode.
+ * sort_desc: 0 = ascending, non-zero = descending.
+ *
+ * JSON/non-binary payloads are returned as JSON values when possible.
+ * Other payloads are base64 encoded and marked with "encoding": "base64".
+ * Returned buffer ownership matches roche_get: call roche_free.
+ */
+void  *roche_read_ring_json(void *db,
+                            const char *ring,
+                            const char *filter_json,
+                            const char *selection,
+                            int limit,
+                            const char *cursor,
+                            int pagination,
+                            int page,
+                            int page_limit,
+                            const char *sort_field,
+                            int sort_desc,
+                            size_t *out_len);
 
 /* vector 近傍検索。ring は NULL/空文字で global。戻り値は roche_retrieve_free で解放。 */
 roche_retrieve_result *roche_retrieve(void *db,

@@ -3,7 +3,7 @@
 ## Starts a small local roched cluster and verifies that drivers can use
 ## ring names without knowing ringKey/period/head derivation rules.
 
-import std/[os, osproc, unittest]
+import std/[net, os, osproc, strutils, unittest]
 import ../src/roche/[core, wire]
 
 proc startNode(id: int, peers: string): Process =
@@ -38,26 +38,51 @@ suite "driver wire protocol":
     var c = newClusterClient(ps)
     try:
       check c.waitCluster(ps.len)
+      check c.codecsReq(0) == @[pcRaw, pcJson, pcNif, pcBif]
 
       let first = c.putRingReq(0, "japan/tokyo",
                                """{"title":"Tokyo","country":"JP"}""",
-                               @[1.0'f32, 0.0'f32])
+                               @[1.0'f32, 0.0'f32], pcJson)
       let tbl = ArcTable(epoch: first.epoch, nNodes: uint16(ps.len))
       let owner = int(tbl.owner(first.head))
       let nonOwner = (owner + 1) mod ps.len
 
       let id = c.putRingReq(nonOwner, "japan/tokyo",
                             """{"title":"Shinjuku","country":"JP"}""",
-                            @[0.95'f32, 0.05'f32])
+                            @[0.95'f32, 0.05'f32], pcJson)
       check int(tbl.owner(id.head)) == owner
 
       let got = c.getIdReq(nonOwner, id)
       check got.found
       check got.value == """{"title":"Shinjuku","country":"JP"}"""
+      check got.codec == pcJson
+
+      var legacy = newSocket()
+      legacy.connect(ps[owner].host, Port(ps[owner].port))
+      legacy.sendFrame("GETID " & $id.parent & " " & $id.epoch & " " &
+                       $id.seq & " " & $id.tWrite & " " & $id.period & " " &
+                       $id.head)
+      let legacyHeader = legacy.readHeader()
+      check legacyHeader.len == 3
+      check legacyHeader[0] == "VAL"
+      discard legacy.readExact(parseInt(legacyHeader[2]))
+      legacy.close()
 
       let projected = c.queryIdReq(nonOwner, id, "{ title }")
       check projected.found
       check projected.value == """{"title":"Shinjuku"}"""
+      check projected.codec == pcJson
+
+      # Repeated projections exercise the server's bounded compiled-selection cache.
+      let projectedAgain = c.queryIdReq(owner, id, "{ title }")
+      check projectedAgain.value == projected.value
+
+      let bif = c.putRingReq(0, "japan/tokyo", "\x01\x00\x00\x00", @[], pcBif)
+      let bifGot = c.getIdReq(0, bif)
+      check bifGot.found
+      check bifGot.codec == pcBif
+      expect ValueError:
+        discard c.queryIdReq(0, bif, "{ title }")
     finally:
       c.close()
       for p in procs:

@@ -40,3 +40,11 @@ suite "selection":
     expect ValueError: discard parseSelection("title")
     expect ValueError: discard parseSelection("{ title")
     expect ValueError: discard parseSelection("{ a } b")
+
+  test "prepared selection is validated once and reusable":
+    let prepared = prepareSelection("{ title author { name } }")
+    check prepared.source == "{ title author { name } }"
+    check applySelection(prepared, doc) ==
+      %*{"title": "t", "author": {"name": "n"}}
+    expect ValueError:
+      discard prepareSelection("{ title } trailing")

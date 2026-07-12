@@ -11,6 +11,49 @@ suite "public api":
     check id in db
     db.close()
 
+  test "payload codecs are selectable and JSON projection is format-aware":
+    var db = open()
+    let rawId = db.put(encodedPayload("raw\0bytes", pcRaw))
+    let jsonId = db.put(%*{"title": "RocheDB", "private": true})
+    let nifId = db.put(encodedPayload("(object (title RocheDB))", pcNif))
+    let bifId = db.put(encodedPayload("\x01\x00\x00\x00", pcBif))
+
+    check db.getEncoded(rawId) == encodedPayload("raw\0bytes", pcRaw)
+    check db.getEncoded(jsonId).codec == pcJson
+    check db.getEncoded(nifId).codec == pcNif
+    check db.getEncoded(bifId).codec == pcBif
+
+    let prepared = prepareSelection("{ title }")
+    check db.query(jsonId, prepared) == %*{"title": "RocheDB"}
+    expect ValueError:
+      discard db.query(nifId, prepared)
+    expect ValueError:
+      discard db.query(bifId, prepared)
+    db.close()
+
+  test "ring payload profile persists and can drive explicit writes":
+    let dir = createTempDir("rochedb", "ring-profile")
+    var db = open(dataDir = dir)
+    let profile = RingPayloadProfile(defaultCodec: pcBif,
+      charset: "", formatVersion: "1")
+    db.configureRingPayloadProfile("artifacts", profile)
+    check db.ringPayloadProfile("artifacts") == profile
+    let id = db.putUsingRingProfile("\x01\x02\x03", ring = "artifacts")
+    check db.getEncoded(id) == encodedPayload("\x01\x02\x03", pcBif)
+    db.close()
+
+    var reopened = open(dataDir = dir)
+    check reopened.ringPayloadProfile("artifacts") == profile
+    check reopened.getEncoded(id).codec == pcBif
+    discard reopened.compact()
+    reopened.close()
+
+    var compacted = open(dataDir = dir)
+    check compacted.ringPayloadProfile("artifacts") == profile
+    check compacted.getEncoded(id).codec == pcBif
+    compacted.close()
+    removeDir(dir)
+
   test "locate は決定論的で、未来も計算できる":
     var db = open(nodes = 8)
     let id = db.put("x", ring = "logs")
@@ -105,6 +148,83 @@ suite "public api":
     check page2.items.len == 1
     check page2.items[0].payload.contains("\"name\":\"c\"")
     check page2.nextCursor.len == 0
+
+    let read1 = db.readRing("users", RocheReadOptions(
+      filter: %*{"name": "b"},
+      selection: "{ name }",
+      limit: 10,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check read1.count == 1
+    check read1.items.len == 1
+    check parseJson(read1.items[0].payload) == %*{"name": "b"}
+
+    let readLimited = db.readRing("users", RocheReadOptions(
+      filter: newJObject(),
+      limit: 10,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check readLimited.items.len == 3
+    check readLimited.count == 3
+
+    let readPaged = db.readRing("users", RocheReadOptions(
+      filter: newJObject(),
+      pagination: rpOn,
+      page: 2,
+      pageLimit: 2,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check readPaged.items.len == 1
+    check readPaged.count == 1
+    check readPaged.pagination == rpOn
+    check readPaged.page == 2
+    check readPaged.pageLimit == 2
+
+    let raw0 = ids[0].toRaw()
+    let raw0Text = $raw0.parent & ":" & $raw0.epoch & ":" &
+      $raw0.seq & ":" & $raw0.tWrite
+    let readById = db.readRing("users", RocheReadOptions(
+      filter: %*{"id": raw0Text},
+      limit: 10))
+    check readById.count == 1
+    check readById.items[0].id == ids[0]
+
+    let readMissing = db.readRing("users", RocheReadOptions(
+      filter: %*{"name": "missing"},
+      limit: 10))
+    check readMissing.count == 0
+    check readMissing.items.len == 0
+
+    let readAlias = db.readRing("users", RocheReadOptions(
+      filter: newJObject(),
+      limit: 2,
+      sortField: "write",
+      sortDirection: rsDesc))
+    check readAlias.sortField == "time"
+    check readAlias.sortDirection == rsDesc
+    check readAlias.items.len == 2
+
+    let readDefaulted = db.readRing("users", RocheReadOptions(
+      filter: newJObject(),
+      limit: 0,
+      pageLimit: 0,
+      page: 0))
+    check readDefaulted.page == 1
+    check readDefaulted.pageLimit == 100
+    check readDefaulted.items.len == 3
+
+    expect ValueError:
+      discard db.readRing("users", RocheReadOptions(
+        filter: newJObject(),
+        limit: 10,
+        sortField: "unsupported"))
+
+    let bifDoc = db.put(encodedPayload("\x01\x02\x03", pcBif), ring = "binary")
+    check db.getEncoded(bifDoc).codec == pcBif
+    expect ValueError:
+      discard db.readRing("binary", RocheReadOptions(
+        selection: "{ title }",
+        limit: 1))
 
     db.update(ids[0], %*{"name": "a2", "meta": {"n": 10}})
     check db.query(ids[0], "{ name }") == %*{"name": "a2"}
@@ -249,6 +369,32 @@ suite "public api":
     check resumed2.universeSyncEvents().len == 0
     resumed2.close()
 
+    removeDir(srcDir)
+    removeDir(dstDir)
+
+  test "universe sync preserves an opaque payload codec":
+    let srcDir = createTempDir("roche-universe", "codec-src")
+    let dstDir = createTempDir("roche-universe", "codec-dst")
+    var src = open(dataDir = srcDir)
+    discard src.enqueueUniverseSyncEvent(
+      sourceUniverse = "tokyo",
+      sourceGalaxy = "models",
+      ring = "artifacts/nif",
+      payload = "(object (name RocheDB))",
+      codec = pcNif,
+      logicalKey = "artifact-1")
+    src.close()
+
+    var resumed = open(dataDir = srcDir)
+    let event = resumed.universeSyncEvents()[0]
+    check event.codec == pcNif
+    var dst = open(dataDir = dstDir)
+    check dst.applyUniverseSyncEvent(event)
+    let item = dst.listByRing("artifacts/nif", limit = 1).items[0]
+    check item.codec == pcNif
+    check item.payload == "(object (name RocheDB))"
+    resumed.close()
+    dst.close()
     removeDir(srcDir)
     removeDir(dstDir)
 
@@ -868,6 +1014,20 @@ suite "transaction":
     var db2 = open(dataDir = dir)
     check db2.get(id) == "inside tx"
     db2.close()
+    removeDir(dir)
+
+  test "transaction preserves payload codec across WAL replay":
+    let dir = createTempDir("rochedb", "tx-codec")
+    var db = open(dataDir = dir)
+    let tx = db.beginTransaction()
+    let id = tx.put(encodedPayload("\x01\x02\x03", pcBif), ring = "binary")
+    tx.commit()
+    check db.getEncoded(id).codec == pcBif
+    db.close()
+
+    var reopened = open(dataDir = dir)
+    check reopened.getEncoded(id) == encodedPayload("\x01\x02\x03", pcBif)
+    reopened.close()
     removeDir(dir)
 
   test "rollback した書き込みは見えない":

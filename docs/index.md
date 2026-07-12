@@ -30,16 +30,18 @@ downstream AI/RAG or application logic.
 - [Universe Sync](universe-sync.md)
 - [Cloud Operations Metrics](cloud-operations.md)
 - [Threat Model](threat-model.md)
+- [Test Coverage](test-coverage.md)
 
 ## Drivers And Protocol
 
 - [Driver Installation](driver-installation.md)
 - [Driver / FFI Roadmap](rochedb-driver-roadmap.md)
 - [Protocol Compatibility](protocol-compatibility.md)
+- [Payload Codecs](payload-codecs.md)
 - [Vector Backend Selection](vector-backends.md)
 - [FAISS Versioning Policy](faiss-versioning.md)
 
 ## Release
 
 - [Release Checklist](release-checklist.md)
-- [GitHub Release Draft](github-release-v0.2.0.md)
+- [GitHub Release Draft](github-release-v0.3.0.md)

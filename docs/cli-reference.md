@@ -108,23 +108,81 @@ instead.
 ## Document Commands
 
 These commands work with `--data=DIR` for embedded mode and `--peers=...` for a
-running cluster.
+running cluster. When `--data=DIR` is omitted, embedded commands use
+`ROCHE_DATA` if set, otherwise `./data`.
 
 ```sh
-roche put --data=data --ring=docs/japan --payload='{"title":"Hello"}'
-roche list-ring --data=data --ring=docs/japan
-roche get --data=data --id=RAW_ID
-roche query --data=data --id=RAW_ID --selection='{ title }'
-roche count-ring --data=data --ring=docs/japan
+roche put --ring=docs/japan --payload='{"title":"Hello"}' --codec=json
+roche get --ring=docs/japan
+roche get --ring=docs/japan --limit=1 --rsort=time
+roche get --ring=docs/japan --pagination=on --page=2 --pagelimit=20 --sort=id
+roche get --ring=docs/japan --filter='{"id":"RAW_ID"}' --selection='{ title }'
+roche get --ring=docs/japan --filter='{"status":"draft"}' --selection='{ title }'
+roche count-ring --ring=docs/japan
+```
+
+Codec is explicit at write time. If you do not pass a codec, RocheDB stores the
+payload as `raw` bytes unless `--codec=auto` resolves to a ring profile.
+
+```sh
+# JSON document: projection and JSON filters can be used later.
+roche put --ring=docs/japan --payload='{"title":"Hello","status":"draft"}' --codec=json
+roche get --ring=docs/japan --filter='{"status":"draft"}' --selection='{ title }'
+
+# NIF text: stored as NIF-tagged bytes. RocheDB does not parse it as JSON.
+roche put --ring=docs/nif --in=sample.nif --codec=nif
+roche get --ring=docs/nif --limit=1
+
+# BIF binary: stored as BIF-tagged bytes. `auto` view decodes through an
+# optional adapter when available; otherwise it returns base64.
+roche put --ring=docs/bif --in=sample.bif --codec=bif
+roche get --ring=docs/bif --limit=1
+roche get --ring=docs/bif --limit=1 --view=base64
+roche get --ring=docs/bif --limit=1 --view=hex
+
+# Plain raw bytes or text.
+roche put --ring=logs/raw --payload='plain text payload' --codec=raw
+roche get --ring=logs/raw --limit=1
 ```
 
 | Command | Required flags | Purpose |
 |---|---|---|
-| `put` | `--ring=RING` plus `--payload=TEXT` or `--in=FILE` | Store a document and print `id` plus `rawId`. |
-| `get` | `--id=ID` | Fetch one document by ID. Cluster mode also requires `--ring=RING`. |
-| `query` | `--id=ID --selection=SEL` | Fetch a JSON projection. Cluster mode also requires `--ring=RING`. |
-| `list-ring` | `--ring=RING` | List records in one ring. |
+| `put` | `--ring=RING` plus `--payload=TEXT` or `--in=FILE`; optional `--codec=auto|raw|json|nif|bif` | Store a document and print `id`, `rawId`, and codec. `auto` uses the ring profile. |
+| `get` | `--ring=RING`; optional `--filter=JSON`, `--selection=SEL`, `--limit=N`, `--cursor=CURSOR`, `--sort=id|time`, `--rsort=id|time`, `--pagination=on|off`, `--page=N`, `--pagelimit=N`, `--view=raw|auto|base64|hex` | Read from one ring. It always returns an `items` array with returned-item `count` and `nextCursor`; use `--limit=1` when you only want one item. Sorting is applied to the fetched page/filter window, not as a global full-ring sort. The default view is `auto`: payload codec is inferred from stored metadata. |
+| `query` | `--ring=RING --filter='{"id":"ID"}' --selection=SEL`; optional `--id=ID` | Compatibility command for JSON projection by ID. Prefer `get --selection=...` for new CLI use. |
+| `list-ring` | `--ring=RING` | Compatibility command for listing records in one ring. Prefer `get --ring=...` for new CLI use. |
 | `count-ring` | `--ring=RING` | Count records in one ring. |
+| `ring-profile` | `--ring=RING` | Read or update the persisted `defaultCodec`, `charset`, and `formatVersion` declaration. |
+
+For example:
+
+```sh
+roche ring-profile --ring=docs/nif --codec=nif --charset=UTF-8 --format-version=1
+roche put --ring=docs/nif --payload='(example)' # codec=nif via the profile
+```
+
+The profile is advisory. Every record keeps its explicit codec, so a later
+profile change does not reinterpret existing bytes. Remote profile
+administration is not available in this release.
+
+`--filter` is a JSON object. `{"id":"RAW_ID"}` performs an exact read, while
+other top-level fields filter JSON records in the selected ring. `--where` is
+accepted as a compatibility alias for `--filter`.
+
+`--sort=FIELD` sorts ascending and `--rsort=FIELD` sorts descending. Supported
+fields are `id` and `time` (`write` is accepted as a compatibility alias for
+`time`). The default is `--rsort=time`. `--pagination=on --page=N
+--pagelimit=N` is a human-friendly page interface. For high-volume scans,
+prefer cursor-based reads with `--cursor` because deep pages must skip earlier
+filtered matches.
+
+For BIF payloads, the default `auto` view looks for an optional adapter in this
+order: `ROCHEDB_NIF_TOOL`, `rochedb-nif`, then `nif_file_tool`. The adapter
+command must support:
+
+```sh
+ADAPTER decode --in=input.bif --out=output.nif
+```
 
 ID formats accepted by `get` and `query`:
 
@@ -139,7 +197,7 @@ Use the `rawId` printed by `put` for scripts and reproducible examples.
 exploration:
 
 ```sh
-roche shell --data=data
+roche shell
 ```
 
 Minimal shell commands:

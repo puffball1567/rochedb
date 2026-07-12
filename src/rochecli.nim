@@ -1,9 +1,9 @@
 ## roche - RocheDB command-line client
 ##
 ## usage:
-##   roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE]
-##   roche get [--data=DIR | --peers=host:port,...] --id=ID [--ring=RING]
-##   roche query [--data=DIR | --peers=host:port,...] --id=ID --selection=SEL [--ring=RING]
+##   roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE] [--codec=raw|json|nif|bif]
+##   roche get [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{"id":"RAW_ID"}'] [--selection=SEL] [--sort=id|time] [--rsort=id|time]
+##   roche query [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{"id":"RAW_ID"}' | --id=RAW_ID] --selection=SEL
 ##   roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]
 ##   roche count-ring [--data=DIR | --peers=host:port,...] --ring=RING
 ##   roche health --peers=host:port,...
@@ -12,8 +12,8 @@
 ##   roche driver list|info|install [LANG] [--manifest-path=FILE] [--execute]
 ##   roche doctor
 
-import std/[algorithm, os, osproc, strutils, strformat, json, times, monotimes,
-            parseopt, net, dynlib]
+import std/[algorithm, base64, os, osproc, strutils, strformat, json, times, monotimes,
+            parseopt, net, dynlib, tempfiles]
 import nimsodium/hash
 import rochedb
 import roche/wire
@@ -248,9 +248,23 @@ proc openCliDb(dataDir, peers, username, password, authToken, secretKey,
   else:
     open(dataDir = dataDir)
 
-proc requireCliTarget(dataDir, peers: string) =
-  if dataDir.len == 0 and peers.len == 0:
-    raise newException(ValueError, "requires --data=DIR or --peers=host:port,...")
+proc defaultDataDir(): string =
+  let envData = getEnv("ROCHE_DATA")
+  if envData.len > 0:
+    envData
+  else:
+    "data"
+
+proc resolveDataDir(dataDir, peers: string): string =
+  if peers.len > 0:
+    dataDir
+  elif dataDir.len > 0:
+    dataDir
+  else:
+    defaultDataDir()
+
+proc requireCliTarget(dataDir, peers: string): string =
+  resolveDataDir(dataDir, peers)
 
 proc cliPayload(payload, inPath: string): string =
   if payload.len > 0:
@@ -279,6 +293,58 @@ proc cliId(idArg: string): RocheId =
 proc cliIdString(id: RocheId): string =
   let raw = id.toRaw()
   $raw.parent & ":" & $raw.epoch & ":" & $raw.seq & ":" & $raw.tWrite
+
+proc effectiveFilter(filterArg, whereArg: string): string =
+  if filterArg.len > 0:
+    filterArg
+  else:
+    whereArg
+
+proc parseFilter(filterArg: string): JsonNode =
+  if filterArg.len == 0:
+    return newJObject()
+  try:
+    result = parseJson(filterArg)
+    if result.kind != JObject:
+      raise newException(ValueError, "filter must be a JSON object")
+  except JsonParsingError as e:
+    raise newException(ValueError, "invalid --filter JSON: " & e.msg)
+
+proc idFromFilter(filterArg: string): string =
+  if filterArg.len == 0:
+    return ""
+  let node = parseFilter(filterArg)
+  if node.hasKey("id"):
+    result = node["id"].getStr()
+    if result.len == 0:
+      raise newException(ValueError, "filter.id must not be empty")
+
+proc resolveIdArg(idArg, filterArg: string): string =
+  if idArg.len > 0:
+    idArg
+  else:
+    idFromFilter(filterArg)
+
+proc filterWithId(filterNode: JsonNode, idArg: string): JsonNode =
+  if filterNode.isNil:
+    result = newJObject()
+  else:
+    result = filterNode.copy()
+  if idArg.len == 0:
+    return
+  if result.hasKey("id") and result["id"].getStr() != idArg:
+    raise newException(ValueError, "--id and --filter.id must refer to the same record")
+  result["id"] = %idArg
+
+proc sortDirectionName(direction: RocheReadSortDirection): string =
+  case direction
+  of rsAsc: "asc"
+  of rsDesc: "desc"
+
+proc paginationName(mode: RochePaginationMode): string =
+  case mode
+  of rpOff: "off"
+  of rpOn: "on"
 
 proc checkFile(path, label: string): bool =
   result = fileExists(path)
@@ -488,54 +554,194 @@ proc runAtlas(dataDir, peers, username, password, authToken, secretKey,
   db.close()
 
 proc runPut(dataDir, peers, username, password, authToken, secretKey,
-            galaxy, ring, payload, inPath: string) =
-  requireCliTarget(dataDir, peers)
+            galaxy, ring, payload, inPath, codecName: string) =
+  let actualDataDir = requireCliTarget(dataDir, peers)
   if ring.len == 0:
     raise newException(ValueError, "put requires --ring=RING")
-  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
                      galaxy)
   try:
-    let id = db.put(cliPayload(payload, inPath), ring = ring)
-    echo &"put OK id={id} rawId={cliIdString(id)} ring={ring}"
+    let codec =
+      if codecName.toLowerAscii() == "auto":
+        db.ringPayloadProfile(ring).defaultCodec
+      else:
+        parsePayloadCodec(codecName)
+    let id = db.put(encodedPayload(cliPayload(payload, inPath), codec), ring = ring)
+    echo &"put OK id={id} rawId={cliIdString(id)} ring={ring} codec={codec.payloadCodecName}"
   finally:
     db.close()
 
+proc hexPayload(data: string): string =
+  const Hex = "0123456789abcdef"
+  result = newStringOfCap(data.len * 2)
+  for c in data:
+    let value = ord(c)
+    result.add Hex[value shr 4]
+    result.add Hex[value and 0x0f]
+
+proc findNifAdapterTool(): string =
+  let configured = getEnv("ROCHEDB_NIF_TOOL")
+  if configured.len > 0:
+    let resolved = findExe(configured)
+    if resolved.len > 0:
+      return resolved
+    if fileExists(configured):
+      return configured
+    return configured
+
+  for candidate in ["rochedb-nif", "nif_file_tool"]:
+    let resolved = findExe(candidate)
+    if resolved.len > 0:
+      return resolved
+
+proc tryDecodeBifWithAdapter(data: string): tuple[ok: bool, text: string] =
+  let tool = findNifAdapterTool()
+  if tool.len == 0:
+    return (false, "")
+
+  let (inputFile, inputPath) = createTempFile("rochedb-bif-", ".bif", getTempDir())
+  let (outputFile, outputPath) = createTempFile("rochedb-nif-", ".nif", getTempDir())
+  inputFile.write(data)
+  inputFile.close()
+  outputFile.close()
+
+  try:
+    let process = startProcess(tool,
+      args = @["decode", "--in=" & inputPath, "--out=" & outputPath],
+      options = {poUsePath})
+    let code = process.waitForExit()
+    process.close()
+    if code == 0 and fileExists(outputPath):
+      return (true, readFile(outputPath))
+    return (false, "")
+  except OSError:
+    return (false, "")
+  finally:
+    try:
+      removeFile(inputPath)
+    except OSError:
+      discard
+    try:
+      removeFile(outputPath)
+    except OSError:
+      discard
+
+proc recordPayloadDisplay(item: RocheRecord, view: string): JsonNode =
+  let mode = view.toLowerAscii()
+  case mode
+  of "raw":
+    %*{"encoding": "raw", "payload": item.payload}
+  of "base64":
+    %*{"encoding": "base64", "payload": base64.encode(item.payload)}
+  of "hex":
+    %*{"encoding": "hex", "payload": hexPayload(item.payload)}
+  of "auto":
+    if item.codec == pcBif:
+      let decoded = tryDecodeBifWithAdapter(item.payload)
+      if decoded.ok:
+        return %*{"encoding": "nif", "adapter": "nif", "payload": decoded.text}
+      return %*{"encoding": "base64", "payload": base64.encode(item.payload)}
+    if item.codec.supportsJsonProjection:
+      try:
+        return %*{"encoding": "json", "payload": parseJson(item.payload)}
+      except JsonParsingError:
+        discard
+    %*{"encoding": "text", "payload": item.payload}
+  else:
+    raise newException(ValueError, "get view must be raw, auto, base64, or hex")
+
+proc readPageNode(page: RocheReadPage, view: string): JsonNode =
+  var items = newJArray()
+  for item in page.items:
+    let display = recordPayloadDisplay(item, view)
+    var node = %*{
+      "id": $item.id,
+      "rawId": item.id.cliIdString(),
+      "codec": item.codec.payloadCodecName,
+      "encoding": display["encoding"].getStr(),
+      "payload": display["payload"]
+    }
+    if display.hasKey("adapter"):
+      node["adapter"] = display["adapter"]
+    items.add node
+  %*{
+    "ring": page.ring,
+    "count": page.count,
+    "pagination": page.pagination.paginationName,
+    "page": page.page,
+    "pageLimit": page.pageLimit,
+    "sort": page.sortField,
+    "sortDirection": page.sortDirection.sortDirectionName,
+    "items": items,
+    "nextCursor": page.nextCursor
+  }
+
+proc readSortOptions(sortArg, rsortArg: string): tuple[field: string, direction: RocheReadSortDirection] =
+  if sortArg.len > 0 and rsortArg.len > 0:
+    raise newException(ValueError, "--sort and --rsort cannot be used together")
+  if sortArg.len > 0:
+    return (sortArg, rsAsc)
+  if rsortArg.len > 0:
+    return (rsortArg, rsDesc)
+  ("time", rsDesc)
+
+proc readPaginationMode(value: string): RochePaginationMode =
+  case value.toLowerAscii()
+  of "off", "false", "0", "no": rpOff
+  of "on", "true", "1", "yes": rpOn
+  else:
+    raise newException(ValueError, "pagination must be on or off")
+
 proc runGet(dataDir, peers, username, password, authToken, secretKey,
-            galaxy, idArg, ring: string) =
-  requireCliTarget(dataDir, peers)
-  if peers.len > 0 and ring.len == 0:
-    raise newException(ValueError, "cluster get requires --ring=RING")
-  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+            galaxy, idArg, filterArg, ring, view, selection, cursor: string,
+            limit, page, pageLimit: int, paginationArg, sortArg, rsortArg: string) =
+  let actualDataDir = requireCliTarget(dataDir, peers)
+  let filterNode = parseFilter(filterArg)
+  let resolvedId = resolveIdArg(idArg, filterArg)
+  let sortOptions = readSortOptions(sortArg, rsortArg)
+  if ring.len == 0:
+    raise newException(ValueError, "get requires --ring=RING")
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
                      galaxy)
   try:
-    if ring.len > 0:
-      db.configureRing(ring, 60.0)
-    echo db.get(cliId(idArg))
+    db.configureRing(ring, 60.0)
+    let options = RocheReadOptions(
+      filter: filterWithId(filterNode, resolvedId),
+      selection: selection,
+      limit: limit,
+      cursor: cursor,
+      pagination: readPaginationMode(paginationArg),
+      page: page,
+      pageLimit: pageLimit,
+      sortField: sortOptions.field,
+      sortDirection: sortOptions.direction)
+    echo db.readRing(ring, options).readPageNode(view).pretty
   finally:
     db.close()
 
 proc runQuery(dataDir, peers, username, password, authToken, secretKey,
-              galaxy, idArg, ring, selection: string) =
-  requireCliTarget(dataDir, peers)
+              galaxy, idArg, whereArg, ring, selection: string) =
+  let actualDataDir = requireCliTarget(dataDir, peers)
+  let resolvedId = resolveIdArg(idArg, whereArg)
   if selection.len == 0:
     raise newException(ValueError, "query requires --selection=SEL")
   if peers.len > 0 and ring.len == 0:
     raise newException(ValueError, "cluster query requires --ring=RING")
-  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
                      galaxy)
   try:
     if ring.len > 0:
       db.configureRing(ring, 60.0)
-    echo db.query(cliId(idArg), selection).pretty
+    echo db.query(cliId(resolvedId), selection).pretty
   finally:
     db.close()
 
 proc runListRing(dataDir, peers, username, password, authToken, secretKey,
                  galaxy, ring, cursor: string, limit: int) =
-  requireCliTarget(dataDir, peers)
+  let actualDataDir = requireCliTarget(dataDir, peers)
   if ring.len == 0:
     raise newException(ValueError, "list-ring requires --ring=RING")
-  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
                      galaxy)
   try:
     let page = db.listByRing(ring, limit = limit, cursor = cursor)
@@ -544,18 +750,47 @@ proc runListRing(dataDir, peers, username, password, authToken, secretKey,
       items.add %*{
         "id": $item.id,
         "rawId": item.id.cliIdString(),
-        "payload": item.payload
+        "payload": item.payload,
+        "codec": item.codec.payloadCodecName
       }
     echo pretty(%*{"items": items, "nextCursor": page.nextCursor})
   finally:
     db.close()
 
+proc runRingProfile(dataDir, peers, username, password, authToken, secretKey,
+                    galaxy, ring, codecName, charset, formatVersion: string) =
+  let actualDataDir = requireCliTarget(dataDir, peers)
+  if ring.len == 0:
+    raise newException(ValueError, "ring-profile requires --ring=RING")
+  if peers.len > 0:
+    raise newException(ValueError,
+      "ring-profile is currently configured through the embedded store; remote profile administration is not available yet")
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
+                     galaxy)
+  try:
+    if codecName.toLowerAscii() != "auto" or charset.len > 0 or formatVersion.len > 0:
+      let old = db.ringPayloadProfile(ring)
+      let profile = RingPayloadProfile(
+        defaultCodec: if codecName.toLowerAscii() == "auto": old.defaultCodec else: parsePayloadCodec(codecName),
+        charset: if charset.len == 0: old.charset else: charset,
+        formatVersion: if formatVersion.len == 0: old.formatVersion else: formatVersion)
+      db.configureRingPayloadProfile(ring, profile)
+    let profile = db.ringPayloadProfile(ring)
+    echo (%*{
+      "ring": ring,
+      "defaultCodec": profile.defaultCodec.payloadCodecName,
+      "charset": profile.charset,
+      "formatVersion": profile.formatVersion
+    }).pretty
+  finally:
+    db.close()
+
 proc runCountRing(dataDir, peers, username, password, authToken, secretKey,
                   galaxy, ring: string) =
-  requireCliTarget(dataDir, peers)
+  let actualDataDir = requireCliTarget(dataDir, peers)
   if ring.len == 0:
     raise newException(ValueError, "count-ring requires --ring=RING")
-  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
                      galaxy)
   try:
     echo &"count-ring OK ring={ring} count={db.countByRing(ring)}"
@@ -596,8 +831,8 @@ proc printShellHelp() =
 
 proc runShell(dataDir, peers, username, password, authToken, secretKey,
               galaxy: string) =
-  requireCliTarget(dataDir, peers)
-  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+  let actualDataDir = requireCliTarget(dataDir, peers)
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
                      galaxy)
   try:
     echo "RocheDB shell. Type help or exit."
@@ -1763,11 +1998,12 @@ proc printHelp() =
   echo "RocheDB command-line client"
   echo ""
   echo "Usage:"
-  echo "  roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE]"
-  echo "  roche get [--data=DIR | --peers=host:port,...] --id=ID [--ring=RING]"
-  echo "  roche query [--data=DIR | --peers=host:port,...] --id=ID --selection=SEL [--ring=RING]"
+  echo "  roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE] [--codec=auto|raw|json|nif|bif]"
+  echo "  roche get [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{\"id\":\"RAW_ID\"}'] [--selection=SEL] [--limit=N] [--cursor=CURSOR] [--sort=id|time] [--rsort=id|time] [--pagination=on|off] [--page=N] [--pagelimit=N]"
+  echo "  roche query [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{\"id\":\"RAW_ID\"}' | --id=RAW_ID] --selection=SEL"
   echo "  roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]"
   echo "  roche count-ring [--data=DIR | --peers=host:port,...] --ring=RING"
+  echo "  roche ring-profile --data=DIR --ring=RING [--codec=raw|json|nif|bif] [--charset=UTF-8] [--format-version=VERSION]"
   echo "  roche shell [--data=DIR | --peers=host:port,...]"
   echo "  roche atlas [--data=DIR | --peers=host:port,...]"
   echo "  roche health|metrics|rings --peers=host:port,..."
@@ -1786,6 +2022,10 @@ proc printHelp() =
   echo "  parent:seq"
   echo "  parent:epoch:seq:tWrite"
   echo ""
+  echo "Local commands use --data=DIR, ROCHE_DATA, or ./data by default."
+  echo "Cluster commands use --peers=host:port,..."
+  echo "Get uses --view=auto by default; payload codec is inferred from stored metadata."
+  echo "--where is accepted as an alias for --filter. --id is a low-level shortcut for scripts."
   echo "Cluster get/query requires --ring=RING so the CLI can reconstruct ring placement metadata."
 
 proc main() =
@@ -1798,7 +2038,16 @@ proc main() =
   var outPath = ""
   var inPath = ""
   var payload = ""
+  var codecName = "auto"
+  var charset = ""
+  var formatVersion = ""
+  var view = "auto"
   var idArg = ""
+  var whereArg = ""
+  var filterArg = ""
+  var sortArg = ""
+  var rsortArg = "time"
+  var paginationArg = "off"
   var selection = ""
   var cursor = ""
   var defaultRing = "imported"
@@ -1840,6 +2089,8 @@ proc main() =
   var help = false
   var executeDriverInstall = false
   var limit = 100
+  var page = 1
+  var pageLimit = 20
   var positionals: seq[string] = @[]
   for kind, key, val in getopt():
     case kind
@@ -1861,7 +2112,33 @@ proc main() =
       of "out": outPath = val
       of "in": inPath = val
       of "payload": payload = val
+      of "codec": codecName = val
+      of "charset": charset = val
+      of "format-version": formatVersion = val
+      of "view": view = val
       of "id": idArg = val
+      of "where": whereArg = val
+      of "filter": filterArg = val
+      of "sort":
+        sortArg = val
+        if rsortArg == "time": rsortArg = ""
+      of "rsort": rsortArg = val
+      of "order":
+        case val
+        of "id-asc":
+          sortArg = "id"; rsortArg = ""
+        of "id-desc":
+          sortArg = ""; rsortArg = "id"
+        of "write-asc", "time-asc":
+          sortArg = "time"; rsortArg = ""
+        of "write-desc", "time-desc":
+          sortArg = ""; rsortArg = "time"
+        else:
+          raise newException(ValueError, "order must be id-asc, id-desc, write-asc, or write-desc")
+      of "pagination": paginationArg = val
+      of "page": page = parseInt(val)
+      of "pagelimit", "page-limit": pageLimit = parseInt(val)
+      of "select": selection = val
       of "selection": selection = val
       of "cursor": cursor = val
       of "default-ring": defaultRing = val
@@ -1911,19 +2188,25 @@ proc main() =
   case cmd
   of "put":
     runPut(dataDir, peers, username, password, authToken, secretKey, galaxy,
-           ringName, payload, inPath)
+           ringName, payload, inPath, codecName)
   of "get":
+    let readFilter = effectiveFilter(filterArg, whereArg)
     runGet(dataDir, peers, username, password, authToken, secretKey, galaxy,
-           idArg, ringName)
+           idArg, readFilter, ringName, view, selection, cursor, limit,
+           page, pageLimit, paginationArg, sortArg, rsortArg)
   of "query":
+    let readFilter = effectiveFilter(filterArg, whereArg)
     runQuery(dataDir, peers, username, password, authToken, secretKey, galaxy,
-             idArg, ringName, selection)
+             idArg, readFilter, ringName, selection)
   of "list-ring":
     runListRing(dataDir, peers, username, password, authToken, secretKey,
                 galaxy, ringName, cursor, limit)
   of "count-ring":
     runCountRing(dataDir, peers, username, password, authToken, secretKey,
                  galaxy, ringName)
+  of "ring-profile":
+    runRingProfile(dataDir, peers, username, password, authToken, secretKey,
+                   galaxy, ringName, codecName, charset, formatVersion)
   of "shell":
     runShell(dataDir, peers, username, password, authToken, secretKey, galaxy)
   of "demo": runDemo(peers, username, password, authToken, secretKey, galaxy)

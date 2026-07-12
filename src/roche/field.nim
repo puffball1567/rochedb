@@ -148,7 +148,7 @@ proc adoptClump(fs: FieldState, st: Store, idx: int, target: uint64,
     let newSeq = st.nextSeq(target)
     tx.upsert Particle(parent: target, seq: newSeq, period: meta.period,
                        head: meta.head, tWrite: now, payload: p.payload,
-                       vec: p.vec)
+                       codec: p.codec, vec: p.vec)
     let f = Forwarder(newParent: target, newSeq: newSeq,
                       newTWrite: now, expiresAt: now + forwardTtl)
     tx.remove(oldId[0], oldId[1])
