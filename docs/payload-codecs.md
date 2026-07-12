@@ -87,11 +87,15 @@ roche put --data=/var/lib/roche --ring=docs --payload='{"title":"RocheDB"}' --co
 roche get --data=/var/lib/roche --id=RAW_ID --view=auto
 ```
 
-`--view=auto` prints text/NIF with codec metadata and prints BIF as base64.
-Use `--view=hex` for byte-level inspection or omit `--view` for the original
-raw payload bytes. Decoding BIF back into NIF text is intentionally adapter-side;
-the published `rochedb-nif` adapter provides that path without making NIF/BIF
-parsing a RocheDB core dependency.
+`--view=auto` prints text/NIF with codec metadata. For BIF, it first tries to
+use an optional adapter and prints decoded NIF text when one is available. The
+lookup order is `ROCHEDB_NIF_TOOL`, `rochedb-nif`, then `nif_file_tool`. The
+adapter command must support `decode --in=input.bif --out=output.nif`. If no
+adapter is available, `--view=auto` falls back to base64. Use `--view=hex` for
+byte-level inspection or omit `--view` for the original raw payload bytes.
+Decoding BIF back into NIF text is intentionally adapter-side; the published
+`rochedb-nif` adapter provides that path without making NIF/BIF parsing a
+RocheDB core dependency.
 
 ## C ABI
 

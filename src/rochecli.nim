@@ -13,7 +13,7 @@
 ##   roche doctor
 
 import std/[algorithm, base64, os, osproc, strutils, strformat, json, times, monotimes,
-            parseopt, net, dynlib]
+            parseopt, net, dynlib, tempfiles]
 import nimsodium/hash
 import rochedb
 import roche/wire
@@ -513,12 +513,63 @@ proc hexPayload(data: string): string =
     result.add Hex[value shr 4]
     result.add Hex[value and 0x0f]
 
+proc findNifAdapterTool(): string =
+  let configured = getEnv("ROCHEDB_NIF_TOOL")
+  if configured.len > 0:
+    let resolved = findExe(configured)
+    if resolved.len > 0:
+      return resolved
+    if fileExists(configured):
+      return configured
+    return configured
+
+  for candidate in ["rochedb-nif", "nif_file_tool"]:
+    let resolved = findExe(candidate)
+    if resolved.len > 0:
+      return resolved
+
+proc tryDecodeBifWithAdapter(data: string): tuple[ok: bool, text: string] =
+  let tool = findNifAdapterTool()
+  if tool.len == 0:
+    return (false, "")
+
+  let (inputFile, inputPath) = createTempFile("rochedb-bif-", ".bif", getTempDir())
+  let (outputFile, outputPath) = createTempFile("rochedb-nif-", ".nif", getTempDir())
+  inputFile.write(data)
+  inputFile.close()
+  outputFile.close()
+
+  try:
+    let process = startProcess(tool,
+      args = @["decode", "--in=" & inputPath, "--out=" & outputPath],
+      options = {poUsePath})
+    let code = process.waitForExit()
+    process.close()
+    if code == 0 and fileExists(outputPath):
+      return (true, readFile(outputPath))
+    return (false, "")
+  except OSError:
+    return (false, "")
+  finally:
+    try:
+      removeFile(inputPath)
+    except OSError:
+      discard
+    try:
+      removeFile(outputPath)
+    except OSError:
+      discard
+
 proc renderPayload(value: EncodedPayload, view: string): string =
   case view.toLowerAscii()
   of "raw": value.data
   of "auto":
     if value.codec == pcBif:
-      "codec=bif encoding=base64\n" & base64.encode(value.data)
+      let decoded = tryDecodeBifWithAdapter(value.data)
+      if decoded.ok:
+        "codec=bif encoding=nif adapter=nif\n" & decoded.text
+      else:
+        "codec=bif encoding=base64\n" & base64.encode(value.data)
     else:
       "codec=" & value.codec.payloadCodecName & " encoding=text\n" & value.data
   of "base64":

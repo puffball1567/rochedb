@@ -493,7 +493,9 @@ RocheDB core stores and transports `raw`, `json`, `nif`, and `bif` payloads as
 codec-tagged bytes. NIF/BIF conversion stays outside the core; use the optional
 [`rochedb-nif`](https://github.com/puffball1567/rochedb-nif) adapter backed by
 [`nifkit`](https://github.com/puffball1567/nifkit) when applications need NIF
-text / BIF byte roundtrips.
+text / BIF byte roundtrips. The CLI `get --view=auto` automatically uses a
+compatible adapter when `ROCHEDB_NIF_TOOL`, `rochedb-nif`, or `nif_file_tool`
+is available; otherwise BIF falls back to base64 display.
 
 ### C ABI
 

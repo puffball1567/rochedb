@@ -54,6 +54,30 @@ bif_out="$(bin/roche put --data="$WORK/data" --ring=artifacts/bif \
 bif_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$bif_out")"
 bin/roche get --data="$WORK/data" --id="$bif_id" --view=auto |
   grep -q 'codec=bif encoding=base64'
+cat >"$WORK/fake_nif_tool" <<'TOOL'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" != "decode" ]]; then
+  exit 2
+fi
+out=""
+for arg in "$@"; do
+  case "$arg" in
+    --out=*) out="${arg#--out=}" ;;
+  esac
+done
+if [[ -z "$out" ]]; then
+  exit 2
+fi
+printf '(decoded "from adapter")' >"$out"
+TOOL
+chmod +x "$WORK/fake_nif_tool"
+ROCHEDB_NIF_TOOL="$WORK/fake_nif_tool" \
+  bin/roche get --data="$WORK/data" --id="$bif_id" --view=auto |
+  grep -q 'codec=bif encoding=nif adapter=nif'
+ROCHEDB_NIF_TOOL="$WORK/fake_nif_tool" \
+  bin/roche get --data="$WORK/data" --id="$bif_id" --view=auto |
+  grep -q '(decoded "from adapter")'
 
 echo "[cli-crud] shell"
 shell_out="$(bin/roche shell --data="$WORK/shell" <<'SHELL'

@@ -122,7 +122,7 @@ roche count-ring --data=data --ring=docs/japan
 | Command | Required flags | Purpose |
 |---|---|---|
 | `put` | `--ring=RING` plus `--payload=TEXT` or `--in=FILE`; optional `--codec=auto|raw|json|nif|bif` | Store a document and print `id`, `rawId`, and codec. `auto` uses the ring profile. |
-| `get` | `--id=ID`; optional `--view=raw|auto|base64|hex` | Fetch one document by ID. `auto` labels text/NIF and renders BIF as base64. Cluster mode also requires `--ring=RING`. |
+| `get` | `--id=ID`; optional `--view=raw|auto|base64|hex` | Fetch one document by ID. `auto` labels text/NIF and decodes BIF to NIF text when a compatible adapter is available; otherwise it renders BIF as base64. Cluster mode also requires `--ring=RING`. |
 | `query` | `--id=ID --selection=SEL` | Fetch a JSON projection. Cluster mode also requires `--ring=RING`. |
 | `list-ring` | `--ring=RING` | List records in one ring. |
 | `count-ring` | `--ring=RING` | Count records in one ring. |
@@ -138,6 +138,14 @@ roche put --data=data --ring=docs/nif --payload='(example)' # codec=nif via the 
 The profile is advisory. Every record keeps its explicit codec, so a later
 profile change does not reinterpret existing bytes. Remote profile
 administration is not available in this release.
+
+For BIF payloads, `--view=auto` looks for an optional adapter in this order:
+`ROCHEDB_NIF_TOOL`, `rochedb-nif`, then `nif_file_tool`. The adapter command
+must support:
+
+```sh
+ADAPTER decode --in=input.bif --out=output.nif
+```
 
 ID formats accepted by `get` and `query`:
 
