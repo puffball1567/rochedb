@@ -113,17 +113,17 @@ running cluster.
 ```sh
 roche put --data=data --ring=docs/japan --payload='{"title":"Hello"}' --codec=json
 roche list-ring --data=data --ring=docs/japan
-roche get --data=data --id=RAW_ID
-roche get --data=data --id=RAW_ID --view=auto
-roche query --data=data --id=RAW_ID --selection='{ title }'
+roche get --data=data --ring=docs/japan --id=RAW_ID
+roche get --data=data --ring=docs/japan --id=RAW_ID --view=auto
+roche query --data=data --ring=docs/japan --id=RAW_ID --selection='{ title }'
 roche count-ring --data=data --ring=docs/japan
 ```
 
 | Command | Required flags | Purpose |
 |---|---|---|
 | `put` | `--ring=RING` plus `--payload=TEXT` or `--in=FILE`; optional `--codec=auto|raw|json|nif|bif` | Store a document and print `id`, `rawId`, and codec. `auto` uses the ring profile. |
-| `get` | `--id=ID`; optional `--view=raw|auto|base64|hex` | Fetch one document by ID. `auto` labels text/NIF and decodes BIF to NIF text when a compatible adapter is available; otherwise it renders BIF as base64. Cluster mode also requires `--ring=RING`. |
-| `query` | `--id=ID --selection=SEL` | Fetch a JSON projection. Cluster mode also requires `--ring=RING`. |
+| `get` | `--ring=RING --id=ID`; optional `--view=raw|auto|base64|hex` | Fetch one document in the selected ring. `auto` labels text/NIF and decodes BIF to NIF text when a compatible adapter is available; otherwise it renders BIF as base64. Embedded mode accepts ID-only reads as a compatibility shortcut. |
+| `query` | `--ring=RING --id=ID --selection=SEL` | Fetch a JSON projection in the selected ring. Embedded mode accepts ID-only reads as a compatibility shortcut. |
 | `list-ring` | `--ring=RING` | List records in one ring. |
 | `count-ring` | `--ring=RING` | Count records in one ring. |
 | `ring-profile` | `--data=DIR --ring=RING` | Read or update the persisted `defaultCodec`, `charset`, and `formatVersion` declaration. |

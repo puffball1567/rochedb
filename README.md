@@ -144,7 +144,7 @@ Basic CLI document workflow:
 ```sh
 roche put --data=data --ring=docs/japan --payload='{"title":"Hello"}'
 roche list-ring --data=data --ring=docs/japan
-roche get --data=data --id=RAW_ID
+roche get --data=data --ring=docs/japan --id=RAW_ID
 ```
 
 Optional FAISS vector backend:

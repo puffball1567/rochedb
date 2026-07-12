@@ -84,7 +84,7 @@ the legacy three-field `VAL` header.
 ```sh
 roche put --data=/var/lib/roche --ring=docs --in=document.bif --codec=bif
 roche put --data=/var/lib/roche --ring=docs --payload='{"title":"RocheDB"}' --codec=json
-roche get --data=/var/lib/roche --id=RAW_ID --view=auto
+roche get --data=/var/lib/roche --ring=docs --id=RAW_ID --view=auto
 ```
 
 `--view=auto` prints text/NIF with codec metadata. For BIF, it first tries to
