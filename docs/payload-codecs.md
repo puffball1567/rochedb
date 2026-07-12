@@ -82,20 +82,24 @@ the legacy three-field `VAL` header.
 ## CLI
 
 ```sh
-roche put --data=/var/lib/roche --ring=docs --in=document.bif --codec=bif
-roche put --data=/var/lib/roche --ring=docs --payload='{"title":"RocheDB"}' --codec=json
-roche get --data=/var/lib/roche --ring=docs --id=RAW_ID --view=auto
+roche put --ring=docs --in=document.bif --codec=bif
+roche put --ring=docs --payload='{"title":"RocheDB"}' --codec=json
+roche get --ring=docs --where='{"id":"RAW_ID"}'
 ```
 
-`--view=auto` prints text/NIF with codec metadata. For BIF, it first tries to
-use an optional adapter and prints decoded NIF text when one is available. The
-lookup order is `ROCHEDB_NIF_TOOL`, `rochedb-nif`, then `nif_file_tool`. The
-adapter command must support `decode --in=input.bif --out=output.nif`. If no
-adapter is available, `--view=auto` falls back to base64. Use `--view=hex` for
-byte-level inspection or omit `--view` for the original raw payload bytes.
-Decoding BIF back into NIF text is intentionally adapter-side; the published
-`rochedb-nif` adapter provides that path without making NIF/BIF parsing a
-RocheDB core dependency.
+These examples use the default embedded data directory. Set `ROCHE_DATA` or
+pass `--data=DIR` when you want a specific local store, or pass
+`--peers=host:port,...` when talking to a `roched` cluster.
+
+The default view is `auto`, which prints text/NIF with codec metadata. For BIF,
+it first tries to use an optional adapter and prints decoded NIF text when one
+is available. The lookup order is `ROCHEDB_NIF_TOOL`, `rochedb-nif`, then
+`nif_file_tool`. The adapter command must support
+`decode --in=input.bif --out=output.nif`. If no adapter is available, `auto`
+falls back to base64. Use `--view=hex` for byte-level inspection or
+`--view=raw` for the original raw payload bytes. Decoding BIF back into NIF text
+is intentionally adapter-side; the published `rochedb-nif` adapter provides
+that path without making NIF/BIF parsing a RocheDB core dependency.
 
 ## C ABI
 

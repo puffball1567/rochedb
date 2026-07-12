@@ -17,6 +17,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$WORK" "$ROOT/bin"
+export ROCHE_DATA="$WORK/data"
 
 echo "[cli-crud] build roche"
 nim c -d:release --nimcache:/tmp/nimcache_roche_cli_crud \
@@ -28,7 +29,7 @@ echo "[cli-crud] help"
 bin/roche --help | grep -q "roche put"
 
 echo "[cli-crud] put"
-put_out="$(bin/roche put --data="$WORK/data" --ring=docs/japan \
+put_out="$(bin/roche put --ring=docs/japan \
   --payload='{"title":"Hello","status":"draft"}')"
 grep -q "put OK" <<<"$put_out"
 raw_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$put_out")"
@@ -38,21 +39,21 @@ if [[ -z "$raw_id" ]]; then
 fi
 
 echo "[cli-crud] count/list/get/query"
-bin/roche count-ring --data="$WORK/data" --ring=docs/japan |
+bin/roche count-ring --ring=docs/japan |
   grep -q "count=1"
-bin/roche list-ring --data="$WORK/data" --ring=docs/japan |
+bin/roche list-ring --ring=docs/japan |
   grep -q '"rawId"'
-bin/roche get --data="$WORK/data" --ring=docs/japan --id="$raw_id" |
+bin/roche get --ring=docs/japan --where="{\"id\":\"$raw_id\"}" |
   grep -q '"status":"draft"'
-bin/roche query --data="$WORK/data" --ring=docs/japan --id="$raw_id" --selection='{ title }' |
+bin/roche query --ring=docs/japan --where="{\"id\":\"$raw_id\"}" --selection='{ title }' |
   grep -q '"title": "Hello"'
 
 echo "[cli-crud] binary codec display"
 printf '\001\002\003\004' >"$WORK/payload.bif"
-bif_out="$(bin/roche put --data="$WORK/data" --ring=artifacts/bif \
+bif_out="$(bin/roche put --ring=artifacts/bif \
   --in="$WORK/payload.bif" --codec=bif)"
 bif_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$bif_out")"
-bin/roche get --data="$WORK/data" --ring=artifacts/bif --id="$bif_id" --view=auto |
+bin/roche get --ring=artifacts/bif --where="{\"id\":\"$bif_id\"}" |
   grep -q 'codec=bif encoding=base64'
 cat >"$WORK/fake_nif_tool" <<'TOOL'
 #!/usr/bin/env bash
@@ -73,10 +74,10 @@ printf '(decoded "from adapter")' >"$out"
 TOOL
 chmod +x "$WORK/fake_nif_tool"
 ROCHEDB_NIF_TOOL="$WORK/fake_nif_tool" \
-  bin/roche get --data="$WORK/data" --ring=artifacts/bif --id="$bif_id" --view=auto |
+  bin/roche get --ring=artifacts/bif --where="{\"id\":\"$bif_id\"}" |
   grep -q 'codec=bif encoding=nif adapter=nif'
 ROCHEDB_NIF_TOOL="$WORK/fake_nif_tool" \
-  bin/roche get --data="$WORK/data" --ring=artifacts/bif --id="$bif_id" --view=auto |
+  bin/roche get --ring=artifacts/bif --where="{\"id\":\"$bif_id\"}" |
   grep -q '(decoded "from adapter")'
 
 echo "[cli-crud] shell"

@@ -2,8 +2,8 @@
 ##
 ## usage:
 ##   roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE] [--codec=raw|json|nif|bif]
-##   roche get [--data=DIR | --peers=host:port,...] --id=ID [--ring=RING]
-##   roche query [--data=DIR | --peers=host:port,...] --id=ID --selection=SEL [--ring=RING]
+##   roche get [--data=DIR | --peers=host:port,...] --ring=RING [--where='{"id":"RAW_ID"}' | --id=RAW_ID]
+##   roche query [--data=DIR | --peers=host:port,...] --ring=RING [--where='{"id":"RAW_ID"}' | --id=RAW_ID] --selection=SEL
 ##   roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]
 ##   roche count-ring [--data=DIR | --peers=host:port,...] --ring=RING
 ##   roche health --peers=host:port,...
@@ -248,9 +248,23 @@ proc openCliDb(dataDir, peers, username, password, authToken, secretKey,
   else:
     open(dataDir = dataDir)
 
-proc requireCliTarget(dataDir, peers: string) =
-  if dataDir.len == 0 and peers.len == 0:
-    raise newException(ValueError, "requires --data=DIR or --peers=host:port,...")
+proc defaultDataDir(): string =
+  let envData = getEnv("ROCHE_DATA")
+  if envData.len > 0:
+    envData
+  else:
+    "data"
+
+proc resolveDataDir(dataDir, peers: string): string =
+  if peers.len > 0:
+    dataDir
+  elif dataDir.len > 0:
+    dataDir
+  else:
+    defaultDataDir()
+
+proc requireCliTarget(dataDir, peers: string): string =
+  resolveDataDir(dataDir, peers)
 
 proc cliPayload(payload, inPath: string): string =
   if payload.len > 0:
@@ -275,6 +289,28 @@ proc cliId(idArg: string): RocheId =
                    parseFloat(parts[3]))
   raise newException(ValueError,
     "--id must be parent:seq or parent:epoch:seq:tWrite")
+
+proc idFromWhere(whereArg: string): string =
+  if whereArg.len == 0:
+    return ""
+  try:
+    let node = parseJson(whereArg)
+    if node.kind != JObject or not node.hasKey("id"):
+      raise newException(ValueError, "where must be a JSON object containing id")
+    result = node["id"].getStr()
+    if result.len == 0:
+      raise newException(ValueError, "where.id must not be empty")
+  except JsonParsingError as e:
+    raise newException(ValueError, "invalid --where JSON: " & e.msg)
+
+proc resolveIdArg(idArg, whereArg: string): string =
+  if idArg.len > 0:
+    idArg
+  else:
+    let fromWhere = idFromWhere(whereArg)
+    if fromWhere.len == 0:
+      raise newException(ValueError, "requires --where='{\"id\":\"RAW_ID\"}' or --id=RAW_ID")
+    fromWhere
 
 proc cliIdString(id: RocheId): string =
   let raw = id.toRaw()
@@ -489,10 +525,10 @@ proc runAtlas(dataDir, peers, username, password, authToken, secretKey,
 
 proc runPut(dataDir, peers, username, password, authToken, secretKey,
             galaxy, ring, payload, inPath, codecName: string) =
-  requireCliTarget(dataDir, peers)
+  let actualDataDir = requireCliTarget(dataDir, peers)
   if ring.len == 0:
     raise newException(ValueError, "put requires --ring=RING")
-  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
                      galaxy)
   try:
     let codec =
@@ -581,41 +617,43 @@ proc renderPayload(value: EncodedPayload, view: string): string =
     raise newException(ValueError, "get view must be raw, auto, base64, or hex")
 
 proc runGet(dataDir, peers, username, password, authToken, secretKey,
-            galaxy, idArg, ring, view: string) =
-  requireCliTarget(dataDir, peers)
+            galaxy, idArg, whereArg, ring, view: string) =
+  let actualDataDir = requireCliTarget(dataDir, peers)
+  let resolvedId = resolveIdArg(idArg, whereArg)
   if peers.len > 0 and ring.len == 0:
     raise newException(ValueError, "cluster get requires --ring=RING")
-  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
                      galaxy)
   try:
     if ring.len > 0:
       db.configureRing(ring, 60.0)
-    echo renderPayload(db.getEncoded(cliId(idArg)), view)
+    echo renderPayload(db.getEncoded(cliId(resolvedId)), view)
   finally:
     db.close()
 
 proc runQuery(dataDir, peers, username, password, authToken, secretKey,
-              galaxy, idArg, ring, selection: string) =
-  requireCliTarget(dataDir, peers)
+              galaxy, idArg, whereArg, ring, selection: string) =
+  let actualDataDir = requireCliTarget(dataDir, peers)
+  let resolvedId = resolveIdArg(idArg, whereArg)
   if selection.len == 0:
     raise newException(ValueError, "query requires --selection=SEL")
   if peers.len > 0 and ring.len == 0:
     raise newException(ValueError, "cluster query requires --ring=RING")
-  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
                      galaxy)
   try:
     if ring.len > 0:
       db.configureRing(ring, 60.0)
-    echo db.query(cliId(idArg), selection).pretty
+    echo db.query(cliId(resolvedId), selection).pretty
   finally:
     db.close()
 
 proc runListRing(dataDir, peers, username, password, authToken, secretKey,
                  galaxy, ring, cursor: string, limit: int) =
-  requireCliTarget(dataDir, peers)
+  let actualDataDir = requireCliTarget(dataDir, peers)
   if ring.len == 0:
     raise newException(ValueError, "list-ring requires --ring=RING")
-  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
                      galaxy)
   try:
     let page = db.listByRing(ring, limit = limit, cursor = cursor)
@@ -633,13 +671,13 @@ proc runListRing(dataDir, peers, username, password, authToken, secretKey,
 
 proc runRingProfile(dataDir, peers, username, password, authToken, secretKey,
                     galaxy, ring, codecName, charset, formatVersion: string) =
-  requireCliTarget(dataDir, peers)
+  let actualDataDir = requireCliTarget(dataDir, peers)
   if ring.len == 0:
     raise newException(ValueError, "ring-profile requires --ring=RING")
   if peers.len > 0:
     raise newException(ValueError,
       "ring-profile is currently configured through the embedded store; remote profile administration is not available yet")
-  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
                      galaxy)
   try:
     if codecName.toLowerAscii() != "auto" or charset.len > 0 or formatVersion.len > 0:
@@ -661,10 +699,10 @@ proc runRingProfile(dataDir, peers, username, password, authToken, secretKey,
 
 proc runCountRing(dataDir, peers, username, password, authToken, secretKey,
                   galaxy, ring: string) =
-  requireCliTarget(dataDir, peers)
+  let actualDataDir = requireCliTarget(dataDir, peers)
   if ring.len == 0:
     raise newException(ValueError, "count-ring requires --ring=RING")
-  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
                      galaxy)
   try:
     echo &"count-ring OK ring={ring} count={db.countByRing(ring)}"
@@ -705,8 +743,8 @@ proc printShellHelp() =
 
 proc runShell(dataDir, peers, username, password, authToken, secretKey,
               galaxy: string) =
-  requireCliTarget(dataDir, peers)
-  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+  let actualDataDir = requireCliTarget(dataDir, peers)
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
                      galaxy)
   try:
     echo "RocheDB shell. Type help or exit."
@@ -1873,8 +1911,8 @@ proc printHelp() =
   echo ""
   echo "Usage:"
   echo "  roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE] [--codec=auto|raw|json|nif|bif]"
-  echo "  roche get [--data=DIR | --peers=host:port,...] --id=ID [--ring=RING] [--view=raw|auto|base64|hex]"
-  echo "  roche query [--data=DIR | --peers=host:port,...] --id=ID --selection=SEL [--ring=RING]"
+  echo "  roche get [--data=DIR | --peers=host:port,...] --ring=RING [--where='{\"id\":\"RAW_ID\"}' | --id=RAW_ID] [--view=raw|auto|base64|hex]"
+  echo "  roche query [--data=DIR | --peers=host:port,...] --ring=RING [--where='{\"id\":\"RAW_ID\"}' | --id=RAW_ID] --selection=SEL"
   echo "  roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]"
   echo "  roche count-ring [--data=DIR | --peers=host:port,...] --ring=RING"
   echo "  roche ring-profile --data=DIR --ring=RING [--codec=raw|json|nif|bif] [--charset=UTF-8] [--format-version=VERSION]"
@@ -1896,6 +1934,9 @@ proc printHelp() =
   echo "  parent:seq"
   echo "  parent:epoch:seq:tWrite"
   echo ""
+  echo "Local commands use --data=DIR, ROCHE_DATA, or ./data by default."
+  echo "Cluster commands use --peers=host:port,..."
+  echo "Get uses --view=auto by default; payload codec is inferred from stored metadata."
   echo "Cluster get/query requires --ring=RING so the CLI can reconstruct ring placement metadata."
 
 proc main() =
@@ -1911,8 +1952,9 @@ proc main() =
   var codecName = "auto"
   var charset = ""
   var formatVersion = ""
-  var view = "raw"
+  var view = "auto"
   var idArg = ""
+  var whereArg = ""
   var selection = ""
   var cursor = ""
   var defaultRing = "imported"
@@ -1980,6 +2022,7 @@ proc main() =
       of "format-version": formatVersion = val
       of "view": view = val
       of "id": idArg = val
+      of "where": whereArg = val
       of "selection": selection = val
       of "cursor": cursor = val
       of "default-ring": defaultRing = val
@@ -2032,10 +2075,10 @@ proc main() =
            ringName, payload, inPath, codecName)
   of "get":
     runGet(dataDir, peers, username, password, authToken, secretKey, galaxy,
-           idArg, ringName, view)
+           idArg, whereArg, ringName, view)
   of "query":
     runQuery(dataDir, peers, username, password, authToken, secretKey, galaxy,
-             idArg, ringName, selection)
+             idArg, whereArg, ringName, selection)
   of "list-ring":
     runListRing(dataDir, peers, username, password, authToken, secretKey,
                 galaxy, ringName, cursor, limit)

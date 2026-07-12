@@ -108,40 +108,40 @@ instead.
 ## Document Commands
 
 These commands work with `--data=DIR` for embedded mode and `--peers=...` for a
-running cluster.
+running cluster. When `--data=DIR` is omitted, embedded commands use
+`ROCHE_DATA` if set, otherwise `./data`.
 
 ```sh
-roche put --data=data --ring=docs/japan --payload='{"title":"Hello"}' --codec=json
-roche list-ring --data=data --ring=docs/japan
-roche get --data=data --ring=docs/japan --id=RAW_ID
-roche get --data=data --ring=docs/japan --id=RAW_ID --view=auto
-roche query --data=data --ring=docs/japan --id=RAW_ID --selection='{ title }'
-roche count-ring --data=data --ring=docs/japan
+roche put --ring=docs/japan --payload='{"title":"Hello"}' --codec=json
+roche list-ring --ring=docs/japan
+roche get --ring=docs/japan --where='{"id":"RAW_ID"}'
+roche query --ring=docs/japan --where='{"id":"RAW_ID"}' --selection='{ title }'
+roche count-ring --ring=docs/japan
 ```
 
 | Command | Required flags | Purpose |
 |---|---|---|
 | `put` | `--ring=RING` plus `--payload=TEXT` or `--in=FILE`; optional `--codec=auto|raw|json|nif|bif` | Store a document and print `id`, `rawId`, and codec. `auto` uses the ring profile. |
-| `get` | `--ring=RING --id=ID`; optional `--view=raw|auto|base64|hex` | Fetch one document in the selected ring. `auto` labels text/NIF and decodes BIF to NIF text when a compatible adapter is available; otherwise it renders BIF as base64. Embedded mode accepts ID-only reads as a compatibility shortcut. |
-| `query` | `--ring=RING --id=ID --selection=SEL` | Fetch a JSON projection in the selected ring. Embedded mode accepts ID-only reads as a compatibility shortcut. |
+| `get` | `--ring=RING --where='{"id":"ID"}'`; optional `--id=ID`, `--view=raw|auto|base64|hex` | Fetch one document in the selected ring. The default view is `auto`: it labels text/NIF and decodes BIF to NIF text when a compatible adapter is available; otherwise it renders BIF as base64. Use `--view=raw` for byte-exact output. `--id` is a low-level shortcut for scripts. |
+| `query` | `--ring=RING --where='{"id":"ID"}' --selection=SEL`; optional `--id=ID` | Fetch a JSON projection in the selected ring. `--id` is a low-level shortcut for scripts. |
 | `list-ring` | `--ring=RING` | List records in one ring. |
 | `count-ring` | `--ring=RING` | Count records in one ring. |
-| `ring-profile` | `--data=DIR --ring=RING` | Read or update the persisted `defaultCodec`, `charset`, and `formatVersion` declaration. |
+| `ring-profile` | `--ring=RING` | Read or update the persisted `defaultCodec`, `charset`, and `formatVersion` declaration. |
 
 For example:
 
 ```sh
-roche ring-profile --data=data --ring=docs/nif --codec=nif --charset=UTF-8 --format-version=1
-roche put --data=data --ring=docs/nif --payload='(example)' # codec=nif via the profile
+roche ring-profile --ring=docs/nif --codec=nif --charset=UTF-8 --format-version=1
+roche put --ring=docs/nif --payload='(example)' # codec=nif via the profile
 ```
 
 The profile is advisory. Every record keeps its explicit codec, so a later
 profile change does not reinterpret existing bytes. Remote profile
 administration is not available in this release.
 
-For BIF payloads, `--view=auto` looks for an optional adapter in this order:
-`ROCHEDB_NIF_TOOL`, `rochedb-nif`, then `nif_file_tool`. The adapter command
-must support:
+For BIF payloads, the default `auto` view looks for an optional adapter in this
+order: `ROCHEDB_NIF_TOOL`, `rochedb-nif`, then `nif_file_tool`. The adapter
+command must support:
 
 ```sh
 ADAPTER decode --in=input.bif --out=output.nif
@@ -160,7 +160,7 @@ Use the `rawId` printed by `put` for scripts and reproducible examples.
 exploration:
 
 ```sh
-roche shell --data=data
+roche shell
 ```
 
 Minimal shell commands:

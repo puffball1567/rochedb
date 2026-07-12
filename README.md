@@ -142,10 +142,14 @@ nim c -d:release --nimcache:/tmp/nimcache_roched -o:bin/roched src/roched.nim
 Basic CLI document workflow:
 
 ```sh
-roche put --data=data --ring=docs/japan --payload='{"title":"Hello"}'
-roche list-ring --data=data --ring=docs/japan
-roche get --data=data --ring=docs/japan --id=RAW_ID
+roche put --ring=docs/japan --payload='{"title":"Hello"}'
+roche list-ring --ring=docs/japan
+roche get --ring=docs/japan --where='{"id":"RAW_ID"}'
 ```
+
+When `--data=DIR` is omitted, the CLI uses `ROCHE_DATA` if set, otherwise
+`./data`. Use `--peers=host:port,...` instead when talking to a running
+`roched` cluster.
 
 Optional FAISS vector backend:
 
@@ -493,9 +497,11 @@ RocheDB core stores and transports `raw`, `json`, `nif`, and `bif` payloads as
 codec-tagged bytes. NIF/BIF conversion stays outside the core; use the optional
 [`rochedb-nif`](https://github.com/puffball1567/rochedb-nif) adapter backed by
 [`nifkit`](https://github.com/puffball1567/nifkit) when applications need NIF
-text / BIF byte roundtrips. The CLI `get --view=auto` automatically uses a
-compatible adapter when `ROCHEDB_NIF_TOOL`, `rochedb-nif`, or `nif_file_tool`
-is available; otherwise BIF falls back to base64 display.
+text / BIF byte roundtrips. CLI `get` uses codec metadata automatically: when
+`ROCHEDB_NIF_TOOL`, `rochedb-nif`, or `nif_file_tool` is available, BIF is
+decoded to NIF text; otherwise BIF falls back to base64 display. Use
+`--view=raw`, `--view=base64`, or `--view=hex` only when you want to override
+that default.
 
 ### C ABI
 
