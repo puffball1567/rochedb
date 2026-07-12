@@ -43,6 +43,10 @@ bin/roche count-ring --ring=docs/japan |
   grep -q "count=1"
 bin/roche get --ring=docs/japan |
   grep -q '"status": "draft"'
+bin/roche get --ring=docs/japan --limit=1 --order=write-desc |
+  grep -q '"items"'
+bin/roche get --ring=docs/japan --limit=1 --order=id-asc |
+  grep -q '"order": "id-asc"'
 bin/roche list-ring --ring=docs/japan |
   grep -q '"rawId"'
 bin/roche get --ring=docs/japan --filter="{\"id\":\"$raw_id\"}" |

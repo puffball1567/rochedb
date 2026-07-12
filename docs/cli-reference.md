@@ -114,6 +114,7 @@ running cluster. When `--data=DIR` is omitted, embedded commands use
 ```sh
 roche put --ring=docs/japan --payload='{"title":"Hello"}' --codec=json
 roche get --ring=docs/japan
+roche get --ring=docs/japan --limit=1 --order=write-desc
 roche get --ring=docs/japan --filter='{"id":"RAW_ID"}' --selection='{ title }'
 roche get --ring=docs/japan --filter='{"status":"draft"}' --selection='{ title }'
 roche count-ring --ring=docs/japan
@@ -122,7 +123,7 @@ roche count-ring --ring=docs/japan
 | Command | Required flags | Purpose |
 |---|---|---|
 | `put` | `--ring=RING` plus `--payload=TEXT` or `--in=FILE`; optional `--codec=auto|raw|json|nif|bif` | Store a document and print `id`, `rawId`, and codec. `auto` uses the ring profile. |
-| `get` | `--ring=RING`; optional `--filter=JSON`, `--selection=SEL`, `--limit=N`, `--cursor=CURSOR`, `--view=raw|auto|base64|hex` | Read from one ring. Without a filter, it returns the ring contents; if the ring has exactly one item, it returns that item directly. The default view is `auto`: payload codec is inferred from stored metadata. |
+| `get` | `--ring=RING`; optional `--filter=JSON`, `--selection=SEL`, `--limit=N`, `--cursor=CURSOR`, `--order=write-desc|write-asc|id-asc|id-desc`, `--view=raw|auto|base64|hex` | Read from one ring. It always returns an `items` array with `count` and `nextCursor`; use `--limit=1` when you only want one item. Ordering is applied to the fetched page/filter window, not as a global full-ring sort. The default view is `auto`: payload codec is inferred from stored metadata. |
 | `query` | `--ring=RING --filter='{"id":"ID"}' --selection=SEL`; optional `--id=ID` | Compatibility command for JSON projection by ID. Prefer `get --selection=...` for new CLI use. |
 | `list-ring` | `--ring=RING` | Compatibility command for listing records in one ring. Prefer `get --ring=...` for new CLI use. |
 | `count-ring` | `--ring=RING` | Count records in one ring. |

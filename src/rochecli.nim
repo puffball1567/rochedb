@@ -2,7 +2,7 @@
 ##
 ## usage:
 ##   roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE] [--codec=raw|json|nif|bif]
-##   roche get [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{"id":"RAW_ID"}'] [--selection=SEL]
+##   roche get [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{"id":"RAW_ID"}'] [--selection=SEL] [--order=write-desc]
 ##   roche query [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{"id":"RAW_ID"}' | --id=RAW_ID] --selection=SEL
 ##   roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]
 ##   roche count-ring [--data=DIR | --peers=host:port,...] --ring=RING
@@ -663,36 +663,58 @@ proc renderPayload(value: EncodedPayload, view: string): string =
   else:
     raise newException(ValueError, "get view must be raw, auto, base64, or hex")
 
+proc compareRecords(a, b: RocheRecord, order: string): int =
+  let ar = a.id.toRaw()
+  let br = b.id.toRaw()
+  case order
+  of "id-asc":
+    cmp(a.id.cliIdString(), b.id.cliIdString())
+  of "id-desc":
+    -cmp(a.id.cliIdString(), b.id.cliIdString())
+  of "write-asc":
+    cmp(ar.tWrite, br.tWrite)
+  of "write-desc", "":
+    -cmp(ar.tWrite, br.tWrite)
+  else:
+    raise newException(ValueError,
+      "order must be write-desc, write-asc, id-asc, or id-desc")
+
 proc renderListPage(db: RocheDb, ring, cursor: string, limit: int,
-                    filterNode: JsonNode, selection: string): JsonNode =
-  var items = newJArray()
+                    filterNode: JsonNode, selection, order: string): JsonNode =
+  var matched: seq[RocheRecord] = @[]
   var nextCursor = cursor
   let pageSize = max(limit, 100)
-  while items.len < limit:
+  while matched.len < limit:
     let page = db.listByRing(ring, limit = pageSize, cursor = nextCursor)
     for item in page.items:
       if recordMatchesFilter(item, filterNode):
-        items.add %*{
-          "id": $item.id,
-          "rawId": item.id.cliIdString(),
-          "codec": item.codec.payloadCodecName,
-          "payload": recordPayloadNode(item, selection)
-        }
-        if items.len >= limit:
+        matched.add item
+        if matched.len >= limit:
           break
     nextCursor = page.nextCursor
     if nextCursor.len == 0 or page.items.len == 0:
       break
+  matched.sort(proc(a, b: RocheRecord): int = compareRecords(a, b, order))
+
+  var items = newJArray()
+  for item in matched:
+    items.add %*{
+      "id": $item.id,
+      "rawId": item.id.cliIdString(),
+      "codec": item.codec.payloadCodecName,
+      "payload": recordPayloadNode(item, selection)
+    }
   %*{
     "ring": ring,
     "count": db.countByRing(ring),
+    "order": if order.len == 0: "write-desc" else: order,
     "items": items,
     "nextCursor": nextCursor
   }
 
 proc runGet(dataDir, peers, username, password, authToken, secretKey,
             galaxy, idArg, filterArg, ring, view, selection, cursor: string,
-            limit: int) =
+            limit: int, order: string) =
   let actualDataDir = requireCliTarget(dataDir, peers)
   let filterNode = parseFilter(filterArg)
   let resolvedId = resolveIdArg(idArg, filterArg)
@@ -719,20 +741,7 @@ proc runGet(dataDir, peers, username, password, authToken, secretKey,
       else:
         echo renderPayload(encodedPayload(item.payload, item.codec), view)
     else:
-      let page = renderListPage(db, ring, cursor, limit, filterNode, selection)
-      if filterNode.len == 0 and cursor.len == 0 and page["count"].getInt() == 1 and
-          page["items"].len == 1:
-        let item = page["items"][0]
-        if selection.len > 0:
-          echo item["payload"].pretty
-        else:
-          let codec = parsePayloadCodec(item["codec"].getStr())
-          if item["payload"].kind == JString:
-            echo renderPayload(encodedPayload(item["payload"].getStr(), codec), view)
-          else:
-            echo item["payload"].pretty
-      else:
-        echo page.pretty
+      echo renderListPage(db, ring, cursor, limit, filterNode, selection, order).pretty
   finally:
     db.close()
 
@@ -2016,7 +2025,7 @@ proc printHelp() =
   echo ""
   echo "Usage:"
   echo "  roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE] [--codec=auto|raw|json|nif|bif]"
-  echo "  roche get [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{\"id\":\"RAW_ID\"}'] [--selection=SEL] [--limit=N] [--cursor=CURSOR]"
+  echo "  roche get [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{\"id\":\"RAW_ID\"}'] [--selection=SEL] [--limit=N] [--cursor=CURSOR] [--order=write-desc|write-asc|id-asc|id-desc]"
   echo "  roche query [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{\"id\":\"RAW_ID\"}' | --id=RAW_ID] --selection=SEL"
   echo "  roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]"
   echo "  roche count-ring [--data=DIR | --peers=host:port,...] --ring=RING"
@@ -2062,6 +2071,7 @@ proc main() =
   var idArg = ""
   var whereArg = ""
   var filterArg = ""
+  var order = "write-desc"
   var selection = ""
   var cursor = ""
   var defaultRing = "imported"
@@ -2131,6 +2141,7 @@ proc main() =
       of "id": idArg = val
       of "where": whereArg = val
       of "filter": filterArg = val
+      of "order": order = val
       of "select": selection = val
       of "selection": selection = val
       of "cursor": cursor = val
@@ -2185,7 +2196,7 @@ proc main() =
   of "get":
     let readFilter = effectiveFilter(filterArg, whereArg)
     runGet(dataDir, peers, username, password, authToken, secretKey, galaxy,
-           idArg, readFilter, ringName, view, selection, cursor, limit)
+           idArg, readFilter, ringName, view, selection, cursor, limit, order)
   of "query":
     let readFilter = effectiveFilter(filterArg, whereArg)
     runQuery(dataDir, peers, username, password, authToken, secretKey, galaxy,
