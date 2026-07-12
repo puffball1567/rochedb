@@ -1,6 +1,8 @@
 # RocheDB Release Checklist
 
 This is the canonical release checklist for the public RocheDB repository.
+The current automated test coverage matrix is tracked in
+[Test Coverage](test-coverage.md).
 
 ## v0.2.0 Positioning
 

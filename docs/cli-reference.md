@@ -121,6 +121,30 @@ roche get --ring=docs/japan --filter='{"status":"draft"}' --selection='{ title }
 roche count-ring --ring=docs/japan
 ```
 
+Codec is explicit at write time. If you do not pass a codec, RocheDB stores the
+payload as `raw` bytes unless `--codec=auto` resolves to a ring profile.
+
+```sh
+# JSON document: projection and JSON filters can be used later.
+roche put --ring=docs/japan --payload='{"title":"Hello","status":"draft"}' --codec=json
+roche get --ring=docs/japan --filter='{"status":"draft"}' --selection='{ title }'
+
+# NIF text: stored as NIF-tagged bytes. RocheDB does not parse it as JSON.
+roche put --ring=docs/nif --in=sample.nif --codec=nif
+roche get --ring=docs/nif --limit=1
+
+# BIF binary: stored as BIF-tagged bytes. `auto` view decodes through an
+# optional adapter when available; otherwise it returns base64.
+roche put --ring=docs/bif --in=sample.bif --codec=bif
+roche get --ring=docs/bif --limit=1
+roche get --ring=docs/bif --limit=1 --view=base64
+roche get --ring=docs/bif --limit=1 --view=hex
+
+# Plain raw bytes or text.
+roche put --ring=logs/raw --payload='plain text payload' --codec=raw
+roche get --ring=logs/raw --limit=1
+```
+
 | Command | Required flags | Purpose |
 |---|---|---|
 | `put` | `--ring=RING` plus `--payload=TEXT` or `--in=FILE`; optional `--codec=auto|raw|json|nif|bif` | Store a document and print `id`, `rawId`, and codec. `auto` uses the ring profile. |

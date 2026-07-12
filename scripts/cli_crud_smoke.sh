@@ -30,7 +30,7 @@ bin/roche --help | grep -q "roche put"
 
 echo "[cli-crud] put"
 put_out="$(bin/roche put --ring=docs/japan \
-  --payload='{"title":"Hello","status":"draft"}')"
+  --payload='{"title":"Hello","status":"draft"}' --codec=json)"
 grep -q "put OK" <<<"$put_out"
 raw_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$put_out")"
 if [[ -z "$raw_id" ]]; then
@@ -58,6 +58,30 @@ bin/roche get --ring=docs/japan --filter='{"status":"draft"}' --selection='{ tit
 bin/roche query --ring=docs/japan --filter="{\"id\":\"$raw_id\"}" --selection='{ title }' |
   grep -q '"title": "Hello"'
 
+echo "[cli-crud] explicit and profile-driven codecs"
+printf '(object (title "NIF text"))' >"$WORK/payload.nif"
+nif_out="$(bin/roche put --ring=artifacts/nif \
+  --in="$WORK/payload.nif" --codec=nif)"
+nif_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$nif_out")"
+bin/roche get --ring=artifacts/nif --filter="{\"id\":\"$nif_id\"}" |
+  grep -q '"codec": "nif"'
+bin/roche get --ring=artifacts/nif --filter="{\"id\":\"$nif_id\"}" |
+  grep -q '"encoding": "text"'
+
+bin/roche ring-profile --ring=artifacts/auto-nif \
+  --codec=nif --charset=UTF-8 --format-version=1 |
+  grep -q '"defaultCodec": "nif"'
+auto_nif_out="$(bin/roche put --ring=artifacts/auto-nif \
+  --payload='(object (title "Auto NIF"))' --codec=auto)"
+auto_nif_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$auto_nif_out")"
+bin/roche get --ring=artifacts/auto-nif --filter="{\"id\":\"$auto_nif_id\"}" |
+  grep -q '"codec": "nif"'
+
+raw_out="$(bin/roche put --ring=logs/raw --payload='plain text payload' --codec=raw)"
+raw_text_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$raw_out")"
+bin/roche get --ring=logs/raw --filter="{\"id\":\"$raw_text_id\"}" |
+  grep -q '"codec": "raw"'
+
 echo "[cli-crud] binary codec display"
 printf '\001\002\003\004' >"$WORK/payload.bif"
 bif_out="$(bin/roche put --ring=artifacts/bif \
@@ -67,6 +91,8 @@ bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
   grep -q '"codec": "bif"'
 bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
   grep -q '"encoding": "base64"'
+bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" --view=hex |
+  grep -q '"encoding": "hex"'
 cat >"$WORK/fake_nif_tool" <<'TOOL'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -94,6 +120,14 @@ ROCHEDB_NIF_TOOL="$WORK/fake_nif_tool" \
 ROCHEDB_NIF_TOOL="$WORK/fake_nif_tool" \
   bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
   grep -q 'decoded'
+
+echo "[cli-crud] read validation"
+bad_filter_out="$(bin/roche get --ring=docs/japan --filter='[]' 2>&1 >/dev/null || true)"
+grep -q 'filter must be a JSON object' <<<"$bad_filter_out"
+bad_sort_out="$(bin/roche get --ring=docs/japan --sort=payload 2>&1 >/dev/null || true)"
+grep -q 'sort field must be id, time, or write' <<<"$bad_sort_out"
+bad_selection_out="$(bin/roche get --ring=artifacts/bif --selection='{ title }' 2>&1 >/dev/null || true)"
+grep -q 'payload codec bif does not support JSON projection' <<<"$bad_selection_out"
 
 echo "[cli-crud] shell"
 shell_out="$(bin/roche shell --data="$WORK/shell" <<'SHELL'

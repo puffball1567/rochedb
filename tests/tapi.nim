@@ -27,6 +27,8 @@ suite "public api":
     check db.query(jsonId, prepared) == %*{"title": "RocheDB"}
     expect ValueError:
       discard db.query(nifId, prepared)
+    expect ValueError:
+      discard db.query(bifId, prepared)
     db.close()
 
   test "ring payload profile persists and can drive explicit writes":
@@ -177,6 +179,52 @@ suite "public api":
     check readPaged.pagination == rpOn
     check readPaged.page == 2
     check readPaged.pageLimit == 2
+
+    let raw0 = ids[0].toRaw()
+    let raw0Text = $raw0.parent & ":" & $raw0.epoch & ":" &
+      $raw0.seq & ":" & $raw0.tWrite
+    let readById = db.readRing("users", RocheReadOptions(
+      filter: %*{"id": raw0Text},
+      limit: 10))
+    check readById.count == 1
+    check readById.items[0].id == ids[0]
+
+    let readMissing = db.readRing("users", RocheReadOptions(
+      filter: %*{"name": "missing"},
+      limit: 10))
+    check readMissing.count == 0
+    check readMissing.items.len == 0
+
+    let readAlias = db.readRing("users", RocheReadOptions(
+      filter: newJObject(),
+      limit: 2,
+      sortField: "write",
+      sortDirection: rsDesc))
+    check readAlias.sortField == "time"
+    check readAlias.sortDirection == rsDesc
+    check readAlias.items.len == 2
+
+    let readDefaulted = db.readRing("users", RocheReadOptions(
+      filter: newJObject(),
+      limit: 0,
+      pageLimit: 0,
+      page: 0))
+    check readDefaulted.page == 1
+    check readDefaulted.pageLimit == 100
+    check readDefaulted.items.len == 3
+
+    expect ValueError:
+      discard db.readRing("users", RocheReadOptions(
+        filter: newJObject(),
+        limit: 10,
+        sortField: "unsupported"))
+
+    let bifDoc = db.put(encodedPayload("\x01\x02\x03", pcBif), ring = "binary")
+    check db.getEncoded(bifDoc).codec == pcBif
+    expect ValueError:
+      discard db.readRing("binary", RocheReadOptions(
+        selection: "{ title }",
+        limit: 1))
 
     db.update(ids[0], %*{"name": "a2", "meta": {"n": 10}})
     check db.query(ids[0], "{ name }") == %*{"name": "a2"}

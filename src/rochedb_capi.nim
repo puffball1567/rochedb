@@ -9,7 +9,7 @@
 ##   - 例外は境界を越えない: すべて捕捉し、エラーはリターンコード / nil で返す。
 ##   - roche_get が返すバッファは呼び出し側が roche_free で解放する。
 
-import std/json
+import std/[base64, json]
 import rochedb
 
 type
@@ -49,7 +49,7 @@ type
 const
   RocheOk = cint(0)
   RocheErr = cint(-1)
-  RocheAbiVersion = cint(1)
+  RocheAbiVersion = cint(2)
 
 var lastError {.threadvar.}: string
 
@@ -111,6 +111,13 @@ proc codecToC(value: PayloadCodec): cint =
   of pcJson: 1
   of pcNif: 2
   of pcBif: 3
+
+proc payloadCodecName(value: PayloadCodec): string =
+  case value
+  of pcRaw: "raw"
+  of pcJson: "json"
+  of pcNif: "nif"
+  of pcBif: "bif"
 
 proc bytesFromC(data: pointer, len: csize_t): string =
   if len > 0 and data == nil:
@@ -390,6 +397,74 @@ proc roche_query(h: pointer, id: RocheCId, selection: cstring,
   except CatchableError as e:
     setError(e)
     return nil
+
+proc rocheReadPayloadNode(item: RocheRecord): JsonNode =
+  if item.codec == pcJson:
+    try:
+      return %*{"encoding": "json", "payload": parseJson(item.payload)}
+    except JsonParsingError:
+      discard
+  %*{"encoding": "base64", "payload": base64.encode(item.payload)}
+
+proc rocheReadPageJson(page: RocheReadPage): string =
+  var items = newJArray()
+  for item in page.items:
+    let display = rocheReadPayloadNode(item)
+    let (parent, epoch, seq, tWrite) = item.id.toRaw
+    items.add %*{
+      "id": $item.id,
+      "rawId": $parent & ":" & $epoch & ":" & $seq & ":" & $tWrite,
+      "codec": item.codec.payloadCodecName,
+      "encoding": display["encoding"].getStr(),
+      "payload": display["payload"]
+    }
+  $(%*{
+    "ring": page.ring,
+    "count": page.count,
+    "pagination": if page.pagination == rpOn: "on" else: "off",
+    "page": page.page,
+    "pageLimit": page.pageLimit,
+    "sort": page.sortField,
+    "sortDirection": if page.sortDirection == rsDesc: "desc" else: "asc",
+    "items": items,
+    "nextCursor": page.nextCursor
+  })
+
+proc roche_read_ring_json(h: pointer, ring, filterJson, selection: cstring,
+                          limit: cint, cursor: cstring, pagination: cint,
+                          page: cint, pageLimit: cint, sortField: cstring,
+                          sortDesc: cint, outLen: ptr csize_t): pointer
+                          {.exportc, cdecl, dynlib.} =
+  ## Returns a JSON read page compatible with CLI get --ring output.
+  ## Binary/non-JSON payloads are base64 encoded and marked with encoding=base64.
+  try:
+    clearError()
+    if outLen == nil:
+      raise newException(ValueError, "out_len is nil")
+    let filterText = optStr(filterJson)
+    let filterNode =
+      if filterText.len == 0: newJObject()
+      else: parseJson(filterText)
+    if filterNode.kind != JObject:
+      raise newException(ValueError, "filter must be a JSON object")
+    let opts = RocheReadOptions(
+      filter: filterNode,
+      selection: optStr(selection),
+      limit: int(limit),
+      cursor: optStr(cursor),
+      pagination: if pagination == 0: rpOff else: rpOn,
+      page: int(page),
+      pageLimit: int(pageLimit),
+      sortField: optStr(sortField),
+      sortDirection: if sortDesc == 0: rsAsc else: rsDesc)
+    let pageResult = ensureHandle(h).readRing(
+      cstringToString(ring, "ring", allowNil = false), opts)
+    let s = rocheReadPageJson(pageResult)
+    outLen[] = csize_t(s.len)
+    copyStringToShared(s)
+  except CatchableError as e:
+    setError(e)
+    nil
 
 proc vecFromC(vec: ptr cfloat, vecLen: csize_t): seq[float32] =
   if vecLen == 0:

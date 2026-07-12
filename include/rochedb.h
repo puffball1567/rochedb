@@ -61,7 +61,7 @@ typedef struct roche_batch_result {
 #define ROCHE_OK   0
 #define ROCHE_ERR -1
 
-#define ROCHE_ABI_VERSION 1
+#define ROCHE_ABI_VERSION 2
 
 #define ROCHE_CODEC_RAW  0
 #define ROCHE_CODEC_JSON 1
@@ -132,6 +132,31 @@ void   roche_batch_get_free(roche_batch_result *r);
 /* 選択取得（GraphQL 風）: selection 例 "{ title author { name } }"。
  * 選択した部分の JSON 文字列を返す（roche_free で解放）。失敗時 NULL。 */
 void  *roche_query(void *db, roche_id id, const char *selection, size_t *out_len);
+
+/* Ring read page as JSON. This is the driver-friendly counterpart of
+ * `roche get --ring=...`: it returns one stable shape for one or many records.
+ *
+ * filter_json: JSON object string, or NULL/"" for no filter.
+ * selection: optional JSON projection selection.
+ * pagination: 0 = cursor/limit mode, non-zero = page/page_limit mode.
+ * sort_desc: 0 = ascending, non-zero = descending.
+ *
+ * JSON/non-binary payloads are returned as JSON values when possible.
+ * Other payloads are base64 encoded and marked with "encoding": "base64".
+ * Returned buffer ownership matches roche_get: call roche_free.
+ */
+void  *roche_read_ring_json(void *db,
+                            const char *ring,
+                            const char *filter_json,
+                            const char *selection,
+                            int limit,
+                            const char *cursor,
+                            int pagination,
+                            int page,
+                            int page_limit,
+                            const char *sort_field,
+                            int sort_desc,
+                            size_t *out_len);
 
 /* vector 近傍検索。ring は NULL/空文字で global。戻り値は roche_retrieve_free で解放。 */
 roche_retrieve_result *roche_retrieve(void *db,

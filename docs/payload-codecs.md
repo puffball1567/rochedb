@@ -91,6 +91,59 @@ These examples use the default embedded data directory. Set `ROCHE_DATA` or
 pass `--data=DIR` when you want a specific local store, or pass
 `--peers=host:port,...` when talking to a `roched` cluster.
 
+### Put and get examples
+
+Use an explicit codec when writing payloads whose type matters. Without an
+explicit codec, `put` stores the payload as `raw` unless `--codec=auto` resolves
+to the ring's payload profile.
+
+```sh
+# JSON: filter and projection work because the record is tagged as json.
+roche put --ring=docs/japan \
+  --payload='{"title":"Hello","status":"draft"}' \
+  --codec=json
+roche get --ring=docs/japan \
+  --filter='{"status":"draft"}' \
+  --selection='{ title }'
+
+# NIF text: RocheDB stores the bytes and keeps codec=nif metadata.
+roche put --ring=docs/nif --in=sample.nif --codec=nif
+roche get --ring=docs/nif --limit=1
+
+# BIF binary: RocheDB stores the bytes and keeps codec=bif metadata.
+roche put --ring=docs/bif --in=sample.bif --codec=bif
+roche get --ring=docs/bif --limit=1
+
+# Debug or transport-safe BIF views.
+roche get --ring=docs/bif --limit=1 --view=base64
+roche get --ring=docs/bif --limit=1 --view=hex
+
+# Raw: plain bytes/text with no format interpretation.
+roche put --ring=logs/raw --payload='plain text payload' --codec=raw
+roche get --ring=logs/raw --limit=1
+```
+
+`get` always returns the same page shape. Use `--limit=1` when you only want one
+record:
+
+```json
+{
+  "ring": "docs/bif",
+  "count": 1,
+  "items": [
+    {
+      "codec": "bif",
+      "encoding": "base64",
+      "payload": "AQIDBA=="
+    }
+  ]
+}
+```
+
+The stored codec metadata drives display. NIF text is returned as text. BIF
+uses the optional adapter when available and falls back to base64 when it is
+not.
+
 The default view is `auto`, which prints text/NIF with codec metadata. For BIF,
 it first tries to use an optional adapter and prints decoded NIF text when one
 is available. The lookup order is `ROCHEDB_NIF_TOOL`, `rochedb-nif`, then
@@ -100,6 +153,23 @@ falls back to base64. Use `--view=hex` for byte-level inspection or
 `--view=raw` for the original raw payload bytes. Decoding BIF back into NIF text
 is intentionally adapter-side; the published `rochedb-nif` adapter provides
 that path without making NIF/BIF parsing a RocheDB core dependency.
+
+### Ring profile and auto codec
+
+Ring profiles are useful when one ring is intended to contain one payload
+format. The profile does not rewrite existing records; it only supplies a
+default for future `--codec=auto` writes.
+
+```sh
+roche ring-profile --data=./data \
+  --ring=docs/nif \
+  --codec=nif \
+  --charset=UTF-8 \
+  --format-version=1
+
+roche put --data=./data --ring=docs/nif --in=sample.nif --codec=auto
+roche get --data=./data --ring=docs/nif --limit=1
+```
 
 ## C ABI
 

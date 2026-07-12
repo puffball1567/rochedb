@@ -30,6 +30,7 @@ downstream AI/RAG or application logic.
 - [Universe Sync](universe-sync.md)
 - [Cloud Operations Metrics](cloud-operations.md)
 - [Threat Model](threat-model.md)
+- [Test Coverage](test-coverage.md)
 
 ## Drivers And Protocol
 
