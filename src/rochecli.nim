@@ -2,7 +2,7 @@
 ##
 ## usage:
 ##   roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE] [--codec=raw|json|nif|bif]
-##   roche get [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{"id":"RAW_ID"}'] [--selection=SEL] [--order=write-desc]
+##   roche get [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{"id":"RAW_ID"}'] [--selection=SEL] [--sort=id|time] [--rsort=id|time]
 ##   roche query [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{"id":"RAW_ID"}' | --id=RAW_ID] --selection=SEL
 ##   roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]
 ##   roche count-ring [--data=DIR | --peers=host:port,...] --ring=RING
@@ -325,38 +325,26 @@ proc resolveIdArg(idArg, filterArg: string): string =
   else:
     idFromFilter(filterArg)
 
-proc filterHasOnlyId(filterNode: JsonNode): bool =
-  filterNode.kind == JObject and filterNode.len == 1 and filterNode.hasKey("id")
+proc filterWithId(filterNode: JsonNode, idArg: string): JsonNode =
+  if filterNode.isNil:
+    result = newJObject()
+  else:
+    result = filterNode.copy()
+  if idArg.len == 0:
+    return
+  if result.hasKey("id") and result["id"].getStr() != idArg:
+    raise newException(ValueError, "--id and --filter.id must refer to the same record")
+  result["id"] = %idArg
 
-proc recordMatchesFilter(item: RocheRecord, filterNode: JsonNode): bool =
-  if filterNode.kind != JObject or filterNode.len == 0:
-    return true
-  if filterNode.hasKey("id") and
-      filterNode["id"].getStr() notin [$item.id, item.id.cliIdString()]:
-    return false
-  for key, expected in filterNode:
-    if key == "id":
-      continue
-    if not item.codec.supportsJsonProjection:
-      return false
-    try:
-      let doc = parseJson(item.payload)
-      if doc.kind != JObject or not doc.hasKey(key) or doc[key] != expected:
-        return false
-    except JsonParsingError:
-      return false
-  true
+proc sortDirectionName(direction: RocheReadSortDirection): string =
+  case direction
+  of rsAsc: "asc"
+  of rsDesc: "desc"
 
-proc recordPayloadNode(item: RocheRecord, selection: string): JsonNode =
-  if item.codec.supportsJsonProjection:
-    try:
-      let doc = parseJson(item.payload)
-      if selection.len > 0:
-        return applySelection(prepareSelection(selection), doc)
-      return doc
-    except JsonParsingError:
-      discard
-  %item.payload
+proc paginationName(mode: RochePaginationMode): string =
+  case mode
+  of rpOff: "off"
+  of rpOn: "on"
 
 proc checkFile(path, label: string): bool =
   result = fileExists(path)
@@ -638,110 +626,96 @@ proc tryDecodeBifWithAdapter(data: string): tuple[ok: bool, text: string] =
     except OSError:
       discard
 
-proc renderPayload(value: EncodedPayload, view: string): string =
-  case view.toLowerAscii()
-  of "raw": value.data
-  of "auto":
-    if value.codec == pcBif:
-      let decoded = tryDecodeBifWithAdapter(value.data)
-      if decoded.ok:
-        "codec=bif encoding=nif adapter=nif\n" & decoded.text
-      else:
-        "codec=bif encoding=base64\n" & base64.encode(value.data)
-    elif value.codec.supportsJsonProjection:
-      try:
-        parseJson(value.data).pretty
-      except JsonParsingError:
-        "codec=" & value.codec.payloadCodecName & " encoding=text\n" & value.data
-    else:
-      "codec=" & value.codec.payloadCodecName & " encoding=text\n" & value.data
+proc recordPayloadDisplay(item: RocheRecord, view: string): JsonNode =
+  let mode = view.toLowerAscii()
+  case mode
+  of "raw":
+    %*{"encoding": "raw", "payload": item.payload}
   of "base64":
-    "codec=" & value.codec.payloadCodecName & " encoding=base64\n" &
-      base64.encode(value.data)
+    %*{"encoding": "base64", "payload": base64.encode(item.payload)}
   of "hex":
-    "codec=" & value.codec.payloadCodecName & " encoding=hex\n" & hexPayload(value.data)
+    %*{"encoding": "hex", "payload": hexPayload(item.payload)}
+  of "auto":
+    if item.codec == pcBif:
+      let decoded = tryDecodeBifWithAdapter(item.payload)
+      if decoded.ok:
+        return %*{"encoding": "nif", "adapter": "nif", "payload": decoded.text}
+      return %*{"encoding": "base64", "payload": base64.encode(item.payload)}
+    if item.codec.supportsJsonProjection:
+      try:
+        return %*{"encoding": "json", "payload": parseJson(item.payload)}
+      except JsonParsingError:
+        discard
+    %*{"encoding": "text", "payload": item.payload}
   else:
     raise newException(ValueError, "get view must be raw, auto, base64, or hex")
 
-proc compareRecords(a, b: RocheRecord, order: string): int =
-  let ar = a.id.toRaw()
-  let br = b.id.toRaw()
-  case order
-  of "id-asc":
-    cmp(a.id.cliIdString(), b.id.cliIdString())
-  of "id-desc":
-    -cmp(a.id.cliIdString(), b.id.cliIdString())
-  of "write-asc":
-    cmp(ar.tWrite, br.tWrite)
-  of "write-desc", "":
-    -cmp(ar.tWrite, br.tWrite)
-  else:
-    raise newException(ValueError,
-      "order must be write-desc, write-asc, id-asc, or id-desc")
-
-proc renderListPage(db: RocheDb, ring, cursor: string, limit: int,
-                    filterNode: JsonNode, selection, order: string): JsonNode =
-  var matched: seq[RocheRecord] = @[]
-  var nextCursor = cursor
-  let pageSize = max(limit, 100)
-  while matched.len < limit:
-    let page = db.listByRing(ring, limit = pageSize, cursor = nextCursor)
-    for item in page.items:
-      if recordMatchesFilter(item, filterNode):
-        matched.add item
-        if matched.len >= limit:
-          break
-    nextCursor = page.nextCursor
-    if nextCursor.len == 0 or page.items.len == 0:
-      break
-  matched.sort(proc(a, b: RocheRecord): int = compareRecords(a, b, order))
-
+proc readPageNode(page: RocheReadPage, view: string): JsonNode =
   var items = newJArray()
-  for item in matched:
-    items.add %*{
+  for item in page.items:
+    let display = recordPayloadDisplay(item, view)
+    var node = %*{
       "id": $item.id,
       "rawId": item.id.cliIdString(),
       "codec": item.codec.payloadCodecName,
-      "payload": recordPayloadNode(item, selection)
+      "encoding": display["encoding"].getStr(),
+      "payload": display["payload"]
     }
+    if display.hasKey("adapter"):
+      node["adapter"] = display["adapter"]
+    items.add node
   %*{
-    "ring": ring,
-    "count": db.countByRing(ring),
-    "order": if order.len == 0: "write-desc" else: order,
+    "ring": page.ring,
+    "count": page.count,
+    "pagination": page.pagination.paginationName,
+    "page": page.page,
+    "pageLimit": page.pageLimit,
+    "sort": page.sortField,
+    "sortDirection": page.sortDirection.sortDirectionName,
     "items": items,
-    "nextCursor": nextCursor
+    "nextCursor": page.nextCursor
   }
+
+proc readSortOptions(sortArg, rsortArg: string): tuple[field: string, direction: RocheReadSortDirection] =
+  if sortArg.len > 0 and rsortArg.len > 0:
+    raise newException(ValueError, "--sort and --rsort cannot be used together")
+  if sortArg.len > 0:
+    return (sortArg, rsAsc)
+  if rsortArg.len > 0:
+    return (rsortArg, rsDesc)
+  ("time", rsDesc)
+
+proc readPaginationMode(value: string): RochePaginationMode =
+  case value.toLowerAscii()
+  of "off", "false", "0", "no": rpOff
+  of "on", "true", "1", "yes": rpOn
+  else:
+    raise newException(ValueError, "pagination must be on or off")
 
 proc runGet(dataDir, peers, username, password, authToken, secretKey,
             galaxy, idArg, filterArg, ring, view, selection, cursor: string,
-            limit: int, order: string) =
+            limit, page, pageLimit: int, paginationArg, sortArg, rsortArg: string) =
   let actualDataDir = requireCliTarget(dataDir, peers)
   let filterNode = parseFilter(filterArg)
   let resolvedId = resolveIdArg(idArg, filterArg)
+  let sortOptions = readSortOptions(sortArg, rsortArg)
   if ring.len == 0:
     raise newException(ValueError, "get requires --ring=RING")
   var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
                      galaxy)
   try:
     db.configureRing(ring, 60.0)
-    if resolvedId.len > 0 and filterHasOnlyId(filterNode):
-      if selection.len > 0:
-        echo db.query(cliId(resolvedId), selection).pretty
-      else:
-        echo renderPayload(db.getEncoded(cliId(resolvedId)), view)
-    elif resolvedId.len > 0:
-      let id = cliId(resolvedId)
-      let item = RocheRecord(id: id,
-        payload: db.getEncoded(id).data,
-        codec: db.getEncoded(id).codec)
-      if not recordMatchesFilter(item, filterNode):
-        echo pretty(%*{"ring": ring, "count": 0, "items": newJArray(), "nextCursor": ""})
-      elif selection.len > 0:
-        echo recordPayloadNode(item, selection).pretty
-      else:
-        echo renderPayload(encodedPayload(item.payload, item.codec), view)
-    else:
-      echo renderListPage(db, ring, cursor, limit, filterNode, selection, order).pretty
+    let options = RocheReadOptions(
+      filter: filterWithId(filterNode, resolvedId),
+      selection: selection,
+      limit: limit,
+      cursor: cursor,
+      pagination: readPaginationMode(paginationArg),
+      page: page,
+      pageLimit: pageLimit,
+      sortField: sortOptions.field,
+      sortDirection: sortOptions.direction)
+    echo db.readRing(ring, options).readPageNode(view).pretty
   finally:
     db.close()
 
@@ -2025,7 +1999,7 @@ proc printHelp() =
   echo ""
   echo "Usage:"
   echo "  roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE] [--codec=auto|raw|json|nif|bif]"
-  echo "  roche get [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{\"id\":\"RAW_ID\"}'] [--selection=SEL] [--limit=N] [--cursor=CURSOR] [--order=write-desc|write-asc|id-asc|id-desc]"
+  echo "  roche get [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{\"id\":\"RAW_ID\"}'] [--selection=SEL] [--limit=N] [--cursor=CURSOR] [--sort=id|time] [--rsort=id|time] [--pagination=on|off] [--page=N] [--pagelimit=N]"
   echo "  roche query [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{\"id\":\"RAW_ID\"}' | --id=RAW_ID] --selection=SEL"
   echo "  roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]"
   echo "  roche count-ring [--data=DIR | --peers=host:port,...] --ring=RING"
@@ -2071,7 +2045,9 @@ proc main() =
   var idArg = ""
   var whereArg = ""
   var filterArg = ""
-  var order = "write-desc"
+  var sortArg = ""
+  var rsortArg = "time"
+  var paginationArg = "off"
   var selection = ""
   var cursor = ""
   var defaultRing = "imported"
@@ -2113,6 +2089,8 @@ proc main() =
   var help = false
   var executeDriverInstall = false
   var limit = 100
+  var page = 1
+  var pageLimit = 20
   var positionals: seq[string] = @[]
   for kind, key, val in getopt():
     case kind
@@ -2141,7 +2119,25 @@ proc main() =
       of "id": idArg = val
       of "where": whereArg = val
       of "filter": filterArg = val
-      of "order": order = val
+      of "sort":
+        sortArg = val
+        if rsortArg == "time": rsortArg = ""
+      of "rsort": rsortArg = val
+      of "order":
+        case val
+        of "id-asc":
+          sortArg = "id"; rsortArg = ""
+        of "id-desc":
+          sortArg = ""; rsortArg = "id"
+        of "write-asc", "time-asc":
+          sortArg = "time"; rsortArg = ""
+        of "write-desc", "time-desc":
+          sortArg = ""; rsortArg = "time"
+        else:
+          raise newException(ValueError, "order must be id-asc, id-desc, write-asc, or write-desc")
+      of "pagination": paginationArg = val
+      of "page": page = parseInt(val)
+      of "pagelimit", "page-limit": pageLimit = parseInt(val)
       of "select": selection = val
       of "selection": selection = val
       of "cursor": cursor = val
@@ -2196,7 +2192,8 @@ proc main() =
   of "get":
     let readFilter = effectiveFilter(filterArg, whereArg)
     runGet(dataDir, peers, username, password, authToken, secretKey, galaxy,
-           idArg, readFilter, ringName, view, selection, cursor, limit, order)
+           idArg, readFilter, ringName, view, selection, cursor, limit,
+           page, pageLimit, paginationArg, sortArg, rsortArg)
   of "query":
     let readFilter = effectiveFilter(filterArg, whereArg)
     runQuery(dataDir, peers, username, password, authToken, secretKey, galaxy,

@@ -216,6 +216,39 @@ type
     items*: seq[RocheRecord]
     nextCursor*: string
 
+  RocheReadSortDirection* = enum
+    rsAsc
+    rsDesc
+
+  RochePaginationMode* = enum
+    rpOff
+    rpOn
+
+  RocheReadOptions* = object
+    ## Ring read options shared by the public API and CLI.
+    ## Cursor reads are the efficient default. Page reads are human-facing and
+    ## may need to skip earlier filtered matches.
+    filter*: JsonNode
+    selection*: string
+    limit*: int
+    cursor*: string
+    pagination*: RochePaginationMode
+    page*: int
+    pageLimit*: int
+    sortField*: string
+    sortDirection*: RocheReadSortDirection
+
+  RocheReadPage* = object
+    ring*: string
+    count*: int
+    items*: seq[RocheRecord]
+    nextCursor*: string
+    pagination*: RochePaginationMode
+    page*: int
+    pageLimit*: int
+    sortField*: string
+    sortDirection*: RocheReadSortDirection
+
   RetrieveStats* = object
     totalVectors*: int
     scanned*: int
@@ -1428,6 +1461,121 @@ proc listByRing*(db: RocheDb, ring: string, limit = 100,
       payload: p.payload, codec: p.codec)
     lastSeq = itemKey[1].int64
     inc emitted
+
+proc defaultReadOptions*(): RocheReadOptions =
+  RocheReadOptions(
+    filter: newJObject(),
+    selection: "",
+    limit: 100,
+    cursor: "",
+    pagination: rpOff,
+    page: 1,
+    pageLimit: 20,
+    sortField: "",
+    sortDirection: rsDesc)
+
+proc normalizedReadOptions(options: RocheReadOptions): RocheReadOptions =
+  result = options
+  if result.filter.isNil:
+    result.filter = newJObject()
+  if result.limit <= 0:
+    result.limit = 100
+  if result.page <= 0:
+    result.page = 1
+  if result.pageLimit <= 0:
+    result.pageLimit = result.limit
+  if result.sortField.len == 0:
+    result.sortField = "time"
+  if result.sortField == "write":
+    result.sortField = "time"
+  if result.sortField notin ["id", "time"]:
+    raise newException(ValueError, "sort field must be id, time, or write")
+
+proc recordMatchesReadFilter(item: RocheRecord, filterNode: JsonNode): bool =
+  if filterNode.isNil or filterNode.kind != JObject or filterNode.len == 0:
+    return true
+  let cliId = $item.id.parent & ":" & $item.id.epoch & ":" & $item.id.seq & ":" & $item.id.tWrite
+  if filterNode.hasKey("id") and
+      filterNode["id"].getStr() notin [$item.id, cliId]:
+    return false
+  for key, expected in filterNode:
+    if key == "id":
+      continue
+    if not item.codec.supportsJsonProjection:
+      return false
+    try:
+      let doc = parseJson(item.payload)
+      if doc.kind != JObject or not doc.hasKey(key) or doc[key] != expected:
+        return false
+    except JsonParsingError:
+      return false
+  true
+
+proc projectReadRecord(item: RocheRecord, selection: string): RocheRecord =
+  result = item
+  if selection.len == 0:
+    return
+  if not item.codec.supportsJsonProjection:
+    raise newException(ValueError,
+      "payload codec " & item.codec.payloadCodecName & " does not support JSON projection")
+  result.payload = $applySelection(prepareSelection(selection), parseJson(item.payload))
+  result.codec = pcJson
+
+proc compareReadRecords(a, b: RocheRecord, options: RocheReadOptions): int =
+  case options.sortField
+  of "id":
+    result = cmp($a.id, $b.id)
+  of "time":
+    result = cmp(a.id.tWrite, b.id.tWrite)
+  else:
+    result = 0
+  if options.sortDirection == rsDesc:
+    result = -result
+
+proc readRing*(db: RocheDb, ring: string,
+               options: RocheReadOptions = defaultReadOptions()): RocheReadPage =
+  ## Read records from one ring with filter, projection, limit/cursor,
+  ## page/pagelimit, and page-local sort controls.
+  let opts = normalizedReadOptions(options)
+  let requested =
+    if opts.pagination == rpOn: opts.page * opts.pageLimit
+    else: opts.limit
+  let skip =
+    if opts.pagination == rpOn: (opts.page - 1) * opts.pageLimit
+    else: 0
+  let take =
+    if opts.pagination == rpOn: opts.pageLimit
+    else: opts.limit
+
+  result.ring = ring
+  result.pagination = opts.pagination
+  result.page = opts.page
+  result.pageLimit = opts.pageLimit
+  result.sortField = opts.sortField
+  result.sortDirection = opts.sortDirection
+
+  if requested <= 0:
+    return
+
+  var matched: seq[RocheRecord] = @[]
+  var nextCursor = opts.cursor
+  let pageSize = max(requested, 100)
+  while matched.len < requested:
+    let page = db.listByRing(ring, limit = pageSize, cursor = nextCursor)
+    for item in page.items:
+      if recordMatchesReadFilter(item, opts.filter):
+        matched.add item
+        if matched.len >= requested:
+          break
+    nextCursor = page.nextCursor
+    if nextCursor.len == 0 or page.items.len == 0:
+      break
+
+  matched.sort(proc(a, b: RocheRecord): int = compareReadRecords(a, b, opts))
+  for i in skip ..< min(skip + take, matched.len):
+    result.items.add projectReadRecord(matched[i], opts.selection)
+  result.count = result.items.len
+  result.nextCursor = nextCursor
 
 proc batchPut*(db: RocheDb, payloads: seq[string], ring: string = "default",
                vecs: seq[seq[float32]] = @[]): seq[RocheId] =

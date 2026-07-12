@@ -43,10 +43,12 @@ bin/roche count-ring --ring=docs/japan |
   grep -q "count=1"
 bin/roche get --ring=docs/japan |
   grep -q '"status": "draft"'
-bin/roche get --ring=docs/japan --limit=1 --order=write-desc |
+bin/roche get --ring=docs/japan --limit=1 --rsort=time |
   grep -q '"items"'
-bin/roche get --ring=docs/japan --limit=1 --order=id-asc |
-  grep -q '"order": "id-asc"'
+bin/roche get --ring=docs/japan --limit=1 --sort=id |
+  grep -q '"sort": "id"'
+bin/roche get --ring=docs/japan --limit=1 --sort=id |
+  grep -q '"sortDirection": "asc"'
 bin/roche list-ring --ring=docs/japan |
   grep -q '"rawId"'
 bin/roche get --ring=docs/japan --filter="{\"id\":\"$raw_id\"}" |
@@ -62,7 +64,9 @@ bif_out="$(bin/roche put --ring=artifacts/bif \
   --in="$WORK/payload.bif" --codec=bif)"
 bif_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$bif_out")"
 bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
-  grep -q 'codec=bif encoding=base64'
+  grep -q '"codec": "bif"'
+bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
+  grep -q '"encoding": "base64"'
 cat >"$WORK/fake_nif_tool" <<'TOOL'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -83,10 +87,13 @@ TOOL
 chmod +x "$WORK/fake_nif_tool"
 ROCHEDB_NIF_TOOL="$WORK/fake_nif_tool" \
   bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
-  grep -q 'codec=bif encoding=nif adapter=nif'
+  grep -q '"encoding": "nif"'
 ROCHEDB_NIF_TOOL="$WORK/fake_nif_tool" \
   bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
-  grep -q '(decoded "from adapter")'
+  grep -q '"adapter": "nif"'
+ROCHEDB_NIF_TOOL="$WORK/fake_nif_tool" \
+  bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
+  grep -q 'decoded'
 
 echo "[cli-crud] shell"
 shell_out="$(bin/roche shell --data="$WORK/shell" <<'SHELL'

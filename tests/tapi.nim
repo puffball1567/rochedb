@@ -147,6 +147,37 @@ suite "public api":
     check page2.items[0].payload.contains("\"name\":\"c\"")
     check page2.nextCursor.len == 0
 
+    let read1 = db.readRing("users", RocheReadOptions(
+      filter: %*{"name": "b"},
+      selection: "{ name }",
+      limit: 10,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check read1.count == 1
+    check read1.items.len == 1
+    check parseJson(read1.items[0].payload) == %*{"name": "b"}
+
+    let readLimited = db.readRing("users", RocheReadOptions(
+      filter: newJObject(),
+      limit: 10,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check readLimited.items.len == 3
+    check readLimited.count == 3
+
+    let readPaged = db.readRing("users", RocheReadOptions(
+      filter: newJObject(),
+      pagination: rpOn,
+      page: 2,
+      pageLimit: 2,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check readPaged.items.len == 1
+    check readPaged.count == 1
+    check readPaged.pagination == rpOn
+    check readPaged.page == 2
+    check readPaged.pageLimit == 2
+
     db.update(ids[0], %*{"name": "a2", "meta": {"n": 10}})
     check db.query(ids[0], "{ name }") == %*{"name": "a2"}
     let patched = db.patch(ids[0], %*{"meta": {"ok": true}, "name": nil})
