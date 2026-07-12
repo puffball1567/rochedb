@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.3.0
+
+### Added
+
+- Added the C ABI v2 `roche_read_ring_json` entry point so external drivers can
+  read ring-shaped pages with JSON filters, optional projection, sorting,
+  cursor/page options, codec metadata, and a stable JSON response shape.
+- Added explicit CLI examples for JSON, NIF, BIF, raw, and ring-profile
+  `--codec=auto` payload workflows.
+- Added `docs/test-coverage.md` to track the current unit, smoke, contract,
+  recovery, cluster, universe sync, and driver compatibility test matrix.
+
+### Changed
+
+- Unified recent ring-oriented CLI read behavior around one page-shaped result
+  for single and multiple records.
+- Bumped package metadata to `0.3.0`.
+
+### Fixed / Hardened
+
+- Expanded public API coverage for `readRing` filtering, ID lookup, pagination,
+  sorting defaults, sort aliases, empty-result behavior, and invalid sort
+  rejection.
+- Expanded codec coverage for JSON-compatible projection and NIF/BIF projection
+  rejection.
+- Expanded CLI smoke coverage for codec display, BIF base64/hex/adapter views,
+  invalid filters, invalid sort fields, and invalid projection requests.
+- Expanded the C ABI contract smoke with JSON projection, NIF/BIF metadata,
+  invalid filter, invalid sort, and null-ring error checks.
+
 ## v0.2.5
 
 ### Fixed
