@@ -41,11 +41,15 @@ fi
 echo "[cli-crud] count/list/get/query"
 bin/roche count-ring --ring=docs/japan |
   grep -q "count=1"
+bin/roche get --ring=docs/japan |
+  grep -q '"status": "draft"'
 bin/roche list-ring --ring=docs/japan |
   grep -q '"rawId"'
-bin/roche get --ring=docs/japan --where="{\"id\":\"$raw_id\"}" |
-  grep -q '"status":"draft"'
-bin/roche query --ring=docs/japan --where="{\"id\":\"$raw_id\"}" --selection='{ title }' |
+bin/roche get --ring=docs/japan --filter="{\"id\":\"$raw_id\"}" |
+  grep -q '"status": "draft"'
+bin/roche get --ring=docs/japan --filter='{"status":"draft"}' --selection='{ title }' |
+  grep -q '"title": "Hello"'
+bin/roche query --ring=docs/japan --filter="{\"id\":\"$raw_id\"}" --selection='{ title }' |
   grep -q '"title": "Hello"'
 
 echo "[cli-crud] binary codec display"
@@ -53,7 +57,7 @@ printf '\001\002\003\004' >"$WORK/payload.bif"
 bif_out="$(bin/roche put --ring=artifacts/bif \
   --in="$WORK/payload.bif" --codec=bif)"
 bif_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$bif_out")"
-bin/roche get --ring=artifacts/bif --where="{\"id\":\"$bif_id\"}" |
+bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
   grep -q 'codec=bif encoding=base64'
 cat >"$WORK/fake_nif_tool" <<'TOOL'
 #!/usr/bin/env bash
@@ -74,10 +78,10 @@ printf '(decoded "from adapter")' >"$out"
 TOOL
 chmod +x "$WORK/fake_nif_tool"
 ROCHEDB_NIF_TOOL="$WORK/fake_nif_tool" \
-  bin/roche get --ring=artifacts/bif --where="{\"id\":\"$bif_id\"}" |
+  bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
   grep -q 'codec=bif encoding=nif adapter=nif'
 ROCHEDB_NIF_TOOL="$WORK/fake_nif_tool" \
-  bin/roche get --ring=artifacts/bif --where="{\"id\":\"$bif_id\"}" |
+  bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
   grep -q '(decoded "from adapter")'
 
 echo "[cli-crud] shell"

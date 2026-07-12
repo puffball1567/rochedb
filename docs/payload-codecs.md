@@ -84,7 +84,7 @@ the legacy three-field `VAL` header.
 ```sh
 roche put --ring=docs --in=document.bif --codec=bif
 roche put --ring=docs --payload='{"title":"RocheDB"}' --codec=json
-roche get --ring=docs --where='{"id":"RAW_ID"}'
+roche get --ring=docs --filter='{"id":"RAW_ID"}'
 ```
 
 These examples use the default embedded data directory. Set `ROCHE_DATA` or

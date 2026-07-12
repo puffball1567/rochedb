@@ -2,8 +2,8 @@
 ##
 ## usage:
 ##   roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE] [--codec=raw|json|nif|bif]
-##   roche get [--data=DIR | --peers=host:port,...] --ring=RING [--where='{"id":"RAW_ID"}' | --id=RAW_ID]
-##   roche query [--data=DIR | --peers=host:port,...] --ring=RING [--where='{"id":"RAW_ID"}' | --id=RAW_ID] --selection=SEL
+##   roche get [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{"id":"RAW_ID"}'] [--selection=SEL]
+##   roche query [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{"id":"RAW_ID"}' | --id=RAW_ID] --selection=SEL
 ##   roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]
 ##   roche count-ring [--data=DIR | --peers=host:port,...] --ring=RING
 ##   roche health --peers=host:port,...
@@ -290,31 +290,73 @@ proc cliId(idArg: string): RocheId =
   raise newException(ValueError,
     "--id must be parent:seq or parent:epoch:seq:tWrite")
 
-proc idFromWhere(whereArg: string): string =
-  if whereArg.len == 0:
-    return ""
-  try:
-    let node = parseJson(whereArg)
-    if node.kind != JObject or not node.hasKey("id"):
-      raise newException(ValueError, "where must be a JSON object containing id")
-    result = node["id"].getStr()
-    if result.len == 0:
-      raise newException(ValueError, "where.id must not be empty")
-  except JsonParsingError as e:
-    raise newException(ValueError, "invalid --where JSON: " & e.msg)
-
-proc resolveIdArg(idArg, whereArg: string): string =
-  if idArg.len > 0:
-    idArg
-  else:
-    let fromWhere = idFromWhere(whereArg)
-    if fromWhere.len == 0:
-      raise newException(ValueError, "requires --where='{\"id\":\"RAW_ID\"}' or --id=RAW_ID")
-    fromWhere
-
 proc cliIdString(id: RocheId): string =
   let raw = id.toRaw()
   $raw.parent & ":" & $raw.epoch & ":" & $raw.seq & ":" & $raw.tWrite
+
+proc effectiveFilter(filterArg, whereArg: string): string =
+  if filterArg.len > 0:
+    filterArg
+  else:
+    whereArg
+
+proc parseFilter(filterArg: string): JsonNode =
+  if filterArg.len == 0:
+    return newJObject()
+  try:
+    result = parseJson(filterArg)
+    if result.kind != JObject:
+      raise newException(ValueError, "filter must be a JSON object")
+  except JsonParsingError as e:
+    raise newException(ValueError, "invalid --filter JSON: " & e.msg)
+
+proc idFromFilter(filterArg: string): string =
+  if filterArg.len == 0:
+    return ""
+  let node = parseFilter(filterArg)
+  if node.hasKey("id"):
+    result = node["id"].getStr()
+    if result.len == 0:
+      raise newException(ValueError, "filter.id must not be empty")
+
+proc resolveIdArg(idArg, filterArg: string): string =
+  if idArg.len > 0:
+    idArg
+  else:
+    idFromFilter(filterArg)
+
+proc filterHasOnlyId(filterNode: JsonNode): bool =
+  filterNode.kind == JObject and filterNode.len == 1 and filterNode.hasKey("id")
+
+proc recordMatchesFilter(item: RocheRecord, filterNode: JsonNode): bool =
+  if filterNode.kind != JObject or filterNode.len == 0:
+    return true
+  if filterNode.hasKey("id") and
+      filterNode["id"].getStr() notin [$item.id, item.id.cliIdString()]:
+    return false
+  for key, expected in filterNode:
+    if key == "id":
+      continue
+    if not item.codec.supportsJsonProjection:
+      return false
+    try:
+      let doc = parseJson(item.payload)
+      if doc.kind != JObject or not doc.hasKey(key) or doc[key] != expected:
+        return false
+    except JsonParsingError:
+      return false
+  true
+
+proc recordPayloadNode(item: RocheRecord, selection: string): JsonNode =
+  if item.codec.supportsJsonProjection:
+    try:
+      let doc = parseJson(item.payload)
+      if selection.len > 0:
+        return applySelection(prepareSelection(selection), doc)
+      return doc
+    except JsonParsingError:
+      discard
+  %item.payload
 
 proc checkFile(path, label: string): bool =
   result = fileExists(path)
@@ -606,6 +648,11 @@ proc renderPayload(value: EncodedPayload, view: string): string =
         "codec=bif encoding=nif adapter=nif\n" & decoded.text
       else:
         "codec=bif encoding=base64\n" & base64.encode(value.data)
+    elif value.codec.supportsJsonProjection:
+      try:
+        parseJson(value.data).pretty
+      except JsonParsingError:
+        "codec=" & value.codec.payloadCodecName & " encoding=text\n" & value.data
     else:
       "codec=" & value.codec.payloadCodecName & " encoding=text\n" & value.data
   of "base64":
@@ -616,18 +663,76 @@ proc renderPayload(value: EncodedPayload, view: string): string =
   else:
     raise newException(ValueError, "get view must be raw, auto, base64, or hex")
 
+proc renderListPage(db: RocheDb, ring, cursor: string, limit: int,
+                    filterNode: JsonNode, selection: string): JsonNode =
+  var items = newJArray()
+  var nextCursor = cursor
+  let pageSize = max(limit, 100)
+  while items.len < limit:
+    let page = db.listByRing(ring, limit = pageSize, cursor = nextCursor)
+    for item in page.items:
+      if recordMatchesFilter(item, filterNode):
+        items.add %*{
+          "id": $item.id,
+          "rawId": item.id.cliIdString(),
+          "codec": item.codec.payloadCodecName,
+          "payload": recordPayloadNode(item, selection)
+        }
+        if items.len >= limit:
+          break
+    nextCursor = page.nextCursor
+    if nextCursor.len == 0 or page.items.len == 0:
+      break
+  %*{
+    "ring": ring,
+    "count": db.countByRing(ring),
+    "items": items,
+    "nextCursor": nextCursor
+  }
+
 proc runGet(dataDir, peers, username, password, authToken, secretKey,
-            galaxy, idArg, whereArg, ring, view: string) =
+            galaxy, idArg, filterArg, ring, view, selection, cursor: string,
+            limit: int) =
   let actualDataDir = requireCliTarget(dataDir, peers)
-  let resolvedId = resolveIdArg(idArg, whereArg)
-  if peers.len > 0 and ring.len == 0:
-    raise newException(ValueError, "cluster get requires --ring=RING")
+  let filterNode = parseFilter(filterArg)
+  let resolvedId = resolveIdArg(idArg, filterArg)
+  if ring.len == 0:
+    raise newException(ValueError, "get requires --ring=RING")
   var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
                      galaxy)
   try:
-    if ring.len > 0:
-      db.configureRing(ring, 60.0)
-    echo renderPayload(db.getEncoded(cliId(resolvedId)), view)
+    db.configureRing(ring, 60.0)
+    if resolvedId.len > 0 and filterHasOnlyId(filterNode):
+      if selection.len > 0:
+        echo db.query(cliId(resolvedId), selection).pretty
+      else:
+        echo renderPayload(db.getEncoded(cliId(resolvedId)), view)
+    elif resolvedId.len > 0:
+      let id = cliId(resolvedId)
+      let item = RocheRecord(id: id,
+        payload: db.getEncoded(id).data,
+        codec: db.getEncoded(id).codec)
+      if not recordMatchesFilter(item, filterNode):
+        echo pretty(%*{"ring": ring, "count": 0, "items": newJArray(), "nextCursor": ""})
+      elif selection.len > 0:
+        echo recordPayloadNode(item, selection).pretty
+      else:
+        echo renderPayload(encodedPayload(item.payload, item.codec), view)
+    else:
+      let page = renderListPage(db, ring, cursor, limit, filterNode, selection)
+      if filterNode.len == 0 and cursor.len == 0 and page["count"].getInt() == 1 and
+          page["items"].len == 1:
+        let item = page["items"][0]
+        if selection.len > 0:
+          echo item["payload"].pretty
+        else:
+          let codec = parsePayloadCodec(item["codec"].getStr())
+          if item["payload"].kind == JString:
+            echo renderPayload(encodedPayload(item["payload"].getStr(), codec), view)
+          else:
+            echo item["payload"].pretty
+      else:
+        echo page.pretty
   finally:
     db.close()
 
@@ -1911,8 +2016,8 @@ proc printHelp() =
   echo ""
   echo "Usage:"
   echo "  roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE] [--codec=auto|raw|json|nif|bif]"
-  echo "  roche get [--data=DIR | --peers=host:port,...] --ring=RING [--where='{\"id\":\"RAW_ID\"}' | --id=RAW_ID] [--view=raw|auto|base64|hex]"
-  echo "  roche query [--data=DIR | --peers=host:port,...] --ring=RING [--where='{\"id\":\"RAW_ID\"}' | --id=RAW_ID] --selection=SEL"
+  echo "  roche get [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{\"id\":\"RAW_ID\"}'] [--selection=SEL] [--limit=N] [--cursor=CURSOR]"
+  echo "  roche query [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{\"id\":\"RAW_ID\"}' | --id=RAW_ID] --selection=SEL"
   echo "  roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]"
   echo "  roche count-ring [--data=DIR | --peers=host:port,...] --ring=RING"
   echo "  roche ring-profile --data=DIR --ring=RING [--codec=raw|json|nif|bif] [--charset=UTF-8] [--format-version=VERSION]"
@@ -1937,6 +2042,7 @@ proc printHelp() =
   echo "Local commands use --data=DIR, ROCHE_DATA, or ./data by default."
   echo "Cluster commands use --peers=host:port,..."
   echo "Get uses --view=auto by default; payload codec is inferred from stored metadata."
+  echo "--where is accepted as an alias for --filter. --id is a low-level shortcut for scripts."
   echo "Cluster get/query requires --ring=RING so the CLI can reconstruct ring placement metadata."
 
 proc main() =
@@ -1955,6 +2061,7 @@ proc main() =
   var view = "auto"
   var idArg = ""
   var whereArg = ""
+  var filterArg = ""
   var selection = ""
   var cursor = ""
   var defaultRing = "imported"
@@ -2023,6 +2130,8 @@ proc main() =
       of "view": view = val
       of "id": idArg = val
       of "where": whereArg = val
+      of "filter": filterArg = val
+      of "select": selection = val
       of "selection": selection = val
       of "cursor": cursor = val
       of "default-ring": defaultRing = val
@@ -2074,11 +2183,13 @@ proc main() =
     runPut(dataDir, peers, username, password, authToken, secretKey, galaxy,
            ringName, payload, inPath, codecName)
   of "get":
+    let readFilter = effectiveFilter(filterArg, whereArg)
     runGet(dataDir, peers, username, password, authToken, secretKey, galaxy,
-           idArg, whereArg, ringName, view)
+           idArg, readFilter, ringName, view, selection, cursor, limit)
   of "query":
+    let readFilter = effectiveFilter(filterArg, whereArg)
     runQuery(dataDir, peers, username, password, authToken, secretKey, galaxy,
-             idArg, whereArg, ringName, selection)
+             idArg, readFilter, ringName, selection)
   of "list-ring":
     runListRing(dataDir, peers, username, password, authToken, secretKey,
                 galaxy, ringName, cursor, limit)

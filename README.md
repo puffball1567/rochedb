@@ -143,8 +143,8 @@ Basic CLI document workflow:
 
 ```sh
 roche put --ring=docs/japan --payload='{"title":"Hello"}'
-roche list-ring --ring=docs/japan
-roche get --ring=docs/japan --where='{"id":"RAW_ID"}'
+roche get --ring=docs/japan
+roche get --ring=docs/japan --filter='{"id":"RAW_ID"}' --selection='{ title }'
 ```
 
 When `--data=DIR` is omitted, the CLI uses `ROCHE_DATA` if set, otherwise

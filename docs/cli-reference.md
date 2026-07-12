@@ -113,18 +113,18 @@ running cluster. When `--data=DIR` is omitted, embedded commands use
 
 ```sh
 roche put --ring=docs/japan --payload='{"title":"Hello"}' --codec=json
-roche list-ring --ring=docs/japan
-roche get --ring=docs/japan --where='{"id":"RAW_ID"}'
-roche query --ring=docs/japan --where='{"id":"RAW_ID"}' --selection='{ title }'
+roche get --ring=docs/japan
+roche get --ring=docs/japan --filter='{"id":"RAW_ID"}' --selection='{ title }'
+roche get --ring=docs/japan --filter='{"status":"draft"}' --selection='{ title }'
 roche count-ring --ring=docs/japan
 ```
 
 | Command | Required flags | Purpose |
 |---|---|---|
 | `put` | `--ring=RING` plus `--payload=TEXT` or `--in=FILE`; optional `--codec=auto|raw|json|nif|bif` | Store a document and print `id`, `rawId`, and codec. `auto` uses the ring profile. |
-| `get` | `--ring=RING --where='{"id":"ID"}'`; optional `--id=ID`, `--view=raw|auto|base64|hex` | Fetch one document in the selected ring. The default view is `auto`: it labels text/NIF and decodes BIF to NIF text when a compatible adapter is available; otherwise it renders BIF as base64. Use `--view=raw` for byte-exact output. `--id` is a low-level shortcut for scripts. |
-| `query` | `--ring=RING --where='{"id":"ID"}' --selection=SEL`; optional `--id=ID` | Fetch a JSON projection in the selected ring. `--id` is a low-level shortcut for scripts. |
-| `list-ring` | `--ring=RING` | List records in one ring. |
+| `get` | `--ring=RING`; optional `--filter=JSON`, `--selection=SEL`, `--limit=N`, `--cursor=CURSOR`, `--view=raw|auto|base64|hex` | Read from one ring. Without a filter, it returns the ring contents; if the ring has exactly one item, it returns that item directly. The default view is `auto`: payload codec is inferred from stored metadata. |
+| `query` | `--ring=RING --filter='{"id":"ID"}' --selection=SEL`; optional `--id=ID` | Compatibility command for JSON projection by ID. Prefer `get --selection=...` for new CLI use. |
+| `list-ring` | `--ring=RING` | Compatibility command for listing records in one ring. Prefer `get --ring=...` for new CLI use. |
 | `count-ring` | `--ring=RING` | Count records in one ring. |
 | `ring-profile` | `--ring=RING` | Read or update the persisted `defaultCodec`, `charset`, and `formatVersion` declaration. |
 
@@ -138,6 +138,10 @@ roche put --ring=docs/nif --payload='(example)' # codec=nif via the profile
 The profile is advisory. Every record keeps its explicit codec, so a later
 profile change does not reinterpret existing bytes. Remote profile
 administration is not available in this release.
+
+`--filter` is a JSON object. `{"id":"RAW_ID"}` performs an exact read, while
+other top-level fields filter JSON records in the selected ring. `--where` is
+accepted as a compatibility alias for `--filter`.
 
 For BIF payloads, the default `auto` view looks for an optional adapter in this
 order: `ROCHEDB_NIF_TOOL`, `rochedb-nif`, then `nif_file_tool`. The adapter
