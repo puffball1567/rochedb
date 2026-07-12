@@ -47,6 +47,14 @@ bin/roche get --data="$WORK/data" --id="$raw_id" |
 bin/roche query --data="$WORK/data" --id="$raw_id" --selection='{ title }' |
   grep -q '"title": "Hello"'
 
+echo "[cli-crud] binary codec display"
+printf '\001\002\003\004' >"$WORK/payload.bif"
+bif_out="$(bin/roche put --data="$WORK/data" --ring=artifacts/bif \
+  --in="$WORK/payload.bif" --codec=bif)"
+bif_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$bif_out")"
+bin/roche get --data="$WORK/data" --id="$bif_id" --view=auto |
+  grep -q 'codec=bif encoding=base64'
+
 echo "[cli-crud] shell"
 shell_out="$(bin/roche shell --data="$WORK/shell" <<'SHELL'
 put docs/japan {"title":"Shell","status":"ok"}

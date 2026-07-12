@@ -97,6 +97,28 @@ proc optStr(s: cstring): string =
   else:
     $s
 
+proc codecFromC(value: cint): PayloadCodec =
+  case value
+  of 0: pcRaw
+  of 1: pcJson
+  of 2: pcNif
+  of 3: pcBif
+  else: raise newException(ValueError, "invalid payload codec")
+
+proc codecToC(value: PayloadCodec): cint =
+  case value
+  of pcRaw: 0
+  of pcJson: 1
+  of pcNif: 2
+  of pcBif: 3
+
+proc bytesFromC(data: pointer, len: csize_t): string =
+  if len > 0 and data == nil:
+    raise newException(ValueError, "data is nil")
+  result = newString(int(len))
+  if len > 0:
+    copyMem(addr result[0], data, int(len))
+
 proc roche_abi_version(): cint {.exportc, cdecl, dynlib.} =
   RocheAbiVersion
 
@@ -217,12 +239,22 @@ proc roche_put(h: pointer, ring: cstring, data: pointer, len: csize_t,
     clearError()
     if outId == nil:
       raise newException(ValueError, "out_id is nil")
-    if len > 0 and data == nil:
-      raise newException(ValueError, "data is nil")
-    var payload = newString(int(len))
-    if len > 0:
-      copyMem(addr payload[0], data, int(len))
+    let payload = bytesFromC(data, len)
     outId[] = ensureHandle(h).put(payload, cstringToString(ring, "ring", allowNil = false)).toC
+    RocheOk
+  except CatchableError as e:
+    setError(e)
+    RocheErr
+
+proc roche_put_codec(h: pointer, ring: cstring, data: pointer, len: csize_t,
+                     codec: cint, outId: ptr RocheCId): cint
+                     {.exportc, cdecl, dynlib.} =
+  try:
+    clearError()
+    if outId == nil:
+      raise newException(ValueError, "out_id is nil")
+    outId[] = ensureHandle(h).put(encodedPayload(bytesFromC(data, len),
+      codecFromC(codec)), cstringToString(ring, "ring", allowNil = false)).toC
     RocheOk
   except CatchableError as e:
     setError(e)
@@ -235,19 +267,36 @@ proc roche_put_vec(h: pointer, ring: cstring, data: pointer, len: csize_t,
     clearError()
     if outId == nil:
       raise newException(ValueError, "out_id is nil")
-    if len > 0 and data == nil:
-      raise newException(ValueError, "data is nil")
     if vecLen > 0 and vec == nil:
       raise newException(ValueError, "vec is nil")
-    var payload = newString(int(len))
-    if len > 0:
-      copyMem(addr payload[0], data, int(len))
+    let payload = bytesFromC(data, len)
     var values = newSeq[float32](int(vecLen))
     let rawVec = cast[ptr UncheckedArray[cfloat]](vec)
     for i in 0 ..< int(vecLen):
       values[i] = float32(rawVec[i])
     outId[] = ensureHandle(h).put(payload, cstringToString(ring, "ring", allowNil = false),
                                   vec = values).toC
+    RocheOk
+  except CatchableError as e:
+    setError(e)
+    RocheErr
+
+proc roche_put_vec_codec(h: pointer, ring: cstring, data: pointer, len: csize_t,
+                         codec: cint, vec: ptr cfloat, vecLen: csize_t,
+                         outId: ptr RocheCId): cint {.exportc, cdecl, dynlib.} =
+  try:
+    clearError()
+    if outId == nil:
+      raise newException(ValueError, "out_id is nil")
+    if vecLen > 0 and vec == nil:
+      raise newException(ValueError, "vec is nil")
+    var values = newSeq[float32](int(vecLen))
+    let rawVec = cast[ptr UncheckedArray[cfloat]](vec)
+    for i in 0 ..< int(vecLen):
+      values[i] = float32(rawVec[i])
+    outId[] = ensureHandle(h).put(encodedPayload(bytesFromC(data, len),
+      codecFromC(codec)), cstringToString(ring, "ring", allowNil = false),
+      vec = values).toC
     RocheOk
   except CatchableError as e:
     setError(e)
@@ -267,6 +316,20 @@ proc roche_get(h: pointer, id: RocheCId,
   except CatchableError as e:
     setError(e)
     return nil
+
+proc roche_get_codec(h: pointer, id: RocheCId, outLen: ptr csize_t,
+                     outCodec: ptr cint): pointer {.exportc, cdecl, dynlib.} =
+  try:
+    clearError()
+    if outLen == nil or outCodec == nil:
+      raise newException(ValueError, "out_len and out_codec are required")
+    let value = ensureHandle(h).getEncoded(fromC(id))
+    outLen[] = csize_t(value.data.len)
+    outCodec[] = value.codec.codecToC
+    copyStringToShared(value.data)
+  except CatchableError as e:
+    setError(e)
+    nil
 
 proc roche_free(p: pointer) {.exportc, cdecl, dynlib.} =
   if p != nil:

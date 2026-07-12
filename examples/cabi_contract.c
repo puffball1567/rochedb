@@ -33,6 +33,18 @@ int main(void) {
   if (roche_put_vec(db, "docs/api", payload, strlen(payload), vec, 2, &id) != ROCHE_OK)
     return fail("put_vec failed");
 
+  roche_id bif_id;
+  const unsigned char bif[] = {1, 0, 0, 0};
+  if (roche_put_codec(db, "artifacts/bif", bif, sizeof(bif), ROCHE_CODEC_BIF, &bif_id) != ROCHE_OK)
+    return fail("put_codec failed");
+  size_t bif_len = 0;
+  int bif_codec = -1;
+  void *bif_out = roche_get_codec(db, bif_id, &bif_len, &bif_codec);
+  if (!bif_out || bif_len != sizeof(bif) || bif_codec != ROCHE_CODEC_BIF)
+    return fail("get_codec failed");
+  if (memcmp(bif_out, bif, sizeof(bif)) != 0) return fail("get_codec bytes differ");
+  roche_free(bif_out);
+
   size_t atlas_len = 0;
   char *atlas = roche_atlas(db, vec, 2, 8, &atlas_len);
   if (!atlas || atlas_len == 0) return fail("atlas failed");

@@ -30,6 +30,23 @@ Rules:
 - Drivers should prefer high-level named-ring commands such as `PUTR`, `GETID`,
   `QRYID`, `BGET`, `UAPPLY`, and `USTATUS` instead of constructing internal
   placement metadata themselves.
+- `CODECS` reports the payload format identifiers accepted by the node.
+
+## Payload Codec Metadata
+
+`PUT`, `PUTR`, transaction apply, and handoff frames may append one codec name:
+`raw`, `json`, `nif`, or `bif`. Clients that need response metadata first send
+`CODECMETA ON`; negotiated `VAL`, `ITEM`, and `HIT` response headers then append
+the stored codec where applicable. Clients that do not negotiate retain the
+original response shape. Missing metadata is interpreted as `raw` for
+compatibility with existing WAL records and drivers.
+
+NIF/BIF bytes are opaque to RocheDB core. The core preserves them across WAL
+replay, cluster transfer, and retrieval but does not bundle a NIF/BIF encoder
+or decoder. Use the optional
+[`rochedb-nif`](https://github.com/puffball1567/rochedb-nif) adapter when an
+application needs NIF text / BIF byte conversion. See
+[Payload Codecs](payload-codecs.md).
 
 ## Vector Byte Order
 

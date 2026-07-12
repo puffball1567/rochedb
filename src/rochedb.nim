@@ -23,11 +23,13 @@
 
 import std/[algorithm, tables, hashes, json, times, strutils, os]
 import roche/[core, store, select, wire, field, vector_backend, faiss_backend,
-              planner_backend]
+              planner_backend, payload]
 
 export vector_backend
 export faiss_backend
 export planner_backend
+export payload
+export select
 
 type
   RocheDurability* = StoreDurability
@@ -137,6 +139,7 @@ type
     op*: string
     logicalKey*: string
     payload*: string
+    codec*: PayloadCodec
     vec*: seq[float32]
     timestamp*: float
     originSeq*: uint64
@@ -152,6 +155,7 @@ type
     ringNames: Table[string, uint64]
     ringKeyNames: Table[uint64, string]
     ringDescriptions: Table[uint64, string]
+    ringPayloadProfiles: Table[uint64, RingPayloadProfile]
     ringWriteAckModes: Table[uint64, WriteAckMode]
     ringApplyPolicies: Table[uint64, RingApplyPolicy]
     ringChildren: Table[uint64, seq[uint64]]
@@ -193,11 +197,13 @@ type
     id*: RocheId
     score*: float
     payload*: string
+    codec*: PayloadCodec
 
   RocheRecord* = object
     ## ORM / driver が listByRing で扱う薄い record。
     id*: RocheId
     payload*: string
+    codec*: PayloadCodec
 
   WarpStepResult* = object
     job*: WarpJob
@@ -319,6 +325,7 @@ proc put*(db: RocheDb, payload: string, ring: string = "default",
 proc enqueueUniverseSyncEvent*(db: RocheDb, sourceUniverse, sourceGalaxy,
                                ring, payload: string,
                                vec: seq[float32] = @[],
+                               codec = pcRaw,
                                op = "put", logicalKey = "",
                                timestamp = -1.0,
                                eventKey = ""): uint64
@@ -397,6 +404,8 @@ proc open*(nodes: int = 8, dataDir: string = "",
     result.ringKeyNames[key] = name
   for key, desc in result.st.ringDescriptions:
     result.ringDescriptions[key] = desc
+  for key, profile in result.st.ringPayloadProfiles:
+    result.ringPayloadProfiles[key] = profile
   result.galaxyDescription = result.st.galaxyDescription
   for _, blob in result.st.warpJobs:
     let raw = parseJson(blob)
@@ -451,6 +460,7 @@ proc open*(nodes: int = 8, dataDir: string = "",
       op: raw{"op"}.getStr("put"),
       logicalKey: raw{"logicalKey"}.getStr(),
       payload: raw{"payload"}.getStr(),
+      codec: parsePayloadCodec(raw{"codec"}.getStr("raw")),
       vec: vec,
       timestamp: raw{"timestamp"}.getFloat(),
       originSeq: raw{"originSeq"}.getBiggestInt().uint64,
@@ -533,6 +543,22 @@ proc getRingDescription*(db: RocheDb, ring: string): string =
     ""
   else:
     db.ringDescriptions.getOrDefault(key, "")
+
+proc configureRingPayloadProfile*(db: RocheDb, ring: string,
+                                  profile: RingPayloadProfile) =
+  ## A declaration for applications and tools. It never changes the codec of
+  ## existing records, whose explicit metadata remains authoritative.
+  let key = db.ringKey(ring)
+  db.ringPayloadProfiles[key] = profile
+  if db.mode == mEmbedded:
+    db.st.putRingPayloadProfile(key, profile)
+
+proc ringPayloadProfile*(db: RocheDb, ring: string): RingPayloadProfile =
+  let key = db.ringKeyForRead(ring)
+  if key == 0'u64:
+    defaultRingPayloadProfile()
+  else:
+    db.ringPayloadProfiles.getOrDefault(key, defaultRingPayloadProfile())
 
 proc compact*(db: RocheDb): CompactStats =
   ## 組み込み永続 Store の WAL を生存レコードだけに再構築する。
@@ -929,7 +955,7 @@ proc waitClusterTxApplied*(db: RocheDb, txid: uint64, timeoutMs = 10_000,
     sleep(max(1, pollMs))
   false
 
-proc put*(db: RocheDb, payload: string, ring: string = "default",
+proc put*(db: RocheDb, encoded: EncodedPayload, ring: string = "default",
           vec: seq[float32] = @[]): RocheId =
   ## 書き込み。環は初回利用時に自動作成。
   ## 返る ID を持っていれば、所在は誰にも問い合わせずいつでも計算できる。
@@ -941,40 +967,62 @@ proc put*(db: RocheDb, payload: string, ring: string = "default",
     let seq = db.st.nextSeq(key)
     result = RocheId(parent: key, epoch: db.tbl.epoch, seq: seq, tWrite: db.clock)
     let p = Particle(parent: key, seq: seq, period: ri.period,
-                     head: ri.headAngle, tWrite: db.clock, payload: payload,
+                     head: ri.headAngle, tWrite: db.clock, payload: encoded.data,
+                     codec: encoded.codec,
                      vec: normVec)
     db.st.upsert p
     db.vectorBackend.upsert p
   of mCluster:
     # 書き込み先 = 環ヘッド角の所有ノード（決定論的 write leader, §7 の最小版）
     let node = int(db.tbl.owner(ri.headAngle))
-    let (seq, tWrite) = db.client.putReq(node, key, ri.period, ri.headAngle, payload, normVec)
+    let (seq, tWrite) = db.client.putReq(node, key, ri.period, ri.headAngle,
+                                         encoded.data, normVec, encoded.codec)
     result = RocheId(parent: key, epoch: db.tbl.epoch, seq: seq, tWrite: tWrite)
+
+proc put*(db: RocheDb, payload: string, ring: string = "default",
+          vec: seq[float32] = @[]): RocheId =
+  db.put(encodedPayload(payload), ring, vec)
+
+proc putUsingRingProfile*(db: RocheDb, payload: string,
+                          ring: string = "default",
+                          vec: seq[float32] = @[]): RocheId =
+  ## Uses the ring's declared default codec. The ordinary string overload
+  ## remains raw for backwards compatibility.
+  db.put(encodedPayload(payload, db.ringPayloadProfile(ring).defaultCodec),
+         ring, vec)
 
 proc put*(db: RocheDb, doc: JsonNode, ring: string = "default",
           vec: seq[float32] = @[]): RocheId =
   ## 構造化ドキュメントの書き込み。query（選択取得）の対象になる。
-  db.put($doc, ring, vec)
+  db.put(encodedPayload($doc, pcJson), ring, vec)
 
-proc putSynced*(db: RocheDb, payload: string, sourceUniverse, sourceGalaxy: string,
+proc putSynced*(db: RocheDb, encoded: EncodedPayload,
+                sourceUniverse, sourceGalaxy: string,
                 ring: string = "default", vec: seq[float32] = @[],
                 logicalKey = ""): RocheId =
   ## embedded put と universe outbox 登録を同時に行う。
   ## 既存 put の意味は変えず、Universe 同期したい write path だけで使う。
   doAssert db.mode == mEmbedded, "putSynced は embedded mode 専用"
-  result = db.put(payload, ring = ring, vec = vec)
+  result = db.put(encoded, ring = ring, vec = vec)
   discard db.enqueueUniverseSyncEvent(sourceUniverse = sourceUniverse,
                                       sourceGalaxy = sourceGalaxy,
                                       ring = ring,
-                                      payload = payload,
+                                      payload = encoded.data,
                                       vec = vec,
+                                      codec = encoded.codec,
                                       logicalKey = logicalKey,
                                       timestamp = epochTime())
+
+proc putSynced*(db: RocheDb, payload: string, sourceUniverse, sourceGalaxy: string,
+                ring: string = "default", vec: seq[float32] = @[],
+                logicalKey = ""): RocheId =
+  db.putSynced(encodedPayload(payload), sourceUniverse, sourceGalaxy,
+               ring, vec, logicalKey)
 
 proc putSynced*(db: RocheDb, doc: JsonNode, sourceUniverse, sourceGalaxy: string,
                 ring: string = "default", vec: seq[float32] = @[],
                 logicalKey = ""): RocheId =
-  db.putSynced($doc, sourceUniverse = sourceUniverse,
+  db.putSynced(encodedPayload($doc, pcJson), sourceUniverse = sourceUniverse,
                sourceGalaxy = sourceGalaxy, ring = ring, vec = vec,
                logicalKey = logicalKey)
 
@@ -990,7 +1038,7 @@ proc beginTransaction*(db: RocheDb): RocheTx =
   of mCluster:
     RocheTx(db: db, clusterTxId: db.client.txBeginReq(0))
 
-proc put*(tx: RocheTx, payload: string, ring: string = "default",
+proc put*(tx: RocheTx, encoded: EncodedPayload, ring: string = "default",
           vec: seq[float32] = @[]): RocheId =
   ## transaction 内の書き込み。commit まで DB 本体には見えない。
   doAssert not tx.closed, "transaction is closed"
@@ -1005,18 +1053,22 @@ proc put*(tx: RocheTx, payload: string, ring: string = "default",
     result = RocheId(parent: key, epoch: tx.db.tbl.epoch, seq: seq, tWrite: tx.db.clock)
     tx.tx.upsert Particle(parent: key, seq: seq, period: ri.period,
                           head: ri.headAngle, tWrite: tx.db.clock,
-                          payload: payload, vec: normVec)
+                          payload: encoded.data, codec: encoded.codec, vec: normVec)
   of mCluster:
     let (seq, tWrite) = tx.db.client.txReserveReq(0, tx.clusterTxId, key,
                                                   ri.period, ri.headAngle)
     result = RocheId(parent: key, epoch: tx.db.tbl.epoch, seq: seq, tWrite: tWrite)
     tx.clusterOps.add TxWireOp(parent: key, seq: seq, period: ri.period,
                                head: ri.headAngle, tWrite: tWrite,
-                               payload: payload, vec: normVec)
+                               payload: encoded.data, codec: encoded.codec, vec: normVec)
+
+proc put*(tx: RocheTx, payload: string, ring: string = "default",
+          vec: seq[float32] = @[]): RocheId =
+  tx.put(encodedPayload(payload), ring, vec)
 
 proc put*(tx: RocheTx, doc: JsonNode, ring: string = "default",
           vec: seq[float32] = @[]): RocheId =
-  tx.put($doc, ring, vec)
+  tx.put(encodedPayload($doc, pcJson), ring, vec)
 
 proc remove*(tx: RocheTx, id: RocheId) =
   ## transaction 内の削除。commit まで DB 本体には反映されない。
@@ -1030,7 +1082,7 @@ proc remove*(tx: RocheTx, id: RocheId) =
                                period: ri.period, head: ri.headAngle,
                                tWrite: id.tWrite)
 
-proc update*(tx: RocheTx, id: RocheId, payload: string,
+proc update*(tx: RocheTx, id: RocheId, encoded: EncodedPayload,
              vec: seq[float32] = @[]) =
   ## transaction 内の置換更新。commit まで DB 本体には反映されない。
   doAssert not tx.closed, "transaction is closed"
@@ -1041,7 +1093,8 @@ proc update*(tx: RocheTx, id: RocheId, payload: string,
     if k notin tx.db.st.items:
       raise newException(KeyError, "id が見つからない")
     var p = tx.db.st.items[k]
-    p.payload = payload
+    p.payload = encoded.data
+    p.codec = encoded.codec
     p.tWrite = tx.db.clock
     if vec.len > 0:
       p.vec = normVec
@@ -1050,12 +1103,17 @@ proc update*(tx: RocheTx, id: RocheId, payload: string,
     let ri = tx.db.rings[id.parent]
     tx.clusterOps.add TxWireOp(parent: id.parent, seq: id.seq,
                                period: ri.period, head: ri.headAngle,
-                               tWrite: id.tWrite, payload: payload,
+                               tWrite: id.tWrite, payload: encoded.data,
+                               codec: encoded.codec,
                                vec: normVec)
+
+proc update*(tx: RocheTx, id: RocheId, payload: string,
+             vec: seq[float32] = @[]) =
+  tx.update(id, encodedPayload(payload), vec)
 
 proc update*(tx: RocheTx, id: RocheId, doc: JsonNode,
              vec: seq[float32] = @[]) =
-  tx.update(id, $doc, vec)
+  tx.update(id, encodedPayload($doc, pcJson), vec)
 
 proc commit*(tx: RocheTx) =
   doAssert not tx.closed, "transaction is closed"
@@ -1107,7 +1165,8 @@ proc transaction*(db: RocheDb, body: proc(tx: RocheTx)) =
 
 # ---------------------------------------------------------------- 読み出し
 
-proc fetchCluster(db: RocheDb, id: RocheId, selection: string, fwdDepth = 0): string =
+proc fetchClusterPayload(db: RocheDb, id: RocheId, selection: string,
+                         fwdDepth = 0): EncodedPayload =
   ## 現在の所有ノードから取得。取りこぼしのフォールバック順:
   ##   primary → 1つ手前（尾流コピー, §6.1）→ もう一度 primary
   ## 最後の再試行は「手前を見ている間に粒子が前方へハンドオフされた」TOCTOU
@@ -1115,16 +1174,16 @@ proc fetchCluster(db: RocheDb, id: RocheId, selection: string, fwdDepth = 0): st
   let ri = db.rings[id.parent]
   let n = int(db.tbl.nNodes)
   let primary = int(db.tbl.node(db.orbitOf(id), epochTime()))
-  proc landingRead(): tuple[hit: bool, deleted: bool, value: string] =
+  proc landingRead(): tuple[hit: bool, deleted: bool, value: EncodedPayload] =
     let r = db.client.txGetIdReq(0, WireId(parent: id.parent, epoch: id.epoch,
       seq: id.seq, tWrite: id.tWrite, period: ri.period, head: ri.headAngle),
       selection)
     if r.found:
-      return (true, false, r.value)
+      return (true, false, encodedPayload(r.value, r.codec))
     if r.deleted:
       db.clearPendingLandingRead(id)
-      return (false, true, "")
-    (false, false, "")
+      return (false, true, EncodedPayload())
+    (false, false, EncodedPayload())
   if db.hasPendingLandingRead(id):
     let pending = landingRead()
     if pending.deleted:
@@ -1133,7 +1192,7 @@ proc fetchCluster(db: RocheDb, id: RocheId, selection: string, fwdDepth = 0): st
       return pending.value
     db.clearPendingLandingRead(id)
   for node in [primary, (primary + n - 1) mod n, primary]:
-    var r: tuple[found: bool, node: int, value: string, forwarded: bool,
+    var r: tuple[found: bool, node: int, value: string, codec: PayloadCodec, forwarded: bool,
                  newParent: uint64, newSeq: uint32, newTWrite: float]
     try:
       r =
@@ -1150,15 +1209,15 @@ proc fetchCluster(db: RocheDb, id: RocheId, selection: string, fwdDepth = 0): st
         return pendingRetry.value
       continue
     if r.found:
-      return r.value
+      return encodedPayload(r.value, r.codec)
     if r.forwarded:
       if fwdDepth >= 1:
         raise newException(KeyError, "FWD chain が長すぎる")
       if r.newParent notin db.rings:
         raise newException(KeyError, "FWD 先の環メタがない（parent=" & $r.newParent & "）")
-      return db.fetchCluster(RocheId(parent: r.newParent, epoch: id.epoch,
-                                     seq: r.newSeq, tWrite: r.newTWrite),
-                             selection, fwdDepth + 1)
+      return db.fetchClusterPayload(RocheId(parent: r.newParent, epoch: id.epoch,
+                                            seq: r.newSeq, tWrite: r.newTWrite),
+                                    selection, fwdDepth + 1)
     let pendingRetry = landingRead()
     if pendingRetry.deleted:
       raise newException(KeyError, "id は cluster tx landing intent で削除済み")
@@ -1173,7 +1232,16 @@ proc get*(db: RocheDb, id: RocheId): string =
   of mEmbedded:
     db.st.items[(id.parent, id.seq)].payload
   of mCluster:
-    db.fetchCluster(id, "")
+    db.fetchClusterPayload(id, "").data
+
+proc getEncoded*(db: RocheDb, id: RocheId): EncodedPayload =
+  ## Read payload bytes together with the persisted format identifier.
+  case db.mode
+  of mEmbedded:
+    let p = db.st.items[(id.parent, id.seq)]
+    encodedPayload(p.payload, p.codec)
+  of mCluster:
+    db.fetchClusterPayload(id, "")
 
 proc batchGet*(db: RocheDb, ids: seq[RocheId]): seq[string] =
   ## 複数 ID をまとめて取得する。cluster では同一 node 行きをまとめて 1 request にする。
@@ -1241,7 +1309,7 @@ proc deleteById*(db: RocheDb, id: RocheId) =
   ## ORM で直感的に使うための alias。
   db.remove(id)
 
-proc update*(db: RocheDb, id: RocheId, payload: string,
+proc update*(db: RocheDb, id: RocheId, encoded: EncodedPayload,
              vec: seq[float32] = @[]) =
   ## payload を置換する。vec を省略した場合は既存 vec を保持する。
   case db.mode
@@ -1250,7 +1318,8 @@ proc update*(db: RocheDb, id: RocheId, payload: string,
     if k notin db.st.items:
       raise newException(KeyError, "id が見つからない")
     var p = db.st.items[k]
-    p.payload = payload
+    p.payload = encoded.data
+    p.codec = encoded.codec
     p.tWrite = db.clock
     if vec.len > 0:
       p.vec = vec.normalize()
@@ -1262,7 +1331,7 @@ proc update*(db: RocheDb, id: RocheId, payload: string,
     let ops = @[
       TxWireOp(parent: id.parent, seq: id.seq, period: ri.period,
                head: ri.headAngle, tWrite: id.tWrite,
-               payload: payload, vec: vec.normalize())
+               payload: encoded.data, codec: encoded.codec, vec: vec.normalize())
     ]
     db.client.txCommitReq(0, txid, ops)
     if db.writeAckModeForOps(ops) == wamApplied:
@@ -1271,9 +1340,13 @@ proc update*(db: RocheDb, id: RocheId, payload: string,
     else:
       db.markPendingLandingReads(ops)
 
+proc update*(db: RocheDb, id: RocheId, payload: string,
+             vec: seq[float32] = @[]) =
+  db.update(id, encodedPayload(payload), vec)
+
 proc update*(db: RocheDb, id: RocheId, doc: JsonNode,
              vec: seq[float32] = @[]) =
-  db.update(id, $doc, vec)
+  db.update(id, encodedPayload($doc, pcJson), vec)
 
 proc mergePatch(dst: var JsonNode, patch: JsonNode) =
   if patch.kind != JObject or dst.kind != JObject:
@@ -1336,7 +1409,7 @@ proc listByRing*(db: RocheDb, ring: string, limit = 100,
       result.items.add RocheRecord(
         id: RocheId(parent: row.parent, epoch: db.tbl.epoch, seq: row.seq,
                     tWrite: row.tWrite),
-        payload: row.payload)
+        payload: row.payload, codec: row.codec)
     return
   var emitted = 0
   var lastSeq = -1'i64
@@ -1352,7 +1425,7 @@ proc listByRing*(db: RocheDb, ring: string, limit = 100,
     result.items.add RocheRecord(
       id: RocheId(parent: p.parent, epoch: db.tbl.epoch, seq: p.seq,
                   tWrite: p.tWrite),
-      payload: p.payload)
+      payload: p.payload, codec: p.codec)
     lastSeq = itemKey[1].int64
     inc emitted
 
@@ -1422,6 +1495,7 @@ proc universeSyncEventJson(event: UniverseSyncEvent): JsonNode =
     "op": event.op,
     "logicalKey": event.logicalKey,
     "payload": event.payload,
+    "codec": event.codec.payloadCodecName,
     "vec": event.vec,
     "timestamp": event.timestamp,
     "originSeq": event.originSeq,
@@ -1501,6 +1575,7 @@ proc universeSyncEventReady(db: RocheDb, event: UniverseSyncEvent): bool =
 proc enqueueUniverseSyncEvent*(db: RocheDb, sourceUniverse, sourceGalaxy,
                                ring, payload: string,
                                vec: seq[float32] = @[],
+                               codec = pcRaw,
                                op = "put", logicalKey = "",
                                timestamp = -1.0,
                                eventKey = ""): uint64 =
@@ -1527,6 +1602,7 @@ proc enqueueUniverseSyncEvent*(db: RocheDb, sourceUniverse, sourceGalaxy,
                                 op: op,
                                 logicalKey: logicalKey,
                                 payload: payload,
+                                codec: codec,
                                 vec: vec.normalize(),
                                 timestamp: ts,
                                 originSeq: db.nextUniverseSyncId)
@@ -1552,7 +1628,8 @@ proc applyUniverseSyncEvent*(db: RocheDb, event: UniverseSyncEvent): bool =
   let policy = db.ringApplyPolicy(event.ring)
   case policy.mode
   of ramLatestOnly, ramAppendOnly, ramBoundedHistory, ramDelayedTimestamp:
-    discard db.put(event.payload, ring = event.ring, vec = event.vec)
+    discard db.put(encodedPayload(event.payload, event.codec),
+                   ring = event.ring, vec = event.vec)
   db.st.markUniverseSyncEventApplied(event.eventKey)
   true
 
@@ -1738,16 +1815,23 @@ proc batchRemove*(db: RocheDb, ids: seq[RocheId]) =
 proc batchDelete*(db: RocheDb, ids: seq[RocheId]) =
   db.batchRemove(ids)
 
-proc query*(db: RocheDb, id: RocheId, selection: string): JsonNode =
+proc query*(db: RocheDb, id: RocheId, prepared: PreparedSelection): JsonNode =
   ## 選択取得（GraphQL 風, 設計書 §15）。payload は JSON であること。
-  ##   db.query(id, "{ title author { name } }")
+  ## prepareSelection validates and parses the projection once for reuse.
   ## クラスタではサーバ側で射影され、選択した分だけがネットワークを流れる。
   case db.mode
   of mEmbedded:
-    applySelection(parseSelection(selection),
-                   parseJson(db.st.items[(id.parent, id.seq)].payload))
+    let p = db.st.items[(id.parent, id.seq)]
+    if not p.codec.supportsJsonProjection:
+      raise newException(ValueError,
+        "payload codec " & p.codec.payloadCodecName & " does not support JSON projection")
+    applySelection(prepared, parseJson(p.payload))
   of mCluster:
-    parseJson(db.fetchCluster(id, selection))
+    parseJson(db.fetchClusterPayload(id, prepared.source).data)
+
+proc query*(db: RocheDb, id: RocheId, selection: string): JsonNode =
+  ## Convenience form. Reuse PreparedSelection on hot paths.
+  db.query(id, prepareSelection(selection))
 
 proc contains*(db: RocheDb, id: RocheId): bool =
   ## `id in db` と書ける（組み込みモード）。
@@ -2245,7 +2329,8 @@ proc retrieveWithStats*(db: RocheDb, queryVec: seq[float32], ring: string = "",
     for h in rr.hits:
       result.hits.add RocheHit(id: RocheId(parent: h.parent, epoch: db.tbl.epoch,
                                            seq: h.seq, tWrite: h.tWrite),
-                               score: h.score, payload: h.payload)
+                               score: h.score, payload: h.payload,
+                               codec: db.st.items.getOrDefault((h.parent, h.seq)).codec)
     result.stats.totalVectors = rr.totalVectors
     result.stats.scanned = rr.scanned
     result.stats.skippedVectors = rr.skippedVectors
@@ -2267,7 +2352,7 @@ proc retrieveWithStats*(db: RocheDb, queryVec: seq[float32], ring: string = "",
           for h in rr.hits:
             result.hits.add RocheHit(id: RocheId(parent: h.parent, epoch: db.tbl.epoch,
                                                  seq: h.seq, tWrite: h.tWrite),
-                                     score: h.score, payload: h.payload)
+                                     score: h.score, payload: h.payload, codec: h.codec)
     elif result.plan.effectiveTopRings <= 0:
       for node in 0 ..< db.client.peers.len:
         let rr = db.client.retrieveReq(node, ring.len > 0, ringFilter, q, budget)
@@ -2280,7 +2365,7 @@ proc retrieveWithStats*(db: RocheDb, queryVec: seq[float32], ring: string = "",
         for h in rr.hits:
           result.hits.add RocheHit(id: RocheId(parent: h.parent, epoch: db.tbl.epoch,
                                                seq: h.seq, tWrite: h.tWrite),
-                                   score: h.score, payload: h.payload)
+                                   score: h.score, payload: h.payload, codec: h.codec)
     else:
       var rings = db.ringSummaries(q)
       if rings.len > result.plan.effectiveTopRings:
@@ -2297,7 +2382,7 @@ proc retrieveWithStats*(db: RocheDb, queryVec: seq[float32], ring: string = "",
           for h in rr.hits:
             result.hits.add RocheHit(id: RocheId(parent: h.parent, epoch: db.tbl.epoch,
                                                  seq: h.seq, tWrite: h.tWrite),
-                                     score: h.score, payload: h.payload)
+                                     score: h.score, payload: h.payload, codec: h.codec)
   result.hits.sort(proc(a, b: RocheHit): int = cmp(b.score, a.score))
   if result.hits.len > budget:
     result.hits.setLen(budget)

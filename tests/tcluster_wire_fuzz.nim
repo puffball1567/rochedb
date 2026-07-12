@@ -50,6 +50,8 @@ suite "cluster wire fuzz":
                payload: "allowed"),
       FuzzCase(name: "huge-vector", header: "PUTR 7 0 999999999",
                payload: "allowed"),
+      FuzzCase(name: "unknown-codec", header: "PUTR 7 0 0 executable",
+               payload: "allowed"),
       FuzzCase(name: "short-put", header: "PUT"),
       FuzzCase(name: "huge-put-payload", header: "PUT 1 60 0 999999999 0"),
       FuzzCase(name: "negative-put-payload", header: "PUT 1 60 0 -1 0"),
@@ -70,6 +72,7 @@ suite "cluster wire fuzz":
       FuzzCase(name: "short-applytx", header: "APPLYTX"),
       FuzzCase(name: "short-trf", header: "TRF"),
       FuzzCase(name: "unknown-command", header: "WHAT_IS_THIS 1 2 3"),
+      FuzzCase(name: "bad-codec-negotiation", header: "CODECMETA MAYBE"),
       FuzzCase(name: "truncated-txcommit", header: "TXCOMMIT 1 1",
                closeAfterSend: true)
     ]

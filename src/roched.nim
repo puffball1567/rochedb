@@ -17,6 +17,7 @@ const
   TickMs = 100      # ハンドオフ判定の周期
   DefaultSlowTickSec = 10.0
   MaxTransfersPerTick = 256   # 一括移動時も select ループを塞がない上限
+  MaxPreparedSelections = 1024
   DefaultPeriod = 60.0
   MaxWireBodyBytes = 64 * 1024 * 1024
   MaxWireVectorDim = MaxWireBodyBytes div sizeof(float32)
@@ -61,6 +62,8 @@ type
     universeApplyForwarded: uint64
     universeApplyLastOk: float
     universeApplyLastError: float
+    preparedSelections: Table[string, Selection]
+    codecMetadata: Table[int, bool]
 
 type LocalHit = object
   parent: uint64
@@ -68,6 +71,27 @@ type LocalHit = object
   tWrite: float
   score: float
   payload: string
+  codec: PayloadCodec
+
+proc compiledSelection(sv: Server, source: string): Selection =
+  if source in sv.preparedSelections:
+    return sv.preparedSelections[source]
+  result = parseSelection(source)
+  if sv.preparedSelections.len < MaxPreparedSelections:
+    sv.preparedSelections[source] = result
+
+proc projectPayload(sv: Server, payload: string, codec: PayloadCodec,
+                    selection: string): string =
+  if not codec.supportsJsonProjection:
+    raise newException(ValueError,
+      "payload codec " & codec.payloadCodecName & " does not support JSON projection")
+  $applySelection(sv.compiledSelection(selection), parseJson(payload))
+
+proc codecSuffix(sv: Server, sock: Socket, codec: PayloadCodec): string =
+  if sv.codecMetadata.getOrDefault(sock.getFd.int, false):
+    " " & codec.payloadCodecName
+  else:
+    ""
 
 proc orbitOf(p: Particle): Orbit =
   OrbitalId(parent: p.parent, epoch: 1, tWrite: p.tWrite, seq: p.seq)
@@ -245,13 +269,14 @@ proc applyUniverseEvent(sv: Server, event: JsonNode, now: float): bool =
   if sv.st.isUniverseSyncEventApplied(eventKey):
     return false
   let payload = event{"payload"}.getStr()
+  let codec = parsePayloadCodec(event{"codec"}.getStr("raw"))
   let vec = jsonFloat32Seq(event{"vec"}).normalize()
   let ri = sv.ringInfo(ringName)
   let seq = sv.st.nextSeq(ri.key)
   let tWrite = event{"timestamp"}.getFloat(now)
   sv.st.upsert Particle(parent: ri.key, seq: seq, period: ri.period,
                         head: ri.head, tWrite: tWrite, payload: payload,
-                        vec: vec, lastHere: now)
+                        codec: codec, vec: vec, lastHere: now)
   if ri.key != HaloKey:
     sv.fs.observeRingPut(ri.key, vec)
   sv.st.markUniverseSyncEventApplied(eventKey)
@@ -284,7 +309,7 @@ proc handoffTick(sv: Server) =
         if not p.sentAhead:
           try:
             sv.peerLink.transferReq(nextNode, p.parent, p.seq, p.period, p.head,
-                                    p.tWrite, p.payload, p.vec, timeoutMs = 500)
+                                    p.tWrite, p.payload, p.vec, p.codec, timeoutMs = 500)
             p.sentAhead = true
             dec budget
           except CatchableError:
@@ -295,7 +320,7 @@ proc handoffTick(sv: Server) =
       if not p.sentAhead:
         try:
           sv.peerLink.transferReq(ownNow, p.parent, p.seq, p.period, p.head,
-                                  p.tWrite, p.payload, p.vec, timeoutMs = 500)
+                                  p.tWrite, p.payload, p.vec, p.codec, timeoutMs = 500)
           p.sentAhead = true
           dec budget
         except CatchableError:
@@ -339,7 +364,7 @@ proc handleRetrieve(sv: Server, sock: Socket, parts: seq[string]) =
       rings[p.parent] = true
       hits.add LocalHit(parent: p.parent, seq: p.seq, tWrite: p.tWrite,
                         score: 1.0 - cosineDistance(q, p.vec),
-                        payload: p.payload)
+                        payload: p.payload, codec: p.codec)
     hits.sort(proc(a, b: LocalHit): int = cmp(b.score, a.score))
     if hits.len > budget:
       hits.setLen(budget)
@@ -351,7 +376,8 @@ proc handleRetrieve(sv: Server, sock: Socket, parts: seq[string]) =
                  " " & $totalVectors & " " & $payloadBytes)
   for h in hits:
     sock.sendFrame("HIT " & $h.parent & " " & $h.seq & " " & $h.tWrite & " " &
-                   $h.score & " " & $h.payload.len, h.payload)
+                   $h.score & " " & $h.payload.len & sv.codecSuffix(sock, h.codec),
+                   h.payload)
 
 proc applyClusterTxTick(sv: Server) =
   ## node0 が landing zone。commit intent は全 op の apply ACK まで残す。
@@ -371,7 +397,7 @@ proc applyClusterTxTick(sv: Server) =
           TxWireOp(delete: op.kind == ctxDelete,
                    parent: op.parent, seq: op.seq, period: op.period,
                    head: op.head, tWrite: op.tWrite,
-                   payload: op.payload, vec: op.vec),
+                   payload: op.payload, codec: op.codec, vec: op.vec),
           timeoutMs = 500)
       except CatchableError:
         allApplied = false
@@ -476,6 +502,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
                            tWrite: parseFloat(h[data + 4]))
       let payloadLen = parseInt(h[data + 5])
       let vecDim = parseInt(h[data + 6])
+      op.codec = if h.len > data + 7: parsePayloadCodec(h[data + 7]) else: pcRaw
       let bodyBytes = checkedFrameBytes(payloadLen, vecDim, extra = 1)
       if not sv.ringKeyAllowed(sock, op.parent):
         sock.drainBytes(bodyBytes)
@@ -543,6 +570,14 @@ proc handleFrame(sv: Server, sock: Socket): bool =
                    $(int(sv.universeApplyLastError)))
   of "WIREVER":
     sock.sendFrame("WIREVER " & $WireProtocolVersion)
+  of "CODECS":
+    sock.sendFrame("CODECS raw json nif bif")
+  of "CODECMETA":
+    if parts.len != 2 or parts[1] != "ON":
+      sock.sendFrame("ERR CODECMETA requires ON")
+    else:
+      sv.codecMetadata[sock.getFd.int] = true
+      sock.sendFrame("OK codec-metadata")
   of "APPLYTX":
     if not sv.requireRole(sock, roleWriter):
       return false
@@ -553,6 +588,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     let seq = parseUInt(parts[data + 1]).uint32
     let payloadLen = parseInt(parts[data + 5])
     let vecDim = parseInt(parts[data + 6])
+    let codec = if parts.len > data + 7: parsePayloadCodec(parts[data + 7]) else: pcRaw
     let bodyBytes = checkedFrameBytes(payloadLen, vecDim)
     if not sv.ringKeyAllowed(sock, parent):
       sock.drainBytes(bodyBytes)
@@ -566,6 +602,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
                      period: parseFloat(parts[data + 2]),
                      head: parseFloat(parts[data + 3]),
                      tWrite: parseFloat(parts[data + 4]),
+                     codec: codec,
                      lastHere: now)
     p.payload = sock.readExact(payloadLen)
     p.vec = sock.readExact(checkedVecBytes(vecDim)).bytesVec(vecDim).normalize()
@@ -616,11 +653,12 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       var value = best.payload
       if parts[0] == "TXQRYID":
         try:
-          value = $applySelection(parseSelection(selection), parseJson(value))
+          value = sv.projectPayload(value, best.codec, selection)
         except ValueError, JsonParsingError:
           sock.sendFrame("ERR " & getCurrentExceptionMsg().replace("\n", " "))
           return true
-      sock.sendFrame("VAL 0 " & $value.len, value)
+      let codec = if parts[0] == "TXQRYID": pcJson else: best.codec
+      sock.sendFrame("VAL 0 " & $value.len & sv.codecSuffix(sock, codec), value)
       return true
     sock.sendFrame("MISS")
   of "RETRIEVE":
@@ -648,6 +686,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     let ringLen = parseInt(parts[1])
     let payloadLen = parseInt(parts[2])
     let vecDim = if parts.len >= 4: parseInt(parts[3]) else: 0
+    let codec = if parts.len >= 5: parsePayloadCodec(parts[4]) else: pcRaw
     discard checkedWireLen(ringLen, "ringLen")
     let bodyBytes = checkedFrameBytes(payloadLen, vecDim)
     let ringName = sock.readExact(ringLen)
@@ -660,14 +699,14 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     let ri = sv.ringInfo(ringName)
     let owner = int(sv.tbl.owner(ri.head))
     if owner != sv.myId:
-      let id = sv.peerLink.putRingReq(owner, ringName, payload, vec)
+      let id = sv.peerLink.putRingReq(owner, ringName, payload, vec, codec)
       sock.sendFrame("ID " & $id.parent & " " & $id.epoch & " " & $id.seq & " " &
                      $id.tWrite & " " & $id.period & " " & $id.head)
     else:
       let seq = sv.st.nextSeq(ri.key)
       sv.st.upsert Particle(parent: ri.key, seq: seq, period: ri.period,
                             head: ri.head, tWrite: now, payload: payload,
-                            vec: vec, lastHere: now)
+                            codec: codec, vec: vec, lastHere: now)
       if ri.key != HaloKey:
         sv.fs.observeRingPut(ri.key, vec)
       sock.sendFrame("ID " & $ri.key & " 1 " & $seq & " " & $now & " " &
@@ -680,6 +719,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     let head = parseFloat(parts[3])
     let payloadLen = parseInt(parts[4])
     let vecDim = if parts.len >= 6: parseInt(parts[5]) else: 0
+    let codec = if parts.len >= 7: parsePayloadCodec(parts[6]) else: pcRaw
     let bodyBytes = checkedFrameBytes(payloadLen, vecDim)
     if not sv.ringKeyAllowed(sock, ringKey):
       sock.drainBytes(bodyBytes)
@@ -691,7 +731,8 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     if ringKey notin sv.st.ringMeta:
       sv.st.putRingMeta(ringKey, period, head)
     sv.st.upsert Particle(parent: ringKey, seq: seq, period: period, head: head,
-                          tWrite: now, payload: payload, vec: vec, lastHere: now)
+                          tWrite: now, payload: payload, codec: codec,
+                          vec: vec, lastHere: now)
     if ringKey != HaloKey:
       sv.fs.observeRingPut(ringKey, vec)
     sock.sendFrame("OK " & $seq & " " & $now)
@@ -728,7 +769,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     sock.sendFrame("LVAL " & $rows.len & " " & nextCursor)
     for p in rows:
       sock.sendFrame("ITEM " & $p.seq & " " & $p.tWrite & " " & $p.parent & " " &
-                     $p.payload.len, p.payload)
+                     $p.payload.len & sv.codecSuffix(sock, p.codec), p.payload)
   of "GETID", "QRYID":
     let parent = parseBiggestUInt(parts[1]).uint64
     let epoch = parseUInt(parts[2]).uint32
@@ -758,7 +799,8 @@ proc handleFrame(sv: Server, sock: Socket): bool =
         sock.sendFrame("FWD " & $r.newParent & " " & $epoch & " " & $r.newSeq & " " &
                        $r.newTWrite & " " & $period & " " & $head)
       elif r.found:
-        sock.sendFrame("VAL " & $r.node & " " & $r.value.len, r.value)
+        sock.sendFrame("VAL " & $r.node & " " & $r.value.len &
+                       sv.codecSuffix(sock, r.codec), r.value)
       else:
         sock.sendFrame("MISS")
       return true
@@ -771,14 +813,18 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       else:
         sock.sendFrame("MISS")
     else:
-      var value = sv.st.items[(parent, seq)].payload
+      let item = sv.st.items[(parent, seq)]
+      var value = item.payload
+      var codec = item.codec
       if parts[0] == "QRYID":
         try:
-          value = $applySelection(parseSelection(selection), parseJson(value))
+          value = sv.projectPayload(value, codec, selection)
+          codec = pcJson
         except ValueError, JsonParsingError:
           sock.sendFrame("ERR " & getCurrentExceptionMsg().replace("\n", " "))
           return true
-      sock.sendFrame("VAL " & $sv.myId & " " & $value.len, value)
+      sock.sendFrame("VAL " & $sv.myId & " " & $value.len &
+                     sv.codecSuffix(sock, codec), value)
   of "GET", "QRY":
     let parent = parseBiggestUInt(parts[1]).uint64
     let seq = parseUInt(parts[2]).uint32
@@ -802,14 +848,18 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       else:
         sock.sendFrame("MISS")
     else:
-      var value = sv.st.items[(parent, seq)].payload
+      let item = sv.st.items[(parent, seq)]
+      var value = item.payload
+      var codec = item.codec
       if parts[0] == "QRY":
         try:
-          value = $applySelection(parseSelection(selection), parseJson(value))
+          value = sv.projectPayload(value, codec, selection)
+          codec = pcJson
         except ValueError, JsonParsingError:
           sock.sendFrame("ERR " & getCurrentExceptionMsg().replace("\n", " "))
           return true
-      sock.sendFrame("VAL " & $sv.myId & " " & $value.len, value)
+      sock.sendFrame("VAL " & $sv.myId & " " & $value.len &
+                     sv.codecSuffix(sock, codec), value)
   of "BGET":
     let n = parseInt(parts[1])
     let bodyLen = parseInt(parts[2])
@@ -850,6 +900,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
                      lastHere: now)
     let payloadLen = parseInt(parts[6])
     let vecDim = if parts.len >= 8: parseInt(parts[7]) else: 0
+    p.codec = if parts.len >= 9: parsePayloadCodec(parts[8]) else: pcRaw
     let bodyBytes = checkedFrameBytes(payloadLen, vecDim)
     if not sv.ringKeyAllowed(sock, p.parent):
       sock.drainBytes(bodyBytes)
@@ -1007,6 +1058,8 @@ proc main() =
                   users: users,
                   galaxy: galaxy,
                   allowedRingPrefixes: allowedRingPrefixes,
+                  preparedSelections: initTable[string, Selection](),
+                  codecMetadata: initTable[int, bool](),
                   startedAt: epochTime())
   sv.st.setGalaxy(galaxy)
   sv.rebuildFieldState()
@@ -1069,6 +1122,7 @@ proc main() =
           conns.del fd
           sv.activeConnections = conns.len
           sv.authed.del fd
+          sv.codecMetadata.del fd
           sv.authChallenges.del fd
           sock.disableSecure()
           sock.close()

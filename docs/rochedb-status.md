@@ -22,6 +22,8 @@ Translations:
 | ORM foundation API | Done | Embedded APIs plus cluster PoC for `update`, JSON `patch`, `deleteById`, `listByRing`, `countByRing`; canonical data is expected to live in one galaxy/ring, with alternate views handled by ring hierarchy, naming, import rules, and retrieval profiles; driver exposure is still pending |
 | Warp belt | PoC | WAL-backed delayed patch queue: `enqueueWarp`, `warpStep`, `warpDrain`; scans specified rings in registration order and drops merge patches onto matching JSON documents; includes minimal attempts / retryAt / maxAttempts / ack / dead-letter state plus acked-job cleanup; FlowBrigade and FlowLogbook adapters are planned instead of core dependencies; server scheduling is still pending |
 | JSON document query | Done | GraphQL-style selection |
+| Payload codecs | PoC | Per-record `raw` / `json` / `nif` / `bif` metadata survives WAL, cluster transport, handoff, transactions, Universe sync, and retrieval. NIF/BIF encoding/decoding remains outside the core; optional adapter: [`rochedb-nif`](https://github.com/puffball1567/rochedb-nif) backed by [`nifkit`](https://github.com/puffball1567/nifkit) |
+| Prepared selection | Done | Reusable validated projection tree in embedded mode plus a bounded server-side parse cache for cluster queries |
 | Vector retrieve | Done | FAISS bridge is the intended production vector path. Exact backend remains for small datasets, tests, and fallback |
 | Ring / hierarchy | Done | `ring = "a/b/c"` and child-ring expansion |
 | Galaxy isolation | Done | Separate data dir / peer list / credential boundary |
@@ -60,7 +62,7 @@ Translations:
 | Static cluster | Done | `roched --id --peers` |
 | Deterministic locate | Done | `E(id,t) -> node` |
 | Handoff / forwarder | PoC | Slow tick integration exists. Fully distributed forwarder placement is not done |
-| Driver-friendly wire | Done | `PUTR/GETID/QRYID`; `WIREVER` exposes the current protocol version. Compatibility policy is documented in `docs/protocol-compatibility.md` |
+| Driver-friendly wire | Done | `PUTR/GETID/QRYID`; `WIREVER` exposes the current protocol version and `CODECS` exposes payload formats. Compatibility policy is documented in `docs/protocol-compatibility.md` |
 | Health / metrics / rings | Done | CLI and wire protocol; metrics include uptime, request/error/auth counters, connection counts, WAL bytes, warp backlog, universe apply counters, cluster tx backlog, and storage/ring counts |
 | Authn + secret key | Done | username/password/secret-key |
 | TLS | Planned | Required for public-network deployments |
@@ -77,7 +79,7 @@ Translations:
 | Target | Status | Notes |
 |---|---|---|
 | Nim API | Done | Native public API |
-| C ABI | Done | ABI version / last error / put/get/retrieve/batch/atlas; C ABI vectors are host-native float arrays, while TCP wire vectors are canonical little-endian float32 |
+| C ABI | Done | ABI version / last error / put/get/retrieve/batch/atlas plus additive codec-aware put/get calls; C ABI vectors are host-native float arrays, while TCP wire vectors are canonical little-endian float32 |
 | JavaScript / TypeScript | Published | npm [`rochedb` v0.1.2](https://www.npmjs.com/package/rochedb); repository [`puffball1567/rochedb-js`](https://github.com/puffball1567/rochedb-js); Node-API C ABI wrapper with TypeScript API |
 | Bun | Partial | The npm package uses Node-API and includes Bun compatibility verification, but Bun support remains experimental |
 | Rust | Published | crates.io [`rochedb` v0.1.3](https://crates.io/crates/rochedb); repository [`puffball1567/rochedb-rust`](https://github.com/puffball1567/rochedb-rust); C ABI wrapper |
@@ -108,6 +110,7 @@ Translations:
 | Cluster transaction smoke | Partial | `scripts/cluster_tx_smoke.sh` starts 3 local nodes and verifies apply / retrieve |
 | Cluster failure retry smoke | Partial | `scripts/cluster_failure_smoke.sh` kills the owner node, verifies the intent remains pending, restarts the owner, and verifies retry apply |
 | Universe sync demo | Done | `examples/universe_sync_demo.sh` builds a small source/target pair, demonstrates API-level sync, then demonstrates the CLI export/sync/prune boundary. `scripts/universe_sync_failure_smoke.sh` verifies malformed JSONL handling, replay idempotency, and explicit ack/prune. `scripts/universe_sync_remote_smoke.sh` verifies remote `--peers` delivery and target-down retry behavior |
+| Payload codec demos | Done | `examples/payload_codecs_demo.sh` covers embedded persistence and prepared selection; `examples/payload_codecs_cluster_demo.sh` covers codec negotiation and legacy wire-header compatibility |
 | Crash / failure case study | Partial | Store-level WAL tail repair, compact interruption, partial commit, and cluster owner crash/restart retry are covered |
 | Multi-node cloud case study | Planned | VM/AZ, latency, failover behavior |
 | Prometheus / Datadog exporter | Post-v0.1 candidate | Core exposes key/value metrics now; OpenMetrics / Datadog collector should be added outside the core server loop |

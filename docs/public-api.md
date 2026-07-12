@@ -83,8 +83,11 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 |---|---|
 | `put(payload, ring = "default", vec = @[])` | Store a string payload in a ring. |
 | `put(doc: JsonNode, ring = "default", vec = @[])` | Store a JSON document. |
+| `put(encodedPayload(bytes, codec), ring, vec)` | Store `raw`, `json`, `nif`, or `bif` bytes with format metadata. |
 | `get(id)` | Fetch by RocheDB ID. |
+| `getEncoded(id)` | Fetch payload bytes together with their `PayloadCodec`. |
 | `query(id, selection)` | Fetch a JSON projection using GraphQL-style selection syntax. |
+| `prepareSelection(selection)` / `query(id, prepared)` | Validate and compile a reusable projection before execution. |
 | `exists(id)` / `contains(id)` | Check whether an ID exists. |
 | `update(id, payload)` / `update(id, doc)` | Replace an existing document. |
 | `patch(id, patchDoc)` | Apply a JSON merge patch. |
@@ -92,6 +95,9 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 | `batchPut(payloads, ring, vecs)` | Insert multiple records. |
 | `batchGet(ids)` | Fetch multiple IDs. |
 | `batchDelete(ids)` | Delete multiple IDs. |
+
+The C ABI exposes matching additive functions: `roche_put_codec`,
+`roche_put_vec_codec`, and `roche_get_codec`. See [Payload Codecs](payload-codecs.md).
 
 ## Ring Reads
 

@@ -36,6 +36,7 @@ downstream AI/RAG or application logic.
 - [Driver Installation](driver-installation.md)
 - [Driver / FFI Roadmap](rochedb-driver-roadmap.md)
 - [Protocol Compatibility](protocol-compatibility.md)
+- [Payload Codecs](payload-codecs.md)
 - [Vector Backend Selection](vector-backends.md)
 - [FAISS Versioning Policy](faiss-versioning.md)
 

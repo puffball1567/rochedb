@@ -62,6 +62,7 @@ corpus size toward semantic working-set size.
 - FAISS versioning policy: [docs/faiss-versioning.md](docs/faiss-versioning.md)
 - Vector backend selection: [docs/vector-backends.md](docs/vector-backends.md)
 - Protocol compatibility: [docs/protocol-compatibility.md](docs/protocol-compatibility.md)
+- Payload codecs and prepared selections: [docs/payload-codecs.md](docs/payload-codecs.md)
 - Universe sync: [docs/universe-sync.md](docs/universe-sync.md)
 - Threat model: [docs/threat-model.md](docs/threat-model.md)
 - Benchmark notes: [docs/rochedb-bench.md](docs/rochedb-bench.md)
@@ -480,6 +481,19 @@ This shows a WAL-backed eventual sync outbox, idempotent apply, ack/prune, and
 the CLI handoff boundary between two local data directories or a remote RocheDB
 server. See [docs/topology-examples.md](docs/topology-examples.md) for topology
 patterns.
+
+Payload codec and prepared selection demos:
+
+```sh
+examples/payload_codecs_demo.sh
+examples/payload_codecs_cluster_demo.sh
+```
+
+RocheDB core stores and transports `raw`, `json`, `nif`, and `bif` payloads as
+codec-tagged bytes. NIF/BIF conversion stays outside the core; use the optional
+[`rochedb-nif`](https://github.com/puffball1567/rochedb-nif) adapter backed by
+[`nifkit`](https://github.com/puffball1567/nifkit) when applications need NIF
+text / BIF byte roundtrips.
 
 ### C ABI
 

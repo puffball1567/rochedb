@@ -12,6 +12,12 @@ type Selection* = ref object
   ## 木構造で循環はない（ARC 制約, 設計書 §13.3）。
   fields*: OrderedTable[string, Selection]
 
+type PreparedSelection* = object
+  ## Validated reusable projection. Keeping the parsed tree prevents repeated
+  ## parsing in embedded mode and prevents callers from interpolating values.
+  source*: string
+  tree*: Selection
+
 proc isIdentChar(c: char): bool =
   c in {'a'..'z', 'A'..'Z', '0'..'9', '_', '-', '.'}
 
@@ -56,6 +62,9 @@ proc parseSelection*(src: string): Selection =
       raise newException(ValueError, "selection: '}' の後に余分な入力")
     inc pos
 
+proc prepareSelection*(src: string): PreparedSelection =
+  PreparedSelection(source: src, tree: parseSelection(src))
+
 proc applySelection*(sel: Selection, node: JsonNode): JsonNode =
   ## 選択木を JSON に適用して部分だけを返す。
   ## - オブジェクト: 選択したフィールドのうち存在するものだけ（欠けは黙って省略）
@@ -75,3 +84,6 @@ proc applySelection*(sel: Selection, node: JsonNode): JsonNode =
       result.add applySelection(sel, elem)
   else:
     result = node
+
+proc applySelection*(prepared: PreparedSelection, node: JsonNode): JsonNode =
+  applySelection(prepared.tree, node)

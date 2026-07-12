@@ -1,7 +1,7 @@
 ## roche - RocheDB command-line client
 ##
 ## usage:
-##   roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE]
+##   roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE] [--codec=raw|json|nif|bif]
 ##   roche get [--data=DIR | --peers=host:port,...] --id=ID [--ring=RING]
 ##   roche query [--data=DIR | --peers=host:port,...] --id=ID --selection=SEL [--ring=RING]
 ##   roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]
@@ -12,7 +12,7 @@
 ##   roche driver list|info|install [LANG] [--manifest-path=FILE] [--execute]
 ##   roche doctor
 
-import std/[algorithm, os, osproc, strutils, strformat, json, times, monotimes,
+import std/[algorithm, base64, os, osproc, strutils, strformat, json, times, monotimes,
             parseopt, net, dynlib]
 import nimsodium/hash
 import rochedb
@@ -488,20 +488,49 @@ proc runAtlas(dataDir, peers, username, password, authToken, secretKey,
   db.close()
 
 proc runPut(dataDir, peers, username, password, authToken, secretKey,
-            galaxy, ring, payload, inPath: string) =
+            galaxy, ring, payload, inPath, codecName: string) =
   requireCliTarget(dataDir, peers)
   if ring.len == 0:
     raise newException(ValueError, "put requires --ring=RING")
   var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
                      galaxy)
   try:
-    let id = db.put(cliPayload(payload, inPath), ring = ring)
-    echo &"put OK id={id} rawId={cliIdString(id)} ring={ring}"
+    let codec =
+      if codecName.toLowerAscii() == "auto":
+        db.ringPayloadProfile(ring).defaultCodec
+      else:
+        parsePayloadCodec(codecName)
+    let id = db.put(encodedPayload(cliPayload(payload, inPath), codec), ring = ring)
+    echo &"put OK id={id} rawId={cliIdString(id)} ring={ring} codec={codec.payloadCodecName}"
   finally:
     db.close()
 
+proc hexPayload(data: string): string =
+  const Hex = "0123456789abcdef"
+  result = newStringOfCap(data.len * 2)
+  for c in data:
+    let value = ord(c)
+    result.add Hex[value shr 4]
+    result.add Hex[value and 0x0f]
+
+proc renderPayload(value: EncodedPayload, view: string): string =
+  case view.toLowerAscii()
+  of "raw": value.data
+  of "auto":
+    if value.codec == pcBif:
+      "codec=bif encoding=base64\n" & base64.encode(value.data)
+    else:
+      "codec=" & value.codec.payloadCodecName & " encoding=text\n" & value.data
+  of "base64":
+    "codec=" & value.codec.payloadCodecName & " encoding=base64\n" &
+      base64.encode(value.data)
+  of "hex":
+    "codec=" & value.codec.payloadCodecName & " encoding=hex\n" & hexPayload(value.data)
+  else:
+    raise newException(ValueError, "get view must be raw, auto, base64, or hex")
+
 proc runGet(dataDir, peers, username, password, authToken, secretKey,
-            galaxy, idArg, ring: string) =
+            galaxy, idArg, ring, view: string) =
   requireCliTarget(dataDir, peers)
   if peers.len > 0 and ring.len == 0:
     raise newException(ValueError, "cluster get requires --ring=RING")
@@ -510,7 +539,7 @@ proc runGet(dataDir, peers, username, password, authToken, secretKey,
   try:
     if ring.len > 0:
       db.configureRing(ring, 60.0)
-    echo db.get(cliId(idArg))
+    echo renderPayload(db.getEncoded(cliId(idArg)), view)
   finally:
     db.close()
 
@@ -544,9 +573,38 @@ proc runListRing(dataDir, peers, username, password, authToken, secretKey,
       items.add %*{
         "id": $item.id,
         "rawId": item.id.cliIdString(),
-        "payload": item.payload
+        "payload": item.payload,
+        "codec": item.codec.payloadCodecName
       }
     echo pretty(%*{"items": items, "nextCursor": page.nextCursor})
+  finally:
+    db.close()
+
+proc runRingProfile(dataDir, peers, username, password, authToken, secretKey,
+                    galaxy, ring, codecName, charset, formatVersion: string) =
+  requireCliTarget(dataDir, peers)
+  if ring.len == 0:
+    raise newException(ValueError, "ring-profile requires --ring=RING")
+  if peers.len > 0:
+    raise newException(ValueError,
+      "ring-profile is currently configured through the embedded store; remote profile administration is not available yet")
+  var db = openCliDb(dataDir, peers, username, password, authToken, secretKey,
+                     galaxy)
+  try:
+    if codecName.toLowerAscii() != "auto" or charset.len > 0 or formatVersion.len > 0:
+      let old = db.ringPayloadProfile(ring)
+      let profile = RingPayloadProfile(
+        defaultCodec: if codecName.toLowerAscii() == "auto": old.defaultCodec else: parsePayloadCodec(codecName),
+        charset: if charset.len == 0: old.charset else: charset,
+        formatVersion: if formatVersion.len == 0: old.formatVersion else: formatVersion)
+      db.configureRingPayloadProfile(ring, profile)
+    let profile = db.ringPayloadProfile(ring)
+    echo (%*{
+      "ring": ring,
+      "defaultCodec": profile.defaultCodec.payloadCodecName,
+      "charset": profile.charset,
+      "formatVersion": profile.formatVersion
+    }).pretty
   finally:
     db.close()
 
@@ -1763,11 +1821,12 @@ proc printHelp() =
   echo "RocheDB command-line client"
   echo ""
   echo "Usage:"
-  echo "  roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE]"
-  echo "  roche get [--data=DIR | --peers=host:port,...] --id=ID [--ring=RING]"
+  echo "  roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE] [--codec=auto|raw|json|nif|bif]"
+  echo "  roche get [--data=DIR | --peers=host:port,...] --id=ID [--ring=RING] [--view=raw|auto|base64|hex]"
   echo "  roche query [--data=DIR | --peers=host:port,...] --id=ID --selection=SEL [--ring=RING]"
   echo "  roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]"
   echo "  roche count-ring [--data=DIR | --peers=host:port,...] --ring=RING"
+  echo "  roche ring-profile --data=DIR --ring=RING [--codec=raw|json|nif|bif] [--charset=UTF-8] [--format-version=VERSION]"
   echo "  roche shell [--data=DIR | --peers=host:port,...]"
   echo "  roche atlas [--data=DIR | --peers=host:port,...]"
   echo "  roche health|metrics|rings --peers=host:port,..."
@@ -1798,6 +1857,10 @@ proc main() =
   var outPath = ""
   var inPath = ""
   var payload = ""
+  var codecName = "auto"
+  var charset = ""
+  var formatVersion = ""
+  var view = "raw"
   var idArg = ""
   var selection = ""
   var cursor = ""
@@ -1861,6 +1924,10 @@ proc main() =
       of "out": outPath = val
       of "in": inPath = val
       of "payload": payload = val
+      of "codec": codecName = val
+      of "charset": charset = val
+      of "format-version": formatVersion = val
+      of "view": view = val
       of "id": idArg = val
       of "selection": selection = val
       of "cursor": cursor = val
@@ -1911,10 +1978,10 @@ proc main() =
   case cmd
   of "put":
     runPut(dataDir, peers, username, password, authToken, secretKey, galaxy,
-           ringName, payload, inPath)
+           ringName, payload, inPath, codecName)
   of "get":
     runGet(dataDir, peers, username, password, authToken, secretKey, galaxy,
-           idArg, ringName)
+           idArg, ringName, view)
   of "query":
     runQuery(dataDir, peers, username, password, authToken, secretKey, galaxy,
              idArg, ringName, selection)
@@ -1924,6 +1991,9 @@ proc main() =
   of "count-ring":
     runCountRing(dataDir, peers, username, password, authToken, secretKey,
                  galaxy, ringName)
+  of "ring-profile":
+    runRingProfile(dataDir, peers, username, password, authToken, secretKey,
+                   galaxy, ringName, codecName, charset, formatVersion)
   of "shell":
     runShell(dataDir, peers, username, password, authToken, secretKey, galaxy)
   of "demo": runDemo(peers, username, password, authToken, secretKey, galaxy)

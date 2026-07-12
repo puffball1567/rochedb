@@ -41,6 +41,19 @@ suite "cluster transaction":
     check narrowed[0].payload == "ret-ai-1"
     db.close()
 
+  test "cluster transaction preserves payload codec through owner apply":
+    let peers = getEnv("ROCHE_TEST_PEERS", "127.0.0.1:7411,127.0.0.1:7412,127.0.0.1:7413")
+    var db = connect(peers)
+    let tx = db.beginTransaction()
+    let id = tx.put(encodedPayload("(object (kind artifact))", pcNif),
+                    ring = "cluster-codec", vec = @[0.0'f32, 1.0'f32])
+    tx.commit(wamApplied)
+    check db.getEncoded(id) == encodedPayload("(object (kind artifact))", pcNif)
+    let hits = db.retrieve(@[0.0'f32, 1.0'f32], ring = "cluster-codec", budget = 1)
+    check hits.len == 1
+    check hits[0].codec == pcNif
+    db.close()
+
   test "cluster update/delete/list/count は landing intent 経由で反映される":
     let peers = getEnv("ROCHE_TEST_PEERS", "127.0.0.1:7411,127.0.0.1:7412,127.0.0.1:7413")
     var db = connect(peers)

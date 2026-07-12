@@ -18,6 +18,27 @@ suite "store persistence":
     st2.close()
     removeDir(dir)
 
+  test "payload codec survives WAL replay while legacy records default to raw":
+    let dir = createTempDir("roche-store", "payload-codec")
+    var st = openStore(dir)
+    st.upsert Particle(parent: 12'u64, seq: 0'u32, period: 60.0, head: 0.0,
+                       tWrite: 1.0, payload: "(object (name RocheDB))",
+                       codec: pcNif)
+    st.close()
+
+    var restored = openStore(dir)
+    check restored.items[(12'u64, 0'u32)].codec == pcNif
+    restored.close()
+    removeDir(dir)
+
+    let legacyDir = createTempDir("roche-store", "legacy-payload-codec")
+    writeFile(legacyDir / "roche.log",
+              "P 13 0 60.0 0.0 1.0 5 0\nhello\n")
+    var legacy = openStore(legacyDir)
+    check legacy.items[(13'u64, 0'u32)].codec == pcRaw
+    legacy.close()
+    removeDir(legacyDir)
+
   test "Forwarder は F レコードで復元される":
     let dir = createTempDir("roche-store", "fwd")
     var st = openStore(dir)
