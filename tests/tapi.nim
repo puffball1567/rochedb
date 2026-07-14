@@ -1246,6 +1246,125 @@ suite "transaction":
     check db.readRing("users/123/audit").count == 1
     db.close()
 
+  test "atomic batch matrix covers commit, rollback, mismatch, delete, and replay":
+    let dir = createTempDir("rochedb", "atomic-matrix")
+    var db = open(dataDir = dir)
+
+    block putSuccess:
+      let ids = db.batchPutAtomic(@["a", "b"], ring = "matrix")
+      check ids.len == 2
+      check db.get(ids[0]) == "a"
+      check db.get(ids[1]) == "b"
+
+    block updateLengthMismatch:
+      let id = db.put("unchanged", ring = "matrix")
+      expect ValueError:
+        db.batchUpdateAtomic(@[id], @["x", "extra"])
+      check db.get(id) == "unchanged"
+
+    block updateMissingIdRollback:
+      let first = db.put("first-before", ring = "matrix")
+      let second = db.put("second-before", ring = "matrix")
+      let raw = second.toRaw()
+      let missing = fromRaw(raw.parent, raw.epoch, raw.seq + 999'u32, raw.tWrite)
+      expect KeyError:
+        db.batchUpdateAtomic(@[first, missing], @["first-after", "missing"])
+      check db.get(first) == "first-before"
+      check db.get(second) == "second-before"
+
+    block deleteMissingIdRollback:
+      let keepA = db.put("keep-a", ring = "matrix")
+      let keepB = db.put("keep-b", ring = "matrix")
+      let raw = keepB.toRaw()
+      let missing = fromRaw(raw.parent, raw.epoch, raw.seq + 999'u32, raw.tWrite)
+      expect KeyError:
+        db.batchDeleteAtomic(@[keepA, missing])
+      check keepA in db
+      check keepB in db
+      check db.get(keepA) == "keep-a"
+      check db.get(keepB) == "keep-b"
+
+    block deleteSuccess:
+      let goneA = db.put("gone-a", ring = "matrix")
+      let goneB = db.put("gone-b", ring = "matrix")
+      db.batchDeleteAtomic(@[goneA, goneB])
+      check not (goneA in db)
+      check not (goneB in db)
+
+    block replay:
+      let persisted = db.batchPutAtomic(@["persist-a", "persist-b"], ring = "matrix")
+      db.close()
+      var reopened = open(dataDir = dir)
+      check reopened.get(persisted[0]) == "persist-a"
+      check reopened.get(persisted[1]) == "persist-b"
+      reopened.close()
+      removeDir(dir)
+
+  test "coordinate lock conflict matrix covers overlap, disjoint, ttl, and finally release":
+    var db = open()
+    discard db.put("user", ring = "users/123")
+    discard db.put("order", ring = "orders/A-001")
+    discard db.put("shop", ring = "shops/1123")
+    db.attachStellar("commerce/order/A-001", "users/123")
+    db.attachStellar("commerce/order/A-001", "orders/A-001")
+    db.attachStellar("commerce/order/A-001", "shops/1123")
+
+    block sameRingConflicts:
+      let lock = db.acquireRingLock("users/123", ttlSeconds = 5)
+      check db.lockActive(lock)
+      expect IOError:
+        discard db.acquireRingLock("users/123", ttlSeconds = 5)
+      db.releaseLock(lock)
+      check not db.lockActive(lock)
+
+    block disjointRingsDoNotConflict:
+      let a = db.acquireRingLock("users/123", ttlSeconds = 5)
+      let b = db.acquireRingLock("products/9", ttlSeconds = 5)
+      check db.lockActive(a)
+      check db.lockActive(b)
+      db.releaseLock(a)
+      db.releaseLock(b)
+
+    block stellarConflictsWithMemberRings:
+      let stellar = db.acquireStellarLock("commerce/order/A-001", ttlSeconds = 5)
+      for ring in ["users/123", "orders/A-001", "shops/1123"]:
+        expect IOError:
+          discard db.acquireRingLock(ring, ttlSeconds = 5)
+      db.releaseLock(stellar)
+
+    block memberRingConflictsWithStellar:
+      let orderLock = db.acquireRingLock("orders/A-001", ttlSeconds = 5)
+      expect IOError:
+        discard db.acquireStellarLock("commerce/order/A-001", ttlSeconds = 5)
+      db.releaseLock(orderLock)
+
+    block unrelatedStellarDoesNotConflict:
+      let one = db.acquireStellarLock("commerce/order/A-001", ttlSeconds = 5)
+      let other = db.acquireStellarLock("support/ticket/T-001", ttlSeconds = 5)
+      check db.lockActive(one)
+      check db.lockActive(other)
+      db.releaseLock(one)
+      db.releaseLock(other)
+
+    block ttlExpiryReleasesLock:
+      let short = db.acquireRingLock("users/123", ttlSeconds = 0.01)
+      sleep(30)
+      check not db.lockActive(short)
+      let next = db.acquireRingLock("users/123", ttlSeconds = 5)
+      check db.lockActive(next)
+      db.releaseLock(next)
+
+    block finallyReleaseOnException:
+      expect ValueError:
+        db.withStellarLock("commerce/order/A-001", proc() =
+          raise newException(ValueError, "workflow failed")
+        )
+      let after = db.acquireRingLock("users/123", ttlSeconds = 5)
+      check db.lockActive(after)
+      db.releaseLock(after)
+
+    db.close()
+
 suite "galaxy router":
   test "コードから複数銀河を別 DB として扱える":
     let dirA = createTempDir("rochedb", "galaxy-a")

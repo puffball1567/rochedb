@@ -597,6 +597,18 @@ proc releaseLock*(db: RocheDb, token: RocheLockToken) =
     if key in db.activeLocks and db.activeLocks[key].token == token.token:
       db.activeLocks.del key
 
+proc lockActive*(db: RocheDb, token: RocheLockToken): bool =
+  ## Return true when every key in the token is still owned by the same token.
+  db.purgeExpiredLocks()
+  if token.keys.len == 0:
+    return false
+  for key in token.keys:
+    if key notin db.activeLocks:
+      return false
+    if db.activeLocks[key].token != token.token:
+      return false
+  true
+
 proc withRingLock*(db: RocheDb, ring: string, body: proc(),
                    ttlSeconds = 30.0, waitMs = 0) =
   let token = db.acquireRingLock(ring, ttlSeconds, waitMs)

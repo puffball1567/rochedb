@@ -56,3 +56,19 @@ than hidden assumptions:
 - TLS deployment tests once transport TLS is added;
 - larger universe sync replay and backlog-pressure tests;
 - driver matrix CI across all published language repositories.
+
+## High-Integrity Workflow Matrix
+
+`tests/tapi.nim` includes focused coverage for the opt-in integrity path:
+
+| Area | Cases covered |
+|---|---|
+| Atomic put | multi-record commit, staged write rollback on exception, persistence replay |
+| Atomic update | length mismatch rejection, missing ID rollback, previous payload preservation |
+| Atomic delete | successful multi-delete, missing ID rollback, previous payload preservation |
+| Ring lock | same-ring conflict, disjoint-ring coexistence, release, TTL expiry |
+| Stellar lock | member-ring conflict, ring-to-stellar conflict, unrelated stellar coexistence |
+| Lock helper | `withRingLock` transaction body, `withStellarLock` release on exception |
+
+These tests intentionally keep locks opt-in. Ordinary `put`, `get`, `list`, and
+`retrieve` remain outside the lock check path.
