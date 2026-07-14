@@ -241,10 +241,14 @@ proc parseHostPort(endpoint: string): tuple[host: string, port: int] =
     (host: endpoint, port: 6379)
 
 proc openCliDb(dataDir, peers, username, password, authToken, secretKey,
-               galaxy: string): RocheDb =
+               galaxy: string, tls: bool = false, tlsCaFile: string = "",
+               tlsServerName: string = "",
+               tlsInsecureSkipVerify: bool = false): RocheDb =
   if peers.len > 0:
     connect(peers, username = username, password = password,
-            authToken = authToken, secretKey = secretKey, galaxy = galaxy)
+            authToken = authToken, secretKey = secretKey, galaxy = galaxy,
+            tls = tls, tlsCaFile = tlsCaFile, tlsServerName = tlsServerName,
+            tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   else:
     open(dataDir = dataDir)
 
@@ -432,9 +436,14 @@ proc redisPipeline(sock: Socket, commands: seq[seq[string]]): seq[string] =
   for _ in 0 ..< commands.len:
     result.add sock.readRedisReply()
 
-proc runDemo(peers, username, password, authToken, secretKey, galaxy: string) =
+proc runDemo(peers, username, password, authToken, secretKey, galaxy: string,
+             tls: bool, tlsCaFile, tlsServerName: string,
+             tlsInsecureSkipVerify: bool) =
   var db = connect(peers, username = username, password = password,
-                   authToken = authToken, secretKey = secretKey, galaxy = galaxy)
+                   authToken = authToken, secretKey = secretKey, galaxy = galaxy,
+                   tls = tls, tlsCaFile = tlsCaFile,
+                   tlsServerName = tlsServerName,
+                   tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   db.configureRing("docs", 12.0)   # short demo period: one orbit per 12 seconds
   let id = db.put(%*{
     "title": "ephemeris-based placement",
@@ -482,9 +491,14 @@ proc pickStableRing(db: RocheDb, horizon: float): string =
   result = "bench"
   db.configureRing(result, max(3600.0, horizon * 10.0))
 
-proc runBench(peers, username, password, authToken, secretKey, galaxy: string, n: int) =
+proc runBench(peers, username, password, authToken, secretKey, galaxy: string,
+              tls: bool, tlsCaFile, tlsServerName: string,
+              tlsInsecureSkipVerify: bool, n: int) =
   var db = connect(peers, username = username, password = password,
-                   authToken = authToken, secretKey = secretKey, galaxy = galaxy)
+                   authToken = authToken, secretKey = secretKey, galaxy = galaxy,
+                   tls = tls, tlsCaFile = tlsCaFile,
+                   tlsServerName = tlsServerName,
+                   tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   let ring = db.pickStableRing(horizon = 60.0)
   var payload = newString(100)
   for i in 0 ..< 100: payload[i] = char(ord('a') + i mod 26)
@@ -514,52 +528,80 @@ proc runBench(peers, username, password, authToken, secretKey, galaxy: string, n
   echo &"  query(server-side projection)     {qryUs:8.1f} µs/op  ({1e6 / qryUs:8.0f} ops/s)"
   db.close()
 
-proc runHealth(peers, username, password, authToken, secretKey, galaxy: string) =
+proc runHealth(peers, username, password, authToken, secretKey, galaxy: string,
+               tls: bool, tlsCaFile, tlsServerName: string,
+               tlsInsecureSkipVerify: bool) =
   var db = connect(peers, username = username, password = password,
-                   authToken = authToken, secretKey = secretKey, galaxy = galaxy)
+                   authToken = authToken, secretKey = secretKey, galaxy = galaxy,
+                   tls = tls, tlsCaFile = tlsCaFile,
+                   tlsServerName = tlsServerName,
+                   tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   for line in db.health():
     echo line
   db.close()
 
-proc runMetrics(peers, username, password, authToken, secretKey, galaxy: string) =
+proc runMetrics(peers, username, password, authToken, secretKey, galaxy: string,
+                tls: bool, tlsCaFile, tlsServerName: string,
+                tlsInsecureSkipVerify: bool) =
   var db = connect(peers, username = username, password = password,
-                   authToken = authToken, secretKey = secretKey, galaxy = galaxy)
+                   authToken = authToken, secretKey = secretKey, galaxy = galaxy,
+                   tls = tls, tlsCaFile = tlsCaFile,
+                   tlsServerName = tlsServerName,
+                   tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   for line in db.metrics():
     echo line
   db.close()
 
-proc runShutdown(peers, username, password, authToken, secretKey, galaxy: string) =
+proc runShutdown(peers, username, password, authToken, secretKey, galaxy: string,
+                 tls: bool, tlsCaFile, tlsServerName: string,
+                 tlsInsecureSkipVerify: bool) =
   var db = connect(peers, username = username, password = password,
-                   authToken = authToken, secretKey = secretKey, galaxy = galaxy)
+                   authToken = authToken, secretKey = secretKey, galaxy = galaxy,
+                   tls = tls, tlsCaFile = tlsCaFile,
+                   tlsServerName = tlsServerName,
+                   tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   for line in db.shutdownCluster():
     echo line
   db.close()
 
-proc runRings(peers, username, password, authToken, secretKey, galaxy: string) =
+proc runRings(peers, username, password, authToken, secretKey, galaxy: string,
+              tls: bool, tlsCaFile, tlsServerName: string,
+              tlsInsecureSkipVerify: bool) =
   var db = connect(peers, username = username, password = password,
-                   authToken = authToken, secretKey = secretKey, galaxy = galaxy)
+                   authToken = authToken, secretKey = secretKey, galaxy = galaxy,
+                   tls = tls, tlsCaFile = tlsCaFile,
+                   tlsServerName = tlsServerName,
+                   tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   for rs in db.ringSummaries():
     echo &"ring={rs.ringKey} count={rs.count} score={rs.score:.4f}"
   db.close()
 
 proc runAtlas(dataDir, peers, username, password, authToken, secretKey,
-              galaxy: string) =
+              galaxy: string, tls: bool, tlsCaFile, tlsServerName: string,
+              tlsInsecureSkipVerify: bool) =
   var db =
     if peers.len > 0:
       connect(peers, username = username, password = password,
-              authToken = authToken, secretKey = secretKey, galaxy = galaxy)
+              authToken = authToken, secretKey = secretKey, galaxy = galaxy,
+              tls = tls, tlsCaFile = tlsCaFile,
+              tlsServerName = tlsServerName,
+              tlsInsecureSkipVerify = tlsInsecureSkipVerify)
     else:
       open(dataDir = dataDir)
   echo db.atlas().pretty
   db.close()
 
 proc runPut(dataDir, peers, username, password, authToken, secretKey,
-            galaxy, ring, payload, inPath, codecName: string) =
+            galaxy, ring, payload, inPath, codecName: string,
+            tls: bool, tlsCaFile, tlsServerName: string,
+            tlsInsecureSkipVerify: bool) =
   let actualDataDir = requireCliTarget(dataDir, peers)
   if ring.len == 0:
     raise newException(ValueError, "put requires --ring=RING")
   var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
-                     galaxy)
+                     galaxy, tls = tls, tlsCaFile = tlsCaFile,
+                     tlsServerName = tlsServerName,
+                     tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   try:
     let codec =
       if codecName.toLowerAscii() == "auto":
@@ -694,7 +736,9 @@ proc readPaginationMode(value: string): RochePaginationMode =
 
 proc runGet(dataDir, peers, username, password, authToken, secretKey,
             galaxy, idArg, filterArg, ring, view, selection, cursor: string,
-            limit, page, pageLimit: int, paginationArg, sortArg, rsortArg: string) =
+            limit, page, pageLimit: int, paginationArg, sortArg, rsortArg: string,
+            tls: bool, tlsCaFile, tlsServerName: string,
+            tlsInsecureSkipVerify: bool) =
   let actualDataDir = requireCliTarget(dataDir, peers)
   let filterNode = parseFilter(filterArg)
   let resolvedId = resolveIdArg(idArg, filterArg)
@@ -702,7 +746,9 @@ proc runGet(dataDir, peers, username, password, authToken, secretKey,
   if ring.len == 0:
     raise newException(ValueError, "get requires --ring=RING")
   var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
-                     galaxy)
+                     galaxy, tls = tls, tlsCaFile = tlsCaFile,
+                     tlsServerName = tlsServerName,
+                     tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   try:
     db.configureRing(ring, 60.0)
     let options = RocheReadOptions(
@@ -720,7 +766,9 @@ proc runGet(dataDir, peers, username, password, authToken, secretKey,
     db.close()
 
 proc runQuery(dataDir, peers, username, password, authToken, secretKey,
-              galaxy, idArg, whereArg, ring, selection: string) =
+              galaxy, idArg, whereArg, ring, selection: string,
+              tls: bool, tlsCaFile, tlsServerName: string,
+              tlsInsecureSkipVerify: bool) =
   let actualDataDir = requireCliTarget(dataDir, peers)
   let resolvedId = resolveIdArg(idArg, whereArg)
   if selection.len == 0:
@@ -728,7 +776,9 @@ proc runQuery(dataDir, peers, username, password, authToken, secretKey,
   if peers.len > 0 and ring.len == 0:
     raise newException(ValueError, "cluster query requires --ring=RING")
   var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
-                     galaxy)
+                     galaxy, tls = tls, tlsCaFile = tlsCaFile,
+                     tlsServerName = tlsServerName,
+                     tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   try:
     if ring.len > 0:
       db.configureRing(ring, 60.0)
@@ -737,12 +787,16 @@ proc runQuery(dataDir, peers, username, password, authToken, secretKey,
     db.close()
 
 proc runListRing(dataDir, peers, username, password, authToken, secretKey,
-                 galaxy, ring, cursor: string, limit: int) =
+                 galaxy, ring, cursor: string, limit: int,
+                 tls: bool, tlsCaFile, tlsServerName: string,
+                 tlsInsecureSkipVerify: bool) =
   let actualDataDir = requireCliTarget(dataDir, peers)
   if ring.len == 0:
     raise newException(ValueError, "list-ring requires --ring=RING")
   var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
-                     galaxy)
+                     galaxy, tls = tls, tlsCaFile = tlsCaFile,
+                     tlsServerName = tlsServerName,
+                     tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   try:
     let page = db.listByRing(ring, limit = limit, cursor = cursor)
     var items = newJArray()
@@ -758,7 +812,9 @@ proc runListRing(dataDir, peers, username, password, authToken, secretKey,
     db.close()
 
 proc runRingProfile(dataDir, peers, username, password, authToken, secretKey,
-                    galaxy, ring, codecName, charset, formatVersion: string) =
+                    galaxy, ring, codecName, charset, formatVersion: string,
+                    tls: bool, tlsCaFile, tlsServerName: string,
+                    tlsInsecureSkipVerify: bool) =
   let actualDataDir = requireCliTarget(dataDir, peers)
   if ring.len == 0:
     raise newException(ValueError, "ring-profile requires --ring=RING")
@@ -766,7 +822,9 @@ proc runRingProfile(dataDir, peers, username, password, authToken, secretKey,
     raise newException(ValueError,
       "ring-profile is currently configured through the embedded store; remote profile administration is not available yet")
   var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
-                     galaxy)
+                     galaxy, tls = tls, tlsCaFile = tlsCaFile,
+                     tlsServerName = tlsServerName,
+                     tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   try:
     if codecName.toLowerAscii() != "auto" or charset.len > 0 or formatVersion.len > 0:
       let old = db.ringPayloadProfile(ring)
@@ -786,12 +844,15 @@ proc runRingProfile(dataDir, peers, username, password, authToken, secretKey,
     db.close()
 
 proc runCountRing(dataDir, peers, username, password, authToken, secretKey,
-                  galaxy, ring: string) =
+                  galaxy, ring: string, tls: bool, tlsCaFile,
+                  tlsServerName: string, tlsInsecureSkipVerify: bool) =
   let actualDataDir = requireCliTarget(dataDir, peers)
   if ring.len == 0:
     raise newException(ValueError, "count-ring requires --ring=RING")
   var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
-                     galaxy)
+                     galaxy, tls = tls, tlsCaFile = tlsCaFile,
+                     tlsServerName = tlsServerName,
+                     tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   try:
     echo &"count-ring OK ring={ring} count={db.countByRing(ring)}"
   finally:
@@ -830,10 +891,13 @@ proc printShellHelp() =
   echo "  exit"
 
 proc runShell(dataDir, peers, username, password, authToken, secretKey,
-              galaxy: string) =
+              galaxy: string, tls: bool, tlsCaFile, tlsServerName: string,
+              tlsInsecureSkipVerify: bool) =
   let actualDataDir = requireCliTarget(dataDir, peers)
   var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
-                     galaxy)
+                     galaxy, tls = tls, tlsCaFile = tlsCaFile,
+                     tlsServerName = tlsServerName,
+                     tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   try:
     echo "RocheDB shell. Type help or exit."
     while true:
@@ -921,9 +985,13 @@ proc runDescribeRing(dataDir, ring, description: string) =
   echo "describe-ring OK ring=" & ring
 
 proc runRetrieveBench(peers, username, password, authToken, secretKey, galaxy: string,
-                      n: int) =
+                      tls: bool, tlsCaFile, tlsServerName: string,
+                      tlsInsecureSkipVerify: bool, n: int) =
   var db = connect(peers, username = username, password = password,
-                   authToken = authToken, secretKey = secretKey, galaxy = galaxy)
+                   authToken = authToken, secretKey = secretKey, galaxy = galaxy,
+                   tls = tls, tlsCaFile = tlsCaFile,
+                   tlsServerName = tlsServerName,
+                   tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   for i in 0 ..< n:
     let ring = if i mod 2 == 0: "ai" else: "logs"
     let v =
@@ -949,7 +1017,9 @@ proc runRetrieveBench(peers, username, password, authToken, secretKey, galaxy: s
   db.close()
 
 proc runRedisBench(n, payloadBytes: int, redisEndpoint, peers, username,
-                   password, authToken, secretKey, galaxy: string) =
+                   password, authToken, secretKey, galaxy: string,
+                   tls: bool, tlsCaFile, tlsServerName: string,
+                   tlsInsecureSkipVerify: bool) =
   ## Simple KV comparison between localhost Redis GET and RocheDB embedded get.
   ## The workload is favorable to Redis; the goal is to observe the latency band.
   let ep = parseHostPort(redisEndpoint)
@@ -979,7 +1049,9 @@ proc runRedisBench(n, payloadBytes: int, redisEndpoint, peers, username,
   if peers.len > 0:
     var tcp = connect(peers, username = username, password = password,
                       authToken = authToken, secretKey = secretKey,
-                      galaxy = galaxy)
+                      galaxy = galaxy, tls = tls, tlsCaFile = tlsCaFile,
+                      tlsServerName = tlsServerName,
+                      tlsInsecureSkipVerify = tlsInsecureSkipVerify)
     var tcpIds = newSeq[RocheId](n)
     t = getMonoTime()
     for i in 0 ..< n:
@@ -1901,13 +1973,18 @@ proc runUniverseSync(dataDir, targetDataDir: string, pruneAcked: bool) =
     source.close()
 
 proc runUniverseSyncRemote(dataDir, peers, username, password, authToken,
-                           secretKey, galaxy: string, pruneAcked: bool) =
+                           secretKey, galaxy: string, pruneAcked: bool,
+                           tls: bool, tlsCaFile, tlsServerName: string,
+                           tlsInsecureSkipVerify: bool) =
   if dataDir.len == 0 or peers.len == 0:
     raise newException(ValueError,
       "remote universe-sync requires --data=SOURCE_DIR --peers=host:port,...")
   var source = open(dataDir = dataDir)
   let client = newClusterClient(parsePeers(peers), username, password,
-                                authToken, secretKey, galaxy)
+                                authToken, secretKey, galaxy,
+                                tls = tls, tlsCaFile = tlsCaFile,
+                                tlsServerName = tlsServerName,
+                                tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   var stats = UniverseSyncStats()
   try:
     for event in source.universeSyncEvents():
@@ -1930,7 +2007,9 @@ proc runUniverseSyncRemote(dataDir, peers, username, password, authToken,
   echo &"universe-sync OK read={stats.read} applied={stats.applied} skipped={stats.skipped} acked={stats.acked} pruned={stats.pruned} errors={stats.errors} source={dataDir} targetPeers={peers}"
 
 proc runUniverseStatus(dataDir, peers, username, password, authToken,
-                       secretKey, galaxy: string, metricsFormat: bool) =
+                       secretKey, galaxy: string, metricsFormat: bool,
+                       tls: bool, tlsCaFile, tlsServerName: string,
+                       tlsInsecureSkipVerify: bool) =
   if dataDir.len > 0:
     var db = open(dataDir = dataDir)
     var pending = 0
@@ -1955,7 +2034,10 @@ proc runUniverseStatus(dataDir, peers, username, password, authToken,
   elif peers.len > 0:
     let parsedPeers = parsePeers(peers)
     let client = newClusterClient(parsedPeers, username, password,
-                                  authToken, secretKey, galaxy)
+                                  authToken, secretKey, galaxy,
+                                  tls = tls, tlsCaFile = tlsCaFile,
+                                  tlsServerName = tlsServerName,
+                                  tlsInsecureSkipVerify = tlsInsecureSkipVerify)
     var pending = 0
     var applied = 0
     var appliedOps = 0
@@ -2066,6 +2148,10 @@ proc main() =
   var password = ""
   var authToken = ""
   var secretKey = ""
+  var tls = false
+  var tlsCaFile = ""
+  var tlsServerName = ""
+  var tlsInsecureSkipVerify = false
   var backupPassphrase = ""
   var galaxy = ""
   var universeName = ""
@@ -2158,6 +2244,10 @@ proc main() =
       of "password": password = val
       of "auth-token": authToken = val
       of "secret-key": secretKey = val
+      of "tls": tls = true
+      of "tls-ca": tlsCaFile = val
+      of "tls-server-name": tlsServerName = val
+      of "tls-insecure-skip-verify": tlsInsecureSkipVerify = true
       of "passphrase": backupPassphrase = val
       of "galaxy": galaxy = val
       of "universe", "lane": universeName = val
@@ -2188,41 +2278,64 @@ proc main() =
   case cmd
   of "put":
     runPut(dataDir, peers, username, password, authToken, secretKey, galaxy,
-           ringName, payload, inPath, codecName)
+           ringName, payload, inPath, codecName, tls, tlsCaFile,
+           tlsServerName, tlsInsecureSkipVerify)
   of "get":
     let readFilter = effectiveFilter(filterArg, whereArg)
     runGet(dataDir, peers, username, password, authToken, secretKey, galaxy,
            idArg, readFilter, ringName, view, selection, cursor, limit,
-           page, pageLimit, paginationArg, sortArg, rsortArg)
+           page, pageLimit, paginationArg, sortArg, rsortArg, tls, tlsCaFile,
+           tlsServerName, tlsInsecureSkipVerify)
   of "query":
     let readFilter = effectiveFilter(filterArg, whereArg)
     runQuery(dataDir, peers, username, password, authToken, secretKey, galaxy,
-             idArg, readFilter, ringName, selection)
+             idArg, readFilter, ringName, selection, tls, tlsCaFile,
+             tlsServerName, tlsInsecureSkipVerify)
   of "list-ring":
     runListRing(dataDir, peers, username, password, authToken, secretKey,
-                galaxy, ringName, cursor, limit)
+                galaxy, ringName, cursor, limit, tls, tlsCaFile,
+                tlsServerName, tlsInsecureSkipVerify)
   of "count-ring":
     runCountRing(dataDir, peers, username, password, authToken, secretKey,
-                 galaxy, ringName)
+                 galaxy, ringName, tls, tlsCaFile, tlsServerName,
+                 tlsInsecureSkipVerify)
   of "ring-profile":
     runRingProfile(dataDir, peers, username, password, authToken, secretKey,
-                   galaxy, ringName, codecName, charset, formatVersion)
+                   galaxy, ringName, codecName, charset, formatVersion, tls,
+                   tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
   of "shell":
-    runShell(dataDir, peers, username, password, authToken, secretKey, galaxy)
-  of "demo": runDemo(peers, username, password, authToken, secretKey, galaxy)
-  of "bench": runBench(peers, username, password, authToken, secretKey, galaxy, n)
-  of "health": runHealth(peers, username, password, authToken, secretKey, galaxy)
-  of "metrics": runMetrics(peers, username, password, authToken, secretKey, galaxy)
-  of "shutdown": runShutdown(peers, username, password, authToken, secretKey, galaxy)
-  of "rings": runRings(peers, username, password, authToken, secretKey, galaxy)
+    runShell(dataDir, peers, username, password, authToken, secretKey, galaxy,
+             tls, tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
+  of "demo":
+    runDemo(peers, username, password, authToken, secretKey, galaxy, tls,
+            tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
+  of "bench":
+    runBench(peers, username, password, authToken, secretKey, galaxy, tls,
+             tlsCaFile, tlsServerName, tlsInsecureSkipVerify, n)
+  of "health":
+    runHealth(peers, username, password, authToken, secretKey, galaxy, tls,
+              tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
+  of "metrics":
+    runMetrics(peers, username, password, authToken, secretKey, galaxy, tls,
+               tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
+  of "shutdown":
+    runShutdown(peers, username, password, authToken, secretKey, galaxy, tls,
+                tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
+  of "rings":
+    runRings(peers, username, password, authToken, secretKey, galaxy, tls,
+             tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
   of "atlas": runAtlas(dataDir, peers, username, password, authToken, secretKey,
-                       galaxy)
+                       galaxy, tls, tlsCaFile, tlsServerName,
+                       tlsInsecureSkipVerify)
   of "describe-galaxy": runDescribeGalaxy(dataDir, description)
   of "describe-ring": runDescribeRing(dataDir, ringName, description)
-  of "retrieve-bench": runRetrieveBench(peers, username, password, authToken, secretKey, galaxy, n)
+  of "retrieve-bench":
+    runRetrieveBench(peers, username, password, authToken, secretKey, galaxy,
+                     tls, tlsCaFile, tlsServerName, tlsInsecureSkipVerify, n)
   of "redis-bench": runRedisBench(n, payloadBytes, redisEndpoint, peers,
                                   username, password, authToken, secretKey,
-                                  galaxy)
+                                  galaxy, tls, tlsCaFile, tlsServerName,
+                                  tlsInsecureSkipVerify)
   of "rag-bench": runRagBench(n, queries, budget, routedBudget)
   of "working-set-bench": runWorkingSetBench(n, ringCount, queries, budget)
   of "memory-pressure-bench": runMemoryPressureBench(n, ringCount, queries,
@@ -2278,10 +2391,12 @@ proc main() =
       runUniverseSync(dataDir, targetDataDir, pruneAcked)
     else:
       runUniverseSyncRemote(dataDir, peers, username, password, authToken,
-                            secretKey, galaxy, pruneAcked)
+                            secretKey, galaxy, pruneAcked, tls, tlsCaFile,
+                            tlsServerName, tlsInsecureSkipVerify)
   of "universe-status":
     runUniverseStatus(dataDir, peers, username, password, authToken, secretKey,
-                      galaxy, metricsFormat)
+                      galaxy, metricsFormat, tls, tlsCaFile, tlsServerName,
+                      tlsInsecureSkipVerify)
   else:
     printHelp()
     quit(1)

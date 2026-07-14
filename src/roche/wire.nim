@@ -128,6 +128,10 @@ type
     password: string
     secretKey: string
     galaxy: string
+    tls: bool
+    tlsCaFile: string
+    tlsServerName: string
+    tlsInsecureSkipVerify: bool
     codecMetadata: Table[int, bool]
 
   SecureState = object
@@ -147,12 +151,19 @@ proc parsePeers*(s: string): seq[Peer] =
 
 proc newClusterClient*(peers: seq[Peer], username: string = "",
                        password: string = "", authToken: string = "",
-                       secretKey: string = "", galaxy: string = ""): ClusterClient =
+                       secretKey: string = "", galaxy: string = "",
+                       tls: bool = false, tlsCaFile: string = "",
+                       tlsServerName: string = "",
+                       tlsInsecureSkipVerify: bool = false): ClusterClient =
   if authToken.len > 0 and username.len == 0:
     return ClusterClient(peers: peers, username: "token", password: authToken,
-                         secretKey: secretKey, galaxy: galaxy)
+                         secretKey: secretKey, galaxy: galaxy, tls: tls,
+                         tlsCaFile: tlsCaFile, tlsServerName: tlsServerName,
+                         tlsInsecureSkipVerify: tlsInsecureSkipVerify)
   ClusterClient(peers: peers, username: username, password: password,
-                secretKey: secretKey, galaxy: galaxy)
+                secretKey: secretKey, galaxy: galaxy, tls: tls,
+                tlsCaFile: tlsCaFile, tlsServerName: tlsServerName,
+                tlsInsecureSkipVerify: tlsInsecureSkipVerify)
 
 proc close*(c: ClusterClient) =
   for _, s in c.socks:
@@ -291,6 +302,14 @@ proc socketFor(c: ClusterClient, node: int): Socket =
   result = newSocket()
   result.connect(c.peers[node].host, Port(c.peers[node].port))
   result.setSockOpt(OptNoDelay, true, level = IPPROTO_TCP.cint)  # short request/response frames dominate
+  if c.tls:
+    when defined(ssl):
+      let verifyMode = if c.tlsInsecureSkipVerify: CVerifyNone else: CVerifyPeerUseEnvVars
+      let ctx = newContext(verifyMode = verifyMode, caFile = c.tlsCaFile)
+      let hostname = if c.tlsServerName.len > 0: c.tlsServerName else: c.peers[node].host
+      ctx.wrapConnectedSocket(result, handshakeAsClient, hostname)
+    else:
+      raise newException(IOError, "TLS support requires building RocheDB with -d:ssl")
   if c.username.len > 0:
     if c.secretKey.len > 0:
       result.sendFrame("AUTHCHAL " & c.username)

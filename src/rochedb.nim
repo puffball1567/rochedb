@@ -511,7 +511,9 @@ proc open*(nodes: int = 8, dataDir: string = "",
 
 proc connect*(peers: string, username: string = "", password: string = "",
               authToken: string = "", secretKey: string = "",
-              galaxy: string = ""): RocheDb =
+              galaxy: string = "", tls: bool = false,
+              tlsCaFile: string = "", tlsServerName: string = "",
+              tlsInsecureSkipVerify: bool = false): RocheDb =
   ## クラスタモードで開く。peers = "host:port,host:port,..."（roched の並び順）。
   ## 時計は wall clock。API は open() と同じに使える。
   let ps = parsePeers(peers)
@@ -521,7 +523,11 @@ proc connect*(peers: string, username: string = "", password: string = "",
                                    password = password,
                                    authToken = authToken,
                                    secretKey = secretKey,
-                                   galaxy = galaxy),
+                                   galaxy = galaxy,
+                                   tls = tls,
+                                   tlsCaFile = tlsCaFile,
+                                   tlsServerName = tlsServerName,
+                                   tlsInsecureSkipVerify = tlsInsecureSkipVerify),
           plannerBackend: newHeuristicPlannerBackend(),
           galaxy: galaxy)
 
@@ -532,10 +538,16 @@ proc close*(db: RocheDb)
 
 proc addGalaxy*(r: GalaxyRouter, name, peers: string,
                 username: string = "", password: string = "",
-                authToken: string = "", secretKey: string = "") =
+                authToken: string = "", secretKey: string = "",
+                tls: bool = false, tlsCaFile: string = "",
+                tlsServerName: string = "",
+                tlsInsecureSkipVerify: bool = false) =
   r.galaxies[name] = connect(peers, username = username, password = password,
                              authToken = authToken, secretKey = secretKey,
-                             galaxy = name)
+                             galaxy = name, tls = tls,
+                             tlsCaFile = tlsCaFile,
+                             tlsServerName = tlsServerName,
+                             tlsInsecureSkipVerify = tlsInsecureSkipVerify)
 
 proc galaxy*(r: GalaxyRouter, name: string): RocheDb =
   r.galaxies[name]

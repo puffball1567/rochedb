@@ -185,6 +185,30 @@ proc roche_connect_auth(peers, username, password, authToken, secretKey,
     setError(e)
     return nil
 
+proc roche_connect_auth_tls(peers, username, password, authToken, secretKey,
+                            galaxy: cstring, tls: cint, tlsCaFile,
+                            tlsServerName: cstring,
+                            tlsInsecureSkipVerify: cint): pointer {.exportc, cdecl, dynlib.} =
+  ## TLS-aware authenticated cluster connection. TLS requires a RocheDB core
+  ## build compiled with -d:ssl.
+  try:
+    clearError()
+    let db = rochedb.connect(optStr(peers),
+                             username = optStr(username),
+                             password = optStr(password),
+                             authToken = optStr(authToken),
+                             secretKey = optStr(secretKey),
+                             galaxy = optStr(galaxy),
+                             tls = tls != 0,
+                             tlsCaFile = optStr(tlsCaFile),
+                             tlsServerName = optStr(tlsServerName),
+                             tlsInsecureSkipVerify = tlsInsecureSkipVerify != 0)
+    GC_ref(db)
+    return cast[pointer](db)
+  except CatchableError as e:
+    setError(e)
+    return nil
+
 proc roche_close(h: pointer) {.exportc, cdecl, dynlib.} =
   if h != nil:
     let db = cast[RocheDb](h)

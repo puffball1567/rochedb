@@ -50,7 +50,7 @@
 | Authz / RBAC | PoC | ring prefix authz と role matrix smoke |
 | Wire fuzz smoke | 完了 | malformed frame cases |
 | Dynamic membership | 予定 | 現在は static peers |
-| TLS | 予定 | public network では必須 |
+| TLS | 完了 | 標準TLS transportを実装済み。詳細は英語正本を参照 |
 
 ## Drivers / Bindings
 
@@ -59,14 +59,14 @@
 | Nim API | 完了 | Native public API |
 | C ABI | 完了 | ABI version / last error / put/get/retrieve/batch/atlas |
 | Python | 完了 | Native wire minimal |
-| Node.js / TypeScript / Bun | 一部公開済み | npm `rochedb` v0.1.2。Bun は実験的 |
+| Node.js / TypeScript / Bun | 一部公開済み | npm `rochedb` v0.1.3。Bun は実験的 |
 | Rust | 公開済み | crates.io `rochedb` v0.1.3。詳細は英語正本を参照 |
 | Go | 完了 | C ABI wrapper minimal |
 | PHP / Swift / Kotlin | 完了 | Docker smoke あり |
 | C# / C++ | 完了 | OSS generic wrappers。Unity / Unreal 公式 asset は別候補 |
 | React Native / WASM | v0.1 後の候補 | Browser / local state boundary |
 | Driver discovery CLI | 完了 | `roche driver list/info/install` が公式 driver metadata と setup command を表示。remote script は実行しない |
-| Package publishing | 一部完了 | `nimble install rochedb`, `cargo add rochedb`, `npm install rochedb` が利用可能。その他のレジストリは今後 |
+| Package publishing | 一部完了 | `nimble install rochedb`, `cargo add rochedb`, `npm install rochedb`, `composer require rochedb/rochedb`, `python3 -m pip install rochedb` が利用可能。その他のレジストリは今後 |
 
 ## Benchmarks / Demos
 

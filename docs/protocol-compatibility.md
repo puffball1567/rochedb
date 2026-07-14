@@ -64,7 +64,7 @@ RocheDB has username/password/secret-key auth, ring-prefix authorization, simple
 RBAC, and deterministic wire fuzz smoke tests. For enterprise production claims,
 the remaining gaps are still material:
 
-- TLS and certificate rotation for untrusted networks;
+- certificate issuance, rotation, and expiry monitoring for TLS deployments;
 - richer role policy and audit logs;
 - cluster transaction coordinator redundancy;
 - explicit mixed-version upgrade tests for wire, WAL, snapshots, and drivers.
