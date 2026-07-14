@@ -113,6 +113,7 @@ The C ABI exposes matching additive functions: `roche_put_codec`,
 | `tunedRetrievalPlan(db, profile = "default", ...)` | Build a plan from a stored profile. |
 | `searchPlan(...)` | Build a plan from human-facing amount/scope/depth terms. |
 | `ringMetrics()` | Return low-level ring metrics. |
+| `localityReport()` | Return physical WAL locality metrics for embedded stores. |
 | `ringSummaries(queryVec = @[])` | Return ring centroids, coherence, mass, and optional similarity scores. |
 | `retrievalEnvelope(...)` | Return retrieval results with source metadata for RAG/MCP adapters. |
 

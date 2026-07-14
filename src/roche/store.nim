@@ -30,7 +30,7 @@
 ##   UA <len>\n<eventKey>\n                         universe sync event applied marker
 ##   Q <nextTxId>\n                                      次の transaction id
 
-import std/[tables, os, streams, strutils, monotimes, times, posix, json]
+import std/[algorithm, tables, os, streams, strutils, monotimes, times, posix, json]
 import nimsodium
 import payload
 
@@ -116,6 +116,22 @@ type
     appliedClusterTx*: int
     warpJobs*: int
     universeSyncEvents*: int
+
+  StoreLocalityReport* = object
+    ## Physical WAL locality measured from particle record order.
+    ## ringRuns is the number of contiguous live particle runs by ring.
+    ## Lower ringRuns/ringCount means related records are physically grouped.
+    persistent*: bool
+    walBytes*: BiggestInt
+    totalParticleRecords*: int
+    liveParticleRecords*: int
+    deadParticleRecords*: int
+    ringCount*: int
+    ringRuns*: int
+    fragmentedRings*: int
+    avgRunRecords*: float
+    maxRunRecords*: int
+    localityScore*: float
 
   StoreBackupStats* = object
     bytes*: BiggestInt
@@ -608,16 +624,31 @@ proc writeSnapshotFile(s: Store, path: string) =
       file.write(s.galaxyDescription)
       file.write("\n")
     file.write("Q " & $s.nextTxId & "\n")
-    for ringKey, name in s.ringNames:
+    var ringNameKeys: seq[uint64] = @[]
+    for ringKey in s.ringNames.keys:
+      ringNameKeys.add ringKey
+    ringNameKeys.sort()
+    for ringKey in ringNameKeys:
+      let name = s.ringNames[ringKey]
       file.write("N " & $ringKey & " " & $name.len & "\n")
       file.write(name)
       file.write("\n")
-    for ringKey, desc in s.ringDescriptions:
+    var ringDescKeys: seq[uint64] = @[]
+    for ringKey in s.ringDescriptions.keys:
+      ringDescKeys.add ringKey
+    ringDescKeys.sort()
+    for ringKey in ringDescKeys:
+      let desc = s.ringDescriptions[ringKey]
       if desc.len > 0:
         file.write("RD " & $ringKey & " " & $desc.len & "\n")
         file.write(desc)
         file.write("\n")
-    for ringKey, profile in s.ringPayloadProfiles:
+    var profileKeys: seq[uint64] = @[]
+    for ringKey in s.ringPayloadProfiles.keys:
+      profileKeys.add ringKey
+    profileKeys.sort()
+    for ringKey in profileKeys:
+      let profile = s.ringPayloadProfiles[ringKey]
       let raw = $(%*{
         "defaultCodec": profile.defaultCodec.payloadCodecName,
         "charset": profile.charset,
@@ -626,14 +657,40 @@ proc writeSnapshotFile(s: Store, path: string) =
       file.write("RP " & $ringKey & " " & $raw.len & "\n")
       file.write(raw)
       file.write("\n")
-    for ringKey, meta in s.ringMeta:
+    var metaKeys: seq[uint64] = @[]
+    for ringKey in s.ringMeta.keys:
+      metaKeys.add ringKey
+    metaKeys.sort()
+    for ringKey in metaKeys:
+      let meta = s.ringMeta[ringKey]
       file.write("R " & $ringKey & " " & $meta.period & " " & $meta.head & "\n")
-    for _, p in s.items:
+    var itemKeys: seq[(uint64, uint32)] = @[]
+    for k in s.items.keys:
+      itemKeys.add k
+    itemKeys.sort(proc(a, b: (uint64, uint32)): int =
+      result = cmp(a[0], b[0])
+      if result == 0:
+        result = cmp(a[1], b[1]))
+    for k in itemKeys:
+      let p = s.items[k]
       file.writeParticleRecord("", 0, p)
-    for old, f in s.forwarders:
+    var forwarderKeys: seq[(uint64, uint32)] = @[]
+    for k in s.forwarders.keys:
+      forwarderKeys.add k
+    forwarderKeys.sort(proc(a, b: (uint64, uint32)): int =
+      result = cmp(a[0], b[0])
+      if result == 0:
+        result = cmp(a[1], b[1]))
+    for old in forwarderKeys:
+      let f = s.forwarders[old]
       file.write("F " & $old[0] & " " & $old[1] & " " & $f.newParent & " " &
                  $f.newSeq & " " & $f.newTWrite & " " & $f.expiresAt & "\n")
-    for _, intent in s.clusterTx:
+    var clusterKeys: seq[uint64] = @[]
+    for txid in s.clusterTx.keys:
+      clusterKeys.add txid
+    clusterKeys.sort()
+    for txid in clusterKeys:
+      let intent = s.clusterTx[txid]
       file.write("CT " & $intent.id & "\n")
       for op in intent.ops:
         file.writeClusterTxOp(intent.id, op)
@@ -641,18 +698,38 @@ proc writeSnapshotFile(s: Store, path: string) =
         file.write("CC " & $intent.id & "\n")
       if intent.applied:
         file.write("CA " & $intent.id & "\n")
-    for txid, applied in s.appliedClusterTx:
+    var appliedClusterKeys: seq[uint64] = @[]
+    for txid in s.appliedClusterTx.keys:
+      appliedClusterKeys.add txid
+    appliedClusterKeys.sort()
+    for txid in appliedClusterKeys:
+      let applied = s.appliedClusterTx[txid]
       if applied and txid notin s.clusterTx:
         file.write("CA " & $txid & "\n")
-    for jobId, blob in s.warpJobs:
+    var warpKeys: seq[uint64] = @[]
+    for jobId in s.warpJobs.keys:
+      warpKeys.add jobId
+    warpKeys.sort()
+    for jobId in warpKeys:
+      let blob = s.warpJobs[jobId]
       file.write("WJ " & $jobId & " " & $blob.len & "\n")
       file.write(blob)
       file.write("\n")
-    for eventId, blob in s.universeSyncEvents:
+    var universeKeys: seq[uint64] = @[]
+    for eventId in s.universeSyncEvents.keys:
+      universeKeys.add eventId
+    universeKeys.sort()
+    for eventId in universeKeys:
+      let blob = s.universeSyncEvents[eventId]
       file.write("UJ " & $eventId & " " & $blob.len & "\n")
       file.write(blob)
       file.write("\n")
-    for eventKey, applied in s.appliedUniverseSyncEvents:
+    var appliedUniverseKeys: seq[string] = @[]
+    for eventKey in s.appliedUniverseSyncEvents.keys:
+      appliedUniverseKeys.add eventKey
+    appliedUniverseKeys.sort()
+    for eventKey in appliedUniverseKeys:
+      let applied = s.appliedUniverseSyncEvents[eventKey]
       if applied:
         file.write("UA " & $eventKey.len & "\n")
         file.write(eventKey)
@@ -681,6 +758,102 @@ proc snapshotStatsFromFile(path, source: string): StoreBackupStats =
   var s = Store(lastFlush: getMonoTime(), nextTxId: 1)
   s.replay(path, repair = false)
   result = s.snapshotStats(path, source)
+
+proc isLiveParticle(s: Store, p: Particle): bool =
+  let k = key(p.parent, p.seq)
+  if k notin s.items:
+    return false
+  let live = s.items[k]
+  live.parent == p.parent and live.seq == p.seq and
+    abs(live.tWrite - p.tWrite) < 1e-9
+
+proc localityReport*(s: Store): StoreLocalityReport =
+  ## Inspect the physical WAL particle order and report ring locality.
+  result.persistent = s.persistent
+  result.walBytes = s.logSize()
+  if not s.persistent or s.logPath.len == 0 or not fileExists(s.logPath):
+    result.liveParticleRecords = s.items.len
+    result.ringCount = s.itemsByRing.len
+    result.ringRuns = result.ringCount
+    result.avgRunRecords = if result.ringRuns == 0: 0.0
+                           else: float(result.liveParticleRecords) / float(result.ringRuns)
+    result.maxRunRecords = result.liveParticleRecords
+    result.localityScore = 1.0
+    return
+
+  if s.persistent:
+    s.flushMaybe(force = true)
+
+  let fs = newFileStream(s.logPath, fmRead)
+  if fs.isNil:
+    return
+  defer: fs.close()
+
+  var line = ""
+  var lastRing = 0'u64
+  var haveLast = false
+  var currentRun = 0
+  var runCounts = initTable[uint64, int]()
+  var rings = initTable[uint64, bool]()
+
+  while fs.readLine(line):
+    if line.len == 0:
+      continue
+    let parts = line.split(' ')
+    try:
+      case parts[0]
+      of "P":
+        inc result.totalParticleRecords
+        let p = fs.readParticleRecord(parts, 1)
+        if s.isLiveParticle(p):
+          inc result.liveParticleRecords
+          rings[p.parent] = true
+          if not haveLast or p.parent != lastRing:
+            if haveLast and currentRun > 0:
+              result.maxRunRecords = max(result.maxRunRecords, currentRun)
+            inc result.ringRuns
+            runCounts[p.parent] = runCounts.getOrDefault(p.parent, 0) + 1
+            lastRing = p.parent
+            haveLast = true
+            currentRun = 1
+          else:
+            inc currentRun
+        else:
+          inc result.deadParticleRecords
+      of "XP":
+        inc result.totalParticleRecords
+        let p = fs.readParticleRecord(parts, 2)
+        if s.isLiveParticle(p):
+          inc result.liveParticleRecords
+          rings[p.parent] = true
+          if not haveLast or p.parent != lastRing:
+            if haveLast and currentRun > 0:
+              result.maxRunRecords = max(result.maxRunRecords, currentRun)
+            inc result.ringRuns
+            runCounts[p.parent] = runCounts.getOrDefault(p.parent, 0) + 1
+            lastRing = p.parent
+            haveLast = true
+            currentRun = 1
+          else:
+            inc currentRun
+        else:
+          inc result.deadParticleRecords
+      else:
+        discard
+    except CatchableError:
+      break
+  if haveLast and currentRun > 0:
+    result.maxRunRecords = max(result.maxRunRecords, currentRun)
+
+  result.ringCount = rings.len
+  for _, runs in runCounts:
+    if runs > 1:
+      inc result.fragmentedRings
+  result.avgRunRecords = if result.ringRuns == 0: 0.0
+                         else: float(result.liveParticleRecords) / float(result.ringRuns)
+  result.localityScore =
+    if result.ringRuns == 0: 1.0
+    else: float(max(1, result.ringCount)) / float(result.ringRuns)
 
 proc compact*(s: Store): StoreCompactStats =
   ## 生存レコードだけで WAL を再構築する。

@@ -226,6 +226,7 @@ For scripts and reproducible examples, prefer the single-shot commands above.
 | Command | Required flags | Purpose |
 |---|---|---|
 | `compact` | `--data=DIR` | Compact WAL. |
+| `locality` | `--data=DIR`; optional `--metrics` | Inspect physical WAL locality by ring. |
 | `backup` | `--data=DIR --backup=DIR` | Create backup. |
 | `restore` | `--backup=DIR --data=DIR` | Restore backup. |
 | `backup-encrypted` | `--data=DIR --backup=DIR --passphrase=TEXT` | Create encrypted backup. |

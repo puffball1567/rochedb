@@ -11,7 +11,7 @@ matrix used before releases.
 | Orbital placement core | `tests/tcore.nim` | Unit-covered: angle wrapping, ownership, future arrival, conjunctions |
 | Field / halo movement | `tests/tfield.nim` | Unit-covered: field state and ring movement behavior |
 | Selection parser | `tests/tselect.nim` | Unit-covered: GraphQL-like selection parsing and projection basics |
-| Store / WAL | `tests/tstore.nim` | Unit-covered: codec persistence, torn-tail repair, transaction replay, compact, backup/restore |
+| Store / WAL | `tests/tstore.nim` | Unit-covered: codec persistence, torn-tail repair, transaction replay, compact, locality report, backup/restore |
 | Public embedded API | `tests/tapi.nim` | Unit-covered: put/get, codec-aware projection, ring profiles, readRing filtering, pagination, sorting, warp, universe sync |
 | CLI embedded usage | `scripts/cli_crud_smoke.sh` | Smoke-covered: help, put/get/query/list/count, readRing options, codec display, ring profile auto codec, shell, auth error text |
 | C ABI | `examples/cabi_contract.c`, `scripts/driver_compat.sh` | Contract-covered: ABI version, put/get, codec metadata, read ring page shape, validation errors, atlas |

@@ -1361,6 +1361,27 @@ proc runCompact(dataDir: string) =
   db.close()
   echo &"compact OK before={stats.beforeBytes} after={stats.afterBytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames} clusterTx={stats.clusterTx}"
 
+proc runLocality(dataDir: string, metricsFormat: bool) =
+  if dataDir.len == 0:
+    raise newException(ValueError, "locality requires --data=DIR")
+  var db = open(dataDir = dataDir)
+  let report = db.localityReport()
+  db.close()
+  if metricsFormat:
+    echo &"localityPersistent {int(report.persistent)}"
+    echo &"localityWalBytes {report.walBytes}"
+    echo &"localityTotalParticleRecords {report.totalParticleRecords}"
+    echo &"localityLiveParticleRecords {report.liveParticleRecords}"
+    echo &"localityDeadParticleRecords {report.deadParticleRecords}"
+    echo &"localityRingCount {report.ringCount}"
+    echo &"localityRingRuns {report.ringRuns}"
+    echo &"localityFragmentedRings {report.fragmentedRings}"
+    echo &"localityAvgRunRecords {report.avgRunRecords:.3f}"
+    echo &"localityMaxRunRecords {report.maxRunRecords}"
+    echo &"localityScore {report.localityScore:.6f}"
+  else:
+    echo &"locality OK persistent={report.persistent} walBytes={report.walBytes} totalParticleRecords={report.totalParticleRecords} liveParticleRecords={report.liveParticleRecords} deadParticleRecords={report.deadParticleRecords} ringCount={report.ringCount} ringRuns={report.ringRuns} fragmentedRings={report.fragmentedRings} avgRunRecords={report.avgRunRecords:.3f} maxRunRecords={report.maxRunRecords} localityScore={report.localityScore:.6f}"
+
 proc runBackup(dataDir, backupDir: string) =
   if dataDir.len == 0 or backupDir.len == 0:
     raise newException(ValueError, "backup requires --data=DIR --backup=DIR")
@@ -2091,6 +2112,7 @@ proc printHelp() =
   echo "  roche health|metrics|rings --peers=host:port,..."
   echo "  roche driver list|info|install [LANG] [--manifest-path=FILE] [--execute]"
   echo "  roche compact --data=DIR"
+  echo "  roche locality --data=DIR [--metrics]"
   echo "  roche backup --data=DIR --backup=DIR"
   echo "  roche restore --backup=DIR --data=DIR [--overwrite]"
   echo "  roche dump --data=DIR [--out=FILE] [--no-vectors]"
@@ -2346,6 +2368,7 @@ proc main() =
     runDriver(driverArgs, driverManifestPath, driverProjectDir,
               executeDriverInstall)
   of "compact": runCompact(dataDir)
+  of "locality": runLocality(dataDir, metricsFormat)
   of "backup": runBackup(dataDir, backupDir)
   of "restore": runRestore(backupDir, dataDir, overwrite)
   of "backup-encrypted": runBackupEncrypted(dataDir, backupDir, backupPassphrase)

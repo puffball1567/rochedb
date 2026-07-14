@@ -28,6 +28,7 @@ downstream AI/RAG or application logic.
 - [Topology Configuration](topology-config.md)
 - [Topology Pattern Catalog](topology-examples.md)
 - [Universe Sync](universe-sync.md)
+- [Data Locality](data-locality.md)
 - [Cloud Operations Metrics](cloud-operations.md)
 - [Threat Model](threat-model.md)
 - [Test Coverage](test-coverage.md)

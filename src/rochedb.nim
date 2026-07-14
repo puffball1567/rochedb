@@ -314,6 +314,7 @@ type
 
   CompactStats* = StoreCompactStats
   BackupStats* = StoreBackupStats
+  LocalityReport* = StoreLocalityReport
 
   DumpStats* = object
     bytes*: BiggestInt
@@ -611,6 +612,13 @@ proc compact*(db: RocheDb): CompactStats =
   if db.mode != mEmbedded:
     raise newException(ValueError, "cluster connection cannot compact remote stores")
   db.st.compact()
+
+proc localityReport*(db: RocheDb): LocalityReport =
+  ## 組み込み Store の WAL 物理配置を調べる。
+  ## ringRuns が ringCount に近いほど、同じ ring の live record が物理的にもまとまっている。
+  if db.mode != mEmbedded:
+    raise newException(ValueError, "cluster connection cannot inspect local WAL locality")
+  db.st.localityReport()
 
 proc backup*(db: RocheDb, dstDir: string): BackupStats =
   ## 現在の embedded Store 状態を compact 済み WAL として dstDir に退避する。
