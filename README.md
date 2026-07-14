@@ -242,10 +242,10 @@ Published external drivers:
 | Language / runtime | Package | Version | Repository | Mode |
 |---|---|---:|---|---|
 | Rust | [`rochedb`](https://crates.io/crates/rochedb) | `0.1.3` | [`puffball1567/rochedb-rust`](https://github.com/puffball1567/rochedb-rust) | C ABI wrapper |
-| JavaScript / TypeScript | [`rochedb`](https://www.npmjs.com/package/rochedb) | `0.1.2` | [`puffball1567/rochedb-js`](https://github.com/puffball1567/rochedb-js) | Node-API C ABI wrapper |
-| PHP | [`rochedb/rochedb`](https://packagist.org/packages/rochedb/rochedb) | `0.1.1` | [`puffball1567/rochedb-php`](https://github.com/puffball1567/rochedb-php) | FFI / C ABI wrapper |
-| C++ | GitHub / CMake source package | `0.1.0` | [`puffball1567/rochedb-cpp`](https://github.com/puffball1567/rochedb-cpp) | C++17 C ABI wrapper |
-| Python | [`rochedb`](https://pypi.org/project/rochedb/) | `0.1.2` | [`puffball1567/rochedb-python`](https://github.com/puffball1567/rochedb-python) | Native TCP wire driver |
+| JavaScript / TypeScript | [`rochedb`](https://www.npmjs.com/package/rochedb) | `0.1.3` | [`puffball1567/rochedb-js`](https://github.com/puffball1567/rochedb-js) | Node-API C ABI wrapper |
+| PHP | [`rochedb/rochedb`](https://packagist.org/packages/rochedb/rochedb) | `0.1.2` | [`puffball1567/rochedb-php`](https://github.com/puffball1567/rochedb-php) | FFI / C ABI wrapper |
+| C++ | GitHub / CMake source package | `0.1.1` | [`puffball1567/rochedb-cpp`](https://github.com/puffball1567/rochedb-cpp) | C++17 C ABI wrapper |
+| Python | [`rochedb`](https://pypi.org/project/rochedb/) | `0.1.3` | [`puffball1567/rochedb-python`](https://github.com/puffball1567/rochedb-python) | Native TCP wire driver |
 
 The table below lists current core-repository driver foundations. Publication
 priority for remaining language packages is tracked in
@@ -264,9 +264,9 @@ priority for remaining language packages is tracked in
 
 Detailed setup notes are in
 [docs/driver-installation.md](docs/driver-installation.md). Nimble package
-registration is complete. Rust, JavaScript / TypeScript, PHP, and Python
-packages are published; NuGet, Maven, Go, SwiftPM, and other registry packages
-remain roadmap items.
+registration is complete. Rust, JavaScript / TypeScript, PHP, Python, and C++
+source releases are published; NuGet, Maven, Go, SwiftPM, and other registry
+packages remain roadmap items.
 
 ## Cluster Mode
 
