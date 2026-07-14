@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Nim checks and C ABI
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc libssl-dev libsodium-dev openssl
+
+      - name: Set up Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.10'
+
+      - name: Install Nim dependencies
+        run: nimble install -y --depsOnly
+
+      - name: Nimble package check
+        run: nimble check
+
+      - name: Nim semantic checks
+        run: |
+          nim check src/rochedb.nim
+          nim check src/rochecli.nim
+          nim check src/roched.nim
+          nim check src/rochedb_capi.nim
+
+      - name: Nim semantic checks with TLS enabled
+        run: |
+          nim check -d:ssl src/rochecli.nim
+          nim check -d:ssl src/roched.nim
+          nim check -d:ssl src/rochedb_capi.nim
+
+      - name: C ABI contract
+        run: |
+          nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi_ci -o:lib/librochedb.so src/rochedb_capi.nim
+          gcc examples/cabi_contract.c -Iinclude -Llib -lrochedb -Wl,-rpath,'$ORIGIN/../lib' -o /tmp/roche_cabi_contract
+          LD_LIBRARY_PATH=lib /tmp/roche_cabi_contract
+
+  core-tests:
+    name: Core test suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc libsodium-dev
+
+      - name: Set up Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.10'
+
+      - name: Install Nim dependencies
+        run: nimble install -y --depsOnly
+
+      - name: Run core tests
+        run: scripts/test_core.sh
+
+  smoke-tests:
+    name: CLI, cluster, recovery, and universe smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc libsodium-dev
+
+      - name: Set up Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.10'
+
+      - name: Install Nim dependencies
+        run: nimble install -y --depsOnly
+
+      - name: Run CLI CRUD smoke
+        run: scripts/cli_crud_smoke.sh
+
+      - name: Run cluster transaction smoke
+        run: scripts/cluster_tx_smoke.sh
+
+      - name: Run cluster failure smoke
+        run: scripts/cluster_failure_smoke.sh
+
+      - name: Run cluster authorization smoke
+        run: scripts/cluster_authz_smoke.sh
+
+      - name: Run cluster RBAC smoke
+        run: scripts/cluster_rbac_smoke.sh
+
+      - name: Run cluster wire fuzz smoke
+        run: scripts/cluster_wire_fuzz_smoke.sh
+
+      - name: Run recovery smoke
+        run: scripts/recovery_smoke.sh
+
+      - name: Run universe sync failure smoke
+        run: scripts/universe_sync_failure_smoke.sh
+
+      - name: Run universe remote sync smoke
+        run: scripts/universe_sync_remote_smoke.sh
+
+  tls-smoke:
+    name: TLS transport smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc libssl-dev libsodium-dev openssl
+
+      - name: Set up Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.10'
+
+      - name: Install Nim dependencies
+        run: nimble install -y --depsOnly
+
+      - name: Run TLS smoke
+        run: scripts/cluster_tls_smoke.sh
