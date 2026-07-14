@@ -50,7 +50,7 @@ proc driverRegistry(): seq[DriverInfo] =
       repository: "https://github.com/puffball1567/rochedb-js",
       packageName: "rochedb",
       installHint: "npm install rochedb",
-      notes: "Published on npm as rochedb v0.1.2. Bun compatibility is tested on the Node-API path, but remains experimental."
+      notes: "Published on npm as rochedb v0.1.3. Bun compatibility is tested on the Node-API path, but remains experimental."
     ),
     DriverInfo(
       name: "php",
@@ -59,7 +59,7 @@ proc driverRegistry(): seq[DriverInfo] =
       repository: "https://github.com/puffball1567/rochedb-php",
       packageName: "rochedb/rochedb",
       installHint: "composer require rochedb/rochedb",
-      notes: "Published on Packagist as rochedb/rochedb v0.1.1. Wraps the RocheDB C ABI through PHP FFI."
+      notes: "Published on Packagist as rochedb/rochedb v0.1.2. Wraps the RocheDB C ABI through PHP FFI."
     ),
     DriverInfo(
       name: "cpp",
@@ -68,7 +68,7 @@ proc driverRegistry(): seq[DriverInfo] =
       repository: "https://github.com/puffball1567/rochedb-cpp",
       packageName: "rochedb-cpp",
       installHint: "git clone https://github.com/puffball1567/rochedb-cpp.git",
-      notes: "Released as rochedb-cpp v0.1.0. CMake smoke passes in CI; Conan/vcpkg publication is future work."
+      notes: "Released as rochedb-cpp v0.1.1. CMake smoke passes in CI; Conan/vcpkg publication is future work."
     ),
     DriverInfo(
       name: "python",
@@ -77,7 +77,7 @@ proc driverRegistry(): seq[DriverInfo] =
       repository: "https://github.com/puffball1567/rochedb-python",
       packageName: "rochedb",
       installHint: "python3 -m pip install rochedb",
-      notes: "Published on PyPI as rochedb v0.1.2. Pure Python TCP driver."
+      notes: "Published on PyPI as rochedb v0.1.3. Pure Python TCP driver."
     ),
     DriverInfo(
       name: "go",

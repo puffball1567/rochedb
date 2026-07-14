@@ -97,9 +97,9 @@ LD_LIBRARY_PATH=lib bin/cabi_contract
 
 The Python driver is released as a separate native TCP wire driver:
 
-- repository: [`puffball1567/rochedb-python` v0.1.2](https://github.com/puffball1567/rochedb-python)
+- repository: [`puffball1567/rochedb-python` v0.1.3](https://github.com/puffball1567/rochedb-python)
 - mode: pure Python TCP driver for `roched`
-- PyPI: [`rochedb` v0.1.2](https://pypi.org/project/rochedb/)
+- PyPI: [`rochedb` v0.1.3](https://pypi.org/project/rochedb/)
 
 ```sh
 python3 -m pip install rochedb
@@ -122,7 +122,7 @@ db.close()
 The published JavaScript / TypeScript driver is a Node-API wrapper over the
 RocheDB C ABI:
 
-- npm: [`rochedb` v0.1.2](https://www.npmjs.com/package/rochedb)
+- npm: [`rochedb` v0.1.3](https://www.npmjs.com/package/rochedb)
 - repository: [`puffball1567/rochedb-js`](https://github.com/puffball1567/rochedb-js)
 
 Install it in an application:
@@ -198,7 +198,7 @@ replace github.com/rochedb/rochedb-go => ../drivers/go
 The PHP driver uses FFI over the C ABI. Local PHP must have `ext-ffi` enabled.
 It is published on Packagist:
 
-- Packagist: [`rochedb/rochedb` v0.1.1](https://packagist.org/packages/rochedb/rochedb)
+- Packagist: [`rochedb/rochedb` v0.1.2](https://packagist.org/packages/rochedb/rochedb)
 - repository: [`puffball1567/rochedb-php`](https://github.com/puffball1567/rochedb-php)
 - package name: `rochedb/rochedb`
 
@@ -276,7 +276,7 @@ separate from this generic OSS driver.
 
 The C++ driver is released as a separate C++17 wrapper over the C ABI:
 
-- repository: [`puffball1567/rochedb-cpp` v0.1.0](https://github.com/puffball1567/rochedb-cpp)
+- repository: [`puffball1567/rochedb-cpp` v0.1.1](https://github.com/puffball1567/rochedb-cpp)
 - mode: C++17 RAII wrapper over `librochedb.so`
 
 ```sh

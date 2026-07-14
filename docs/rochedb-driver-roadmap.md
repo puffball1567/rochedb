@@ -40,10 +40,10 @@ and atlas access.
 | Priority | Target | Reason | Status |
 |---:|---|---|---|
 | 1 | Rust driver | High-performance infrastructure, gateway, and systems integration path | Published: crates.io [`rochedb` v0.1.3](https://crates.io/crates/rochedb), repository [`puffball1567/rochedb-rust`](https://github.com/puffball1567/rochedb-rust) |
-| 2 | JavaScript / TypeScript driver | Web API, SaaS, Studio, GUI, and local AI client entry point | Published: npm [`rochedb` v0.1.2](https://www.npmjs.com/package/rochedb), repository [`puffball1567/rochedb-js`](https://github.com/puffball1567/rochedb-js). Bun remains experimental on the same Node-API path |
-| 3 | PHP driver | Laravel and existing business web systems | Published: Packagist [`rochedb/rochedb` v0.1.1](https://packagist.org/packages/rochedb/rochedb), repository [`puffball1567/rochedb-php`](https://github.com/puffball1567/rochedb-php) |
-| 4 | C++ driver | Generic native and engine integration base. Unreal plugin stays separate | Repository released: [`puffball1567/rochedb-cpp` v0.1.0](https://github.com/puffball1567/rochedb-cpp); CMake smoke passes in CI |
-| 5 | Python native wire driver | AI/RAG and broad scripting entry point without making big-data positioning the first message | Published: PyPI [`rochedb` v0.1.2](https://pypi.org/project/rochedb/), repository [`puffball1567/rochedb-python`](https://github.com/puffball1567/rochedb-python) |
+| 2 | JavaScript / TypeScript driver | Web API, SaaS, Studio, GUI, and local AI client entry point | Published: npm [`rochedb` v0.1.3](https://www.npmjs.com/package/rochedb), repository [`puffball1567/rochedb-js`](https://github.com/puffball1567/rochedb-js). Bun remains experimental on the same Node-API path |
+| 3 | PHP driver | Laravel and existing business web systems | Published: Packagist [`rochedb/rochedb` v0.1.2](https://packagist.org/packages/rochedb/rochedb), repository [`puffball1567/rochedb-php`](https://github.com/puffball1567/rochedb-php) |
+| 4 | C++ driver | Generic native and engine integration base. Unreal plugin stays separate | Repository released: [`puffball1567/rochedb-cpp` v0.1.1](https://github.com/puffball1567/rochedb-cpp); CMake smoke passes in CI |
+| 5 | Python native wire driver | AI/RAG and broad scripting entry point without making big-data positioning the first message | Published: PyPI [`rochedb` v0.1.3](https://pypi.org/project/rochedb/), repository [`puffball1567/rochedb-python`](https://github.com/puffball1567/rochedb-python) |
 | 6 | Swift driver | Apple local AI client, browser companion, and app state path | Minimal C ABI wrapper done. Docker smoke added |
 | 7 | Kotlin-first JVM driver | JVM backend and Android path, Java-compatible | Minimal JNI / C ABI wrapper done |
 | 8 | Go driver | Cloud backend and ops tooling; lower initial priority than Rust/Node/PHP for RocheDB positioning | Minimal C ABI wrapper done. Native wire comes later |
