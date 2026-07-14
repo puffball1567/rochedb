@@ -1,6 +1,6 @@
 # Package
 
-version     = "0.4.0"
+version     = "0.4.1"
 author      = "puffball1567"
 description = "Ring-oriented NoSQL document/vector store for smaller working sets"
 license     = "Apache-2.0"

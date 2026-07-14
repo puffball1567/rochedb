@@ -35,6 +35,11 @@ Good reports include:
 
 Small documentation fixes are welcome.
 
+Development follows the branch policy documented in
+[Development Workflow](docs/development-workflow.md). In short, normal feature,
+test, and documentation work targets `devel`; `main` is reserved for released,
+tagged state and direct hotfixes.
+
 Implementation pull requests may be closed or redirected unless they were
 discussed first. RocheDB's data model, transaction behavior, persistence format,
 wire protocol, and recovery semantics are intentionally kept under central

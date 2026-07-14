@@ -31,6 +31,7 @@ downstream AI/RAG or application logic.
 - [Cloud Operations Metrics](cloud-operations.md)
 - [Threat Model](threat-model.md)
 - [Test Coverage](test-coverage.md)
+- [Development Workflow](development-workflow.md)
 
 ## Drivers And Protocol
 
@@ -45,4 +46,4 @@ downstream AI/RAG or application logic.
 ## Release
 
 - [Release Checklist](release-checklist.md)
-- [GitHub Release Draft](github-release-v0.4.0.md)
+- [GitHub Release Draft](github-release-v0.4.1.md)
