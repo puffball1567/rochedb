@@ -26,6 +26,10 @@ full reference in [Topology Configuration](topology-config.md).
 | `authToken` | string | `""` | Token-style auth convenience path. |
 | `secretKey` | string | `""` | Additional secret-key gate and encrypted auth transport. |
 | `galaxy` | string | `""` | Expected remote galaxy name. |
+| `tls` | bool | `false` | Use standard TLS for the TCP transport. Requires binaries built with `-d:ssl`. |
+| `tlsCaFile` | string | `""` | CA/self-signed PEM file for server certificate verification. |
+| `tlsServerName` | string | `""` | Optional hostname override for TLS verification and SNI. |
+| `tlsInsecureSkipVerify` | bool | `false` | Skip certificate verification for local smoke tests only. |
 
 ## `roched` Server Flags
 
@@ -39,6 +43,10 @@ full reference in [Topology Configuration](topology-config.md).
 | `--user=NAME` / `--password=TEXT` | Basic username/password gate. |
 | `--secret-key=TEXT` | Secret-key gate and secure auth transport. |
 | `--auth-token=TEXT` | Token-style auth convenience path. |
+| `--tls-cert=FILE` / `--tls-key=FILE` | Enable standard TLS for the TCP listener. Requires `-d:ssl`. |
+| `--tls-ca=FILE` | CA/self-signed PEM file used by the server's peer client. |
+| `--tls-server-name=NAME` | Optional hostname override for peer TLS verification and SNI. |
+| `--tls-insecure-skip-verify` | Skip peer certificate verification for local smoke tests only. |
 | `--galaxy=NAME` | Galaxy identity expected by clients. |
 | `--allow-ring=PREFIX[,PREFIX...]` | Ring-prefix authorization boundary. |
 | `--role=user:password:reader|writer|admin[:prefixes]` | Role and optional ring-prefix policy. |

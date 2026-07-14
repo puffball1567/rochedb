@@ -61,12 +61,16 @@ drivers.
   `scripts/cluster_wire_fuzz_smoke.sh`.
 - Core and cluster smoke entry points are available through
   `scripts/test_core.sh` and `scripts/test_all_smoke.sh`.
-- nimsodium secretbox for auth transport and encrypted backups.
+- Standard TLS for TCP transport when `roched` and clients are built with
+  `-d:ssl`.
+- nimsodium secretbox for secret-key auth transport and encrypted backups.
 - Galaxy binding in persistent data directories.
 
 ## Known Gaps
 
-- TLS is not implemented. Do not expose `roched` directly on untrusted networks.
+- TLS is implemented for `roched` TCP transport, but production deployments
+  still need certificate issuance, rotation, expiry monitoring, and policy
+  management.
 - Rich role policies are intentionally not implemented. RocheDB's primary
   isolation model is galaxy separation plus ring-prefix scope; roles are kept
   minimal for read/write/admin separation.

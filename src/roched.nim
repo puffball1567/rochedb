@@ -43,6 +43,14 @@ type
     authUser: string
     authPassword: string
     authSecretKey: string
+    tlsEnabled: bool
+    tlsCertFile: string
+    tlsKeyFile: string
+    tlsCaFile: string
+    tlsServerName: string
+    tlsInsecureSkipVerify: bool
+    when defined(ssl):
+      tlsContext: SslContext
     users: Table[string, UserRule]
     galaxy: string
     allowedRingPrefixes: seq[string]
@@ -982,6 +990,11 @@ proc printUsage() =
   echo "  --password=TEXT               Password for cluster auth"
   echo "  --auth-token=TEXT             Token-style auth shortcut"
   echo "  --secret-key=TEXT             Additional secret-key gate"
+  echo "  --tls-cert=FILE               Enable TLS with certificate PEM (requires -d:ssl)"
+  echo "  --tls-key=FILE                TLS private key PEM (requires -d:ssl)"
+  echo "  --tls-ca=FILE                 CA/self-signed PEM for peer TLS verification"
+  echo "  --tls-server-name=NAME        Override peer TLS hostname verification / SNI"
+  echo "  --tls-insecure-skip-verify    Skip peer certificate verification for local smoke only"
   echo "  --galaxy=NAME                 Expected galaxy name"
   echo "  --allow-ring=PREFIX[,PREFIX]  Ring-prefix authorization"
   echo "  --role=user:password:role[:prefixes]"
@@ -1004,6 +1017,11 @@ proc main() =
   var authUser = ""
   var authPassword = ""
   var authSecretKey = ""
+  var tlsCertFile = ""
+  var tlsKeyFile = ""
+  var tlsCaFile = ""
+  var tlsServerName = ""
+  var tlsInsecureSkipVerify = false
   var users = initTable[string, UserRule]()
   var galaxy = ""
   var allowedRingPrefixes: seq[string] = @[]
@@ -1018,6 +1036,11 @@ proc main() =
       of "user": authUser = val
       of "password": authPassword = val
       of "secret-key": authSecretKey = val
+      of "tls-cert": tlsCertFile = val
+      of "tls-key": tlsKeyFile = val
+      of "tls-ca": tlsCaFile = val
+      of "tls-server-name": tlsServerName = val
+      of "tls-insecure-skip-verify": tlsInsecureSkipVerify = true
       of "galaxy": galaxy = val
       of "role":
         let parsed = parseUserRule(val)
@@ -1040,6 +1063,11 @@ proc main() =
       of "auth-token":
         authUser = "token"
         authPassword = val
+  if tlsCertFile.len > 0 or tlsKeyFile.len > 0:
+    if tlsCertFile.len == 0 or tlsKeyFile.len == 0:
+      raise newException(ValueError, "--tls-cert and --tls-key must be provided together")
+    when not defined(ssl):
+      raise newException(ValueError, "TLS support requires building roched with -d:ssl")
   let peers = parsePeers(peersStr)
   doAssert id >= 0 and id < peers.len, "--id と --peers を指定（id は peers 内の自分の位置）"
 
@@ -1049,18 +1077,33 @@ proc main() =
                   fs: newFieldState(),
                   peerLink: newClusterClient(peers, username = authUser,
                                              password = authPassword,
-                                             secretKey = authSecretKey),
+                                             secretKey = authSecretKey,
+                                             tls = tlsCertFile.len > 0,
+                                             tlsCaFile = tlsCaFile,
+                                             tlsServerName = tlsServerName,
+                                             tlsInsecureSkipVerify = tlsInsecureSkipVerify),
                   slowTickSec: slowTickSec,
                   running: true,
                   authUser: authUser,
                   authPassword: authPassword,
                   authSecretKey: authSecretKey,
+                  tlsEnabled: tlsCertFile.len > 0,
+                  tlsCertFile: tlsCertFile,
+                  tlsKeyFile: tlsKeyFile,
+                  tlsCaFile: tlsCaFile,
+                  tlsServerName: tlsServerName,
+                  tlsInsecureSkipVerify: tlsInsecureSkipVerify,
                   users: users,
                   galaxy: galaxy,
                   allowedRingPrefixes: allowedRingPrefixes,
                   preparedSelections: initTable[string, Selection](),
                   codecMetadata: initTable[int, bool](),
                   startedAt: epochTime())
+  when defined(ssl):
+    if sv.tlsEnabled:
+      sv.tlsContext = newContext(verifyMode = CVerifyNone,
+                                 certFile = sv.tlsCertFile,
+                                 keyFile = sv.tlsKeyFile)
   sv.st.setGalaxy(galaxy)
   sv.rebuildFieldState()
 
@@ -1080,7 +1123,8 @@ proc main() =
        (if authUser.len > 0:
           " auth=on user=" & authUser &
           (if authSecretKey.len > 0: " secret=on" else: " secret=off")
-        else: " auth=off")
+        else: " auth=off"),
+       (if tlsCertFile.len > 0: " tls=on" else: " tls=off")
 
   var sel = newSelector[int]()
   let listenerFd = listener.getFd
@@ -1099,6 +1143,14 @@ proc main() =
         var client: Socket
         listener.accept(client)
         client.setSockOpt(OptNoDelay, true, level = IPPROTO_TCP.cint)
+        when defined(ssl):
+          if sv.tlsEnabled:
+            try:
+              sv.tlsContext.wrapConnectedSocket(client, handshakeAsServer)
+            except CatchableError:
+              inc sv.errorResponses
+              client.close()
+              continue
         conns[client.getFd.int] = client
         inc sv.connectionsAccepted
         sv.activeConnections = conns.len

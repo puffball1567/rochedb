@@ -62,6 +62,7 @@ corpus size toward semantic working-set size.
 - FAISS versioning policy: [docs/faiss-versioning.md](docs/faiss-versioning.md)
 - Vector backend selection: [docs/vector-backends.md](docs/vector-backends.md)
 - Protocol compatibility: [docs/protocol-compatibility.md](docs/protocol-compatibility.md)
+- TLS transport: [docs/tls-transport.md](docs/tls-transport.md)
 - Payload codecs and prepared selections: [docs/payload-codecs.md](docs/payload-codecs.md)
 - Universe sync: [docs/universe-sync.md](docs/universe-sync.md)
 - Threat model: [docs/threat-model.md](docs/threat-model.md)

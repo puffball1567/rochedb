@@ -65,7 +65,7 @@ Translations:
 | Driver-friendly wire | Done | `PUTR/GETID/QRYID`; `WIREVER` exposes the current protocol version and `CODECS` exposes payload formats. Compatibility policy is documented in `docs/protocol-compatibility.md` |
 | Health / metrics / rings | Done | CLI and wire protocol; metrics include uptime, request/error/auth counters, connection counts, WAL bytes, warp backlog, universe apply counters, cluster tx backlog, and storage/ring counts |
 | Authn + secret key | Done | username/password/secret-key |
-| TLS | Planned | Required for public-network deployments |
+| TLS | Done | Standard TLS transport for `roched` and CLI/client connections when built with `-d:ssl`; `scripts/cluster_tls_smoke.sh` covers authenticated TLS, secret-key transport, JSON put/get, and plain-client rejection |
 | Authz / RBAC | PoC | `roched --allow-ring=prefix[,prefix...]` and `--role=user:password:reader|writer|admin[:prefixes]`; `scripts/cluster_authz_smoke.sh` and `scripts/cluster_rbac_smoke.sh` cover prefix and role matrix behavior |
 | Wire fuzz smoke | Done | `scripts/cluster_wire_fuzz_smoke.sh` runs deterministic malformed-frame cases, including oversized headers, and verifies the cluster stays healthy |
 | Dynamic membership / epoch migration | Planned | Current peer list is static |
@@ -124,7 +124,7 @@ Translations:
 | Secret key gate | Done | ID/password alone can be insufficient |
 | nimsodium encryption primitive | Partial | Used for auth transport; scope may expand |
 | Galaxy isolation | Done | Limits blast radius by galaxy |
-| TLS | Planned | Required for public-network deployments |
+| TLS | Done | Standard TCP transport TLS is implemented for `-d:ssl` builds; certificate rotation and managed CA workflows remain operational work |
 | Ring/galaxy authz | PoC | Ring prefix authorization is implemented for named-ring wire operations; richer role policy is pending |
 | Backup encryption | Done | `backupEncrypted` / `restoreEncryptedBackup` and `roche backup-encrypted` / `restore-encrypted` use nimsodium secretbox |
 | General audit log | Planned | Full append-only access/change audit for enterprise / regulated workloads. Warp jobs already persist attempts / retryAt / ack / dead-letter state, but that is job state, not a database-wide audit log |

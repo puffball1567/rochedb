@@ -88,6 +88,23 @@ void  *roche_connect_auth(const char *peers,
                           const char *auth_token,
                           const char *secret_key,
                           const char *galaxy);
+/* TLS-aware authenticated cluster connection. `tls` enables standard TLS over
+ * TCP when the RocheDB core library is built with -d:ssl.
+ *
+ * tls_ca_file may point to a CA/self-signed certificate PEM file.
+ * tls_server_name overrides hostname verification / SNI.
+ * tls_insecure_skip_verify is intended only for local smoke tests.
+ */
+void  *roche_connect_auth_tls(const char *peers,
+                              const char *username,
+                              const char *password,
+                              const char *auth_token,
+                              const char *secret_key,
+                              const char *galaxy,
+                              int tls,
+                              const char *tls_ca_file,
+                              const char *tls_server_name,
+                              int tls_insecure_skip_verify);
 void   roche_close(void *db);
 
 /* DB 時計（PoC は決定論のため手動クロック）。 */

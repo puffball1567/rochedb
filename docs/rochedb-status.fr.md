@@ -51,7 +51,7 @@ Release checklist: [release-checklist.md](./release-checklist.md)
 | Authz / RBAC | PoC | Ring prefix authz and role matrix smoke |
 | Wire fuzz smoke | Done | Malformed frame cases |
 | Dynamic membership | Planned | Current peer list is static |
-| TLS | Planned | Required for public-network deployments |
+| TLS | Done | Standard TLS transport is implemented; see the English canonical document for details |
 
 ## Drivers / Bindings
 
@@ -60,14 +60,14 @@ Release checklist: [release-checklist.md](./release-checklist.md)
 | Nim API | Done | Native public API |
 | C ABI | Done | ABI version / last error / put/get/retrieve/batch/atlas |
 | Python | Done | Native wire minimal |
-| Node.js / TypeScript / Bun | Partially published | npm `rochedb` v0.1.2. Bun remains experimental |
+| Node.js / TypeScript / Bun | Partially published | npm `rochedb` v0.1.3. Bun remains experimental |
 | Rust | Published | crates.io `rochedb` v0.1.3; see the English canonical document for links |
 | Go | Done | C ABI wrapper minimal |
 | PHP / Swift / Kotlin | Done | Docker smoke available |
 | C# / C++ | Done | OSS generic wrappers; Unity / Unreal official assets are separate candidates |
 | React Native / WASM | Post-v0.1 candidate | Browser / local state boundary |
 | Driver discovery CLI | Done | `roche driver list/info/install` prints official driver metadata and setup commands without executing remote scripts |
-| Package publishing | Partial | `nimble install rochedb`, `cargo add rochedb`, and `npm install rochedb` are available. Other registries remain future work |
+| Package publishing | Partial | `nimble install rochedb`, `cargo add rochedb`, `npm install rochedb`, `composer require rochedb/rochedb`, and `python3 -m pip install rochedb` are available. Other registries remain future work |
 
 ## Benchmarks / Demos
 

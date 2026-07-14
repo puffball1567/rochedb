@@ -16,6 +16,7 @@ matrix used before releases.
 | CLI embedded usage | `scripts/cli_crud_smoke.sh` | Smoke-covered: help, put/get/query/list/count, readRing options, codec display, ring profile auto codec, shell, auth error text |
 | C ABI | `examples/cabi_contract.c`, `scripts/driver_compat.sh` | Contract-covered: ABI version, put/get, codec metadata, read ring page shape, validation errors, atlas |
 | Wire protocol | `tests/twire_driver.nim`, `scripts/cluster_wire_fuzz_smoke.sh` | Smoke-covered: driver-facing PUTR/GETID/QRYID, codec metadata negotiation, malformed frame behavior |
+| TLS transport | `scripts/cluster_tls_smoke.sh` | Smoke-covered: TLS-enabled `roched`/CLI build, authenticated TLS health, secret-key auth transport, JSON put/get, and plain-client rejection |
 | Cluster transactions | `tests/tcluster_tx.nim`, `scripts/cluster_tx_smoke.sh` | Smoke-covered: landing intent, apply retry, basic owner failure path |
 | Cluster auth / RBAC | `tests/tcluster_authz.nim`, `tests/tcluster_rbac.nim`, related scripts | Smoke-covered: username/password/secret key and role/ring-prefix authorization |
 | Cluster failure | `tests/tcluster_failure.nim`, `scripts/cluster_failure_smoke.sh` | Smoke-covered: owner restart and retry boundaries |
@@ -54,4 +55,3 @@ than hidden assumptions:
 - TLS deployment tests once transport TLS is added;
 - larger universe sync replay and backlog-pressure tests;
 - driver matrix CI across all published language repositories.
-

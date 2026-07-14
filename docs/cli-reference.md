@@ -58,6 +58,10 @@ bin/roche --help
 | `--auth-token=TEXT` | Token-style auth. |
 | `--secret-key=TEXT` | Secret-key gate. |
 | `--galaxy=NAME` | Expected remote galaxy. |
+| `--tls` | Use standard TLS for the TCP transport. Requires TLS-enabled binaries built with `-d:ssl`. |
+| `--tls-ca=FILE` | CA/self-signed PEM file for server certificate verification. |
+| `--tls-server-name=NAME` | Optional hostname override for TLS verification and SNI. |
+| `--tls-insecure-skip-verify` | Skip certificate verification for local smoke tests only. |
 | `--metrics` | Emit key/value metrics where supported. |
 
 ## Cluster Commands
