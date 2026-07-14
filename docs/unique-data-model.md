@@ -30,6 +30,7 @@ reranking, projection, or LLM/context processing.
 | `stellar` lens | A coordinate-centered visibility lens over existing rings | Related records can be read together without copying payloads or creating a hidden global join |
 | `subring` | A narrowed field of view inside a ring or stellar read | The caller can ask for a nearby subset such as `orders` or `billing` |
 | projection / selection | Return only requested fields | Reduced ring scope can be combined with reduced payload shape |
+| cooperative coordinate lock | Opt-in lock around a ring or stellar lens | High-integrity workflows can coordinate updates without slowing ordinary reads/writes |
 | galaxy | Isolation boundary for authentication, blast radius, and deployment topology | Different logical databases can use the same engine without forcing one global trust domain |
 | universe sync | Delayed convergence / recovery topology | Same-name galaxies can eventually converge across topology boundaries without turning all writes into one global transaction |
 
@@ -87,6 +88,21 @@ roche stellar detach --stellar=commerce/order/A-001 --ring=shops/1123
 This is not the same as a relational constraint. It is also not a global
 secondary index. It is a locality lens that points reads toward coordinates that
 are expected to be useful together.
+
+When an application needs stronger coordination around the same shape, it can
+use opt-in locks and atomic batches:
+
+```nim
+db.withStellarLock("commerce/order/A-001", proc() =
+  db.transaction(proc(tx: RocheTx) =
+    discard tx.put("""{"kind":"event","status":"processing"}""",
+                   ring = "orders/A-001/events")
+  )
+)
+```
+
+Normal `put`, `get`, `list`, and `retrieve` calls do not check these locks. The
+high-integrity path is explicit so the lightweight NoSQL path stays lightweight.
 
 ## Why This Can Help Data Processing
 

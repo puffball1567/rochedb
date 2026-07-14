@@ -22,6 +22,7 @@ technical preview. The canonical Nim definitions live in `src/rochedb.nim`.
 | `RocheReadPage` | `ring`, `count`, `items`, `nextCursor`, `pagination`, `page`, `pageLimit`, `sortField`, `sortDirection` | Ring read result. `count` is the number of returned items; use `countByRing` for the total ring size. |
 | `RocheStellarOptions` | `filter`, `selection`, `limitPerRing`, `maxDepth`, `branchBudget`, `subrings`, `includeRoot`, `sortField`, `sortDirection` | Coordinate-near read options. A root ring behaves like a telescope target; nearby rings are visible unless narrowed by `subrings`. |
 | `RocheStellarPage` | `root`, `ringsVisited`, `count`, `rings` | Grouped result for a stellar neighborhood read. |
+| `RocheLockToken` | `scope`, `coordinate`, `token`, `expiresAt`, `keys` | Cooperative opt-in lock token for high-integrity embedded workflows. |
 | `RocheHit` | `id`, `score`, `payload` | Retrieval hit. `score` is cosine similarity, higher is closer. |
 
 `RocheId` should normally be treated as opaque. `toRaw` and `fromRaw` exist for
@@ -98,8 +99,11 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 | `patch(id, patchDoc)` | Apply a JSON merge patch. |
 | `deleteById(id)` / `remove(id)` | Delete by ID. |
 | `batchPut(payloads, ring, vecs)` | Insert multiple records. |
+| `batchPutAtomic(payloads/docs, ring, vecs)` | Embedded all-or-nothing bulk insert. Rolls back every staged write if any step fails. |
 | `batchGet(ids)` | Fetch multiple IDs. |
 | `batchDelete(ids)` | Delete multiple IDs. |
+| `batchUpdateAtomic(ids, payloads/docs, vecs)` | Embedded all-or-nothing bulk replace. Every ID must exist before commit. |
+| `batchDeleteAtomic(ids)` | Embedded all-or-nothing bulk delete. |
 
 The C ABI exposes matching additive functions: `roche_put_codec`,
 `roche_put_vec_codec`, and `roche_get_codec`. See [Payload Codecs](payload-codecs.md).
@@ -145,6 +149,26 @@ The C ABI exposes matching additive functions: `roche_put_codec`,
 
 Cluster transactions are a PoC. They use a landing intent and retry apply, but
 coordinator redundancy is still planned.
+
+## Cooperative Locks
+
+Coordinate locks are opt-in guards for high-integrity embedded workflows. Normal
+`put`, `get`, `list`, and `retrieve` do not check these locks, so the lightweight
+NoSQL path remains unchanged. Use locks around workflows that need explicit
+coordination, idempotency, or rollback behavior.
+
+| API | Purpose |
+|---|---|
+| `acquireRingLock(ring, ttlSeconds = 30.0, waitMs = 0)` | Acquire a cooperative lock for one ring coordinate. |
+| `acquireStellarLock(stellar, ttlSeconds = 30.0, waitMs = 0)` | Acquire a cooperative lock for a stellar lens and its current member rings. |
+| `releaseLock(token)` | Release a lock if the owner token still matches. |
+| `withRingLock(ring, proc())` | Acquire/release a ring lock around a body. |
+| `withStellarLock(stellar, proc())` | Acquire/release a stellar lock around a body. |
+
+These locks are not presented as a payment-ledger or financial-core mechanism.
+They are intended for application workflows such as order state updates,
+webhook processing, retry-safe maintenance, and coordinated edits around a ring
+or stellar lens.
 
 ## Atlas And Descriptions
 

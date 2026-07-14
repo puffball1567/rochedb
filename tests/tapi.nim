@@ -1185,6 +1185,67 @@ suite "transaction":
     check not (id in db)
     db.close()
 
+  test "atomic batch put rolls back every staged write on failure":
+    var db = open()
+    var ids: seq[RocheId] = @[]
+    expect ValueError:
+      db.transaction(proc(tx: RocheTx) =
+        ids.add tx.put("a", ring = "bulk")
+        ids.add tx.put("b", ring = "bulk")
+        raise newException(ValueError, "bulk validation failed")
+      )
+    check ids.len == 2
+    check not (ids[0] in db)
+    check not (ids[1] in db)
+    db.close()
+
+  test "batchUpdateAtomic rolls back earlier staged updates when one id fails":
+    var db = open()
+    let id = db.put("before", ring = "bulk")
+    let missing = fromRaw(id.toRaw().parent, id.toRaw().epoch,
+                          id.toRaw().seq + 100'u32, id.toRaw().tWrite)
+    expect KeyError:
+      db.batchUpdateAtomic(@[id, missing], @["after", "missing"])
+    check db.get(id) == "before"
+    db.close()
+
+  test "batchPutAtomic commits all writes together":
+    var db = open()
+    let ids = db.batchPutAtomic(@["a", "b", "c"], ring = "bulk")
+    check ids.len == 3
+    check db.get(ids[0]) == "a"
+    check db.get(ids[1]) == "b"
+    check db.get(ids[2]) == "c"
+    db.close()
+
+  test "ring and stellar locks are opt-in cooperative guards":
+    var db = open()
+    discard db.put("user", ring = "users/123")
+    discard db.put("order", ring = "orders/A-001")
+    db.attachStellar("commerce/order/A-001", "users/123")
+    db.attachStellar("commerce/order/A-001", "orders/A-001")
+
+    let stellarLock = db.acquireStellarLock("commerce/order/A-001", ttlSeconds = 5)
+    expect IOError:
+      discard db.acquireRingLock("users/123", ttlSeconds = 5)
+    db.releaseLock(stellarLock)
+
+    let ringLock = db.acquireRingLock("users/123", ttlSeconds = 5)
+    expect IOError:
+      discard db.acquireStellarLock("commerce/order/A-001", ttlSeconds = 5)
+    db.releaseLock(ringLock)
+
+    var ran = false
+    db.withRingLock("users/123", proc() =
+      ran = true
+      db.transaction(proc(tx: RocheTx) =
+        discard tx.put("audit", ring = "users/123/audit")
+      )
+    )
+    check ran
+    check db.readRing("users/123/audit").count == 1
+    db.close()
+
 suite "galaxy router":
   test "コードから複数銀河を別 DB として扱える":
     let dirA = createTempDir("rochedb", "galaxy-a")

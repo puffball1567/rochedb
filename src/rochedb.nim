@@ -49,6 +49,26 @@ type
   Mode = enum
     mEmbedded, mCluster
 
+  RocheLockScope* = enum
+    rlsRing
+    rlsStellar
+
+  RocheLockToken* = object
+    ## Cooperative lock token for high-integrity application workflows.
+    ## Normal put/get paths do not check these locks; use them around
+    ## transaction/bulk workflows that need retry safety.
+    scope*: RocheLockScope
+    coordinate*: string
+    token*: string
+    expiresAt*: float
+    keys*: seq[string]
+
+  RocheLockState = object
+    scope: RocheLockScope
+    coordinate: string
+    token: string
+    expiresAt: float
+
   RetrievalTuning* = object
     ## 内部 tuning knob。通常は SearchProfile を使う。
     budget*: int
@@ -161,6 +181,7 @@ type
     ringChildren: Table[uint64, seq[uint64]]
     stellarMembers: Table[string, seq[string]]
     stellarByMember: Table[string, seq[string]]
+    activeLocks: Table[string, RocheLockState]
     retrievalTunings: Table[string, RetrievalTuning]
     searchProfiles: Table[string, SearchProfile]
     lastRingName: string        # 1エントリキャッシュ（putのホットパス最適化, §16.2）
@@ -492,6 +513,105 @@ proc stellarMapBlob(stellar: string, members: seq[string]): string =
   for member in members:
     arr.add %member
   $(%*{"stellar": stellar, "members": arr})
+
+proc lockKey(scope: RocheLockScope, coordinate: string): string =
+  case scope
+  of rlsRing: "ring:" & normalizedCoordinate(coordinate)
+  of rlsStellar: "stellar:" & normalizedCoordinate(coordinate)
+
+proc purgeExpiredLocks(db: RocheDb, now = epochTime()) =
+  var expired: seq[string] = @[]
+  for key, state in db.activeLocks:
+    if state.expiresAt <= now:
+      expired.add key
+  for key in expired:
+    db.activeLocks.del key
+
+proc newLockToken(keys: seq[string]): string =
+  ## Cooperative lock token. This is not an auth secret; it prevents accidental
+  ## unlock by callers that do not own the lock.
+  $epochTime() & ":" & $keys.len & ":" & $hash(keys.join("|"))
+
+proc acquireLockKeys(db: RocheDb, scope: RocheLockScope, coordinate: string,
+                     keys: seq[string], ttlSeconds = 30.0,
+                     waitMs = 0): RocheLockToken =
+  doAssert db.mode == mEmbedded, "coordinate locks are embedded mode only in this release"
+  if ttlSeconds <= 0:
+    raise newException(ValueError, "ttlSeconds must be positive")
+  let deadline = epochTime() + float(max(waitMs, 0)) / 1000.0
+  var uniqueKeys: seq[string] = @[]
+  for key in keys:
+    if key.len > 0 and key notin uniqueKeys:
+      uniqueKeys.add key
+  if uniqueKeys.len == 0:
+    raise newException(ValueError, "lock key set is empty")
+
+  while true:
+    let now = epochTime()
+    db.purgeExpiredLocks(now)
+    var busy = ""
+    for key in uniqueKeys:
+      if key in db.activeLocks:
+        busy = key
+        break
+    if busy.len == 0:
+      let token = newLockToken(uniqueKeys)
+      let expiresAt = now + ttlSeconds
+      for key in uniqueKeys:
+        db.activeLocks[key] = RocheLockState(scope: scope,
+                                             coordinate: coordinate,
+                                             token: token,
+                                             expiresAt: expiresAt)
+      return RocheLockToken(scope: scope, coordinate: coordinate,
+                            token: token, expiresAt: expiresAt,
+                            keys: uniqueKeys)
+    if waitMs <= 0 or epochTime() >= deadline:
+      raise newException(IOError, "coordinate lock is busy: " & busy)
+    sleep(10)
+
+proc acquireRingLock*(db: RocheDb, ring: string, ttlSeconds = 30.0,
+                      waitMs = 0): RocheLockToken =
+  ## Acquire an opt-in cooperative lock for one ring coordinate.
+  let coord = normalizedCoordinate(ring)
+  if coord.len == 0:
+    raise newException(ValueError, "ring is required")
+  db.acquireLockKeys(rlsRing, coord, @[lockKey(rlsRing, coord)],
+                     ttlSeconds, waitMs)
+
+proc acquireStellarLock*(db: RocheDb, stellar: string, ttlSeconds = 30.0,
+                         waitMs = 0): RocheLockToken =
+  ## Acquire a cooperative lock for a stellar lens and its current member rings.
+  ## The member set is captured at acquisition time.
+  let coord = normalizedCoordinate(stellar)
+  if coord.len == 0:
+    raise newException(ValueError, "stellar is required")
+  var keys = @[lockKey(rlsStellar, coord), lockKey(rlsRing, coord)]
+  for member in db.stellarMembers.getOrDefault(coord, @[]):
+    keys.add lockKey(rlsRing, member)
+  db.acquireLockKeys(rlsStellar, coord, keys, ttlSeconds, waitMs)
+
+proc releaseLock*(db: RocheDb, token: RocheLockToken) =
+  ## Release a cooperative lock. A mismatched token is ignored so callers cannot
+  ## accidentally release another workflow's lock after TTL expiry/reacquire.
+  for key in token.keys:
+    if key in db.activeLocks and db.activeLocks[key].token == token.token:
+      db.activeLocks.del key
+
+proc withRingLock*(db: RocheDb, ring: string, body: proc(),
+                   ttlSeconds = 30.0, waitMs = 0) =
+  let token = db.acquireRingLock(ring, ttlSeconds, waitMs)
+  try:
+    body()
+  finally:
+    db.releaseLock(token)
+
+proc withStellarLock*(db: RocheDb, stellar: string, body: proc(),
+                      ttlSeconds = 30.0, waitMs = 0) =
+  let token = db.acquireStellarLock(stellar, ttlSeconds, waitMs)
+  try:
+    body()
+  finally:
+    db.releaseLock(token)
 
 # ---------------------------------------------------------------- 開閉と時計
 
@@ -1288,6 +1408,87 @@ proc transaction*(db: RocheDb, body: proc(tx: RocheTx)) =
   let tx = db.beginTransaction()
   try:
     body(tx)
+    tx.commit()
+  except CatchableError:
+    tx.rollback()
+    raise
+
+proc batchPutAtomic*(db: RocheDb, payloads: seq[string],
+                     ring: string = "default",
+                     vecs: seq[seq[float32]] = @[]): seq[RocheId] =
+  ## Embedded all-or-nothing bulk insert. If any staged write or commit fails,
+  ## no partial payloads become visible.
+  doAssert db.mode == mEmbedded, "batchPutAtomic is embedded mode only"
+  let tx = db.beginTransaction()
+  try:
+    for i, payload in payloads:
+      let vec = if i < vecs.len: vecs[i] else: @[]
+      result.add tx.put(payload, ring = ring, vec = vec)
+    tx.commit()
+  except CatchableError:
+    tx.rollback()
+    result.setLen(0)
+    raise
+
+proc batchPutAtomic*(db: RocheDb, docs: seq[JsonNode],
+                     ring: string = "default",
+                     vecs: seq[seq[float32]] = @[]): seq[RocheId] =
+  ## Embedded all-or-nothing bulk JSON insert.
+  doAssert db.mode == mEmbedded, "batchPutAtomic is embedded mode only"
+  let tx = db.beginTransaction()
+  try:
+    for i, doc in docs:
+      let vec = if i < vecs.len: vecs[i] else: @[]
+      result.add tx.put(doc, ring = ring, vec = vec)
+    tx.commit()
+  except CatchableError:
+    tx.rollback()
+    result.setLen(0)
+    raise
+
+proc batchUpdateAtomic*(db: RocheDb, ids: seq[RocheId],
+                        payloads: seq[string],
+                        vecs: seq[seq[float32]] = @[]) =
+  ## Embedded all-or-nothing bulk replace. Every ID must exist before commit.
+  doAssert db.mode == mEmbedded, "batchUpdateAtomic is embedded mode only"
+  if ids.len != payloads.len:
+    raise newException(ValueError, "ids and payloads length mismatch")
+  let tx = db.beginTransaction()
+  try:
+    for i, id in ids:
+      let vec = if i < vecs.len: vecs[i] else: @[]
+      tx.update(id, payloads[i], vec = vec)
+    tx.commit()
+  except CatchableError:
+    tx.rollback()
+    raise
+
+proc batchUpdateAtomic*(db: RocheDb, ids: seq[RocheId],
+                        docs: seq[JsonNode],
+                        vecs: seq[seq[float32]] = @[]) =
+  ## Embedded all-or-nothing bulk JSON replace.
+  doAssert db.mode == mEmbedded, "batchUpdateAtomic is embedded mode only"
+  if ids.len != docs.len:
+    raise newException(ValueError, "ids and docs length mismatch")
+  let tx = db.beginTransaction()
+  try:
+    for i, id in ids:
+      let vec = if i < vecs.len: vecs[i] else: @[]
+      tx.update(id, docs[i], vec = vec)
+    tx.commit()
+  except CatchableError:
+    tx.rollback()
+    raise
+
+proc batchDeleteAtomic*(db: RocheDb, ids: seq[RocheId]) =
+  ## Embedded all-or-nothing bulk delete. Every remove is committed together.
+  doAssert db.mode == mEmbedded, "batchDeleteAtomic is embedded mode only"
+  let tx = db.beginTransaction()
+  try:
+    for id in ids:
+      if not db.st.contains(id.parent, id.seq):
+        raise newException(KeyError, "id not found")
+      tx.remove(id)
     tx.commit()
   except CatchableError:
     tx.rollback()
