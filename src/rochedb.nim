@@ -49,6 +49,26 @@ type
   Mode = enum
     mEmbedded, mCluster
 
+  RocheLockScope* = enum
+    rlsRing
+    rlsStellar
+
+  RocheLockToken* = object
+    ## Cooperative lock token for high-integrity application workflows.
+    ## Normal put/get paths do not check these locks; use them around
+    ## transaction/bulk workflows that need retry safety.
+    scope*: RocheLockScope
+    coordinate*: string
+    token*: string
+    expiresAt*: float
+    keys*: seq[string]
+
+  RocheLockState = object
+    scope: RocheLockScope
+    coordinate: string
+    token: string
+    expiresAt: float
+
   RetrievalTuning* = object
     ## 内部 tuning knob。通常は SearchProfile を使う。
     budget*: int
@@ -159,6 +179,9 @@ type
     ringWriteAckModes: Table[uint64, WriteAckMode]
     ringApplyPolicies: Table[uint64, RingApplyPolicy]
     ringChildren: Table[uint64, seq[uint64]]
+    stellarMembers: Table[string, seq[string]]
+    stellarByMember: Table[string, seq[string]]
+    activeLocks: Table[string, RocheLockState]
     retrievalTunings: Table[string, RetrievalTuning]
     searchProfiles: Table[string, SearchProfile]
     lastRingName: string        # 1エントリキャッシュ（putのホットパス最適化, §16.2）
@@ -249,6 +272,34 @@ type
     sortField*: string
     sortDirection*: RocheReadSortDirection
 
+  RocheStellarOptions* = object
+    ## Read a coordinate-local stellar neighborhood.
+    ## A root ring behaves like a telescope target: nearby child rings are in
+    ## the same field of view unless subrings narrow the view. Distant rings
+    ## are not forced into the read path.
+    filter*: JsonNode
+    selection*: string
+    limitPerRing*: int
+    maxDepth*: int
+    branchBudget*: int
+    subrings*: seq[string]
+    includeRoot*: bool
+    sortField*: string
+    sortDirection*: RocheReadSortDirection
+
+  RocheStellarRingPage* = object
+    ring*: string
+    count*: int
+    items*: seq[RocheRecord]
+
+  RocheStellarPage* = object
+    root*: string
+    maxDepth*: int
+    branchBudget*: int
+    ringsVisited*: int
+    count*: int
+    rings*: seq[RocheStellarRingPage]
+
   RetrieveStats* = object
     totalVectors*: int
     scanned*: int
@@ -314,6 +365,7 @@ type
 
   CompactStats* = StoreCompactStats
   BackupStats* = StoreBackupStats
+  LocalityReport* = StoreLocalityReport
 
   DumpStats* = object
     bytes*: BiggestInt
@@ -353,6 +405,9 @@ proc addRingChild(db: RocheDb, parent, child: uint64)
 proc ringNameOf(db: RocheDb, key: uint64): string
 proc ringKey(db: RocheDb, name: string, persist = true): uint64
 proc ringKeyForRead(db: RocheDb, ring: string): uint64
+proc descendantRingKeys(db: RocheDb, root: uint64, maxDepth, branchBudget: int): seq[uint64]
+proc addUniqueRingKey(keys: var seq[uint64], key: uint64)
+proc stellarNeighborKeys(db: RocheDb, root: uint64, maxDepth, branchBudget: int): seq[uint64]
 proc put*(db: RocheDb, payload: string, ring: string = "default",
           vec: seq[float32] = @[]): RocheId
 proc enqueueUniverseSyncEvent*(db: RocheDb, sourceUniverse, sourceGalaxy,
@@ -418,6 +473,158 @@ proc tuningFromSearchProfile*(profile: SearchProfile): RetrievalTuning =
     result.branchBudget = 8
   result.note = profile.note
 
+proc normalizedCoordinate(name: string): string =
+  name.strip(chars = {' ', '\t', '\r', '\n', '/'})
+
+proc addUniqueString(items: var seq[string], value: string) =
+  if value.len > 0 and value notin items:
+    items.add value
+
+proc removeString(items: var seq[string], value: string) =
+  var next: seq[string] = @[]
+  for item in items:
+    if item != value:
+      next.add item
+  items = next
+
+proc rebuildStellarMembership(db: RocheDb) =
+  db.stellarByMember.clear()
+  for stellar, members in db.stellarMembers:
+    for member in members:
+      var stellars = db.stellarByMember.getOrDefault(member, @[])
+      stellars.addUniqueString stellar
+      db.stellarByMember[member] = stellars
+
+proc loadStellarMap(db: RocheDb, raw: string) =
+  if raw.len == 0:
+    return
+  let node = parseJson(raw)
+  let stellar = normalizedCoordinate(node{"stellar"}.getStr(""))
+  if stellar.len == 0:
+    return
+  var members: seq[string] = @[]
+  if node.hasKey("members") and node["members"].kind == JArray:
+    for item in node["members"]:
+      members.addUniqueString normalizedCoordinate(item.getStr())
+  db.stellarMembers[stellar] = members
+
+proc stellarMapBlob(stellar: string, members: seq[string]): string =
+  var arr = newJArray()
+  for member in members:
+    arr.add %member
+  $(%*{"stellar": stellar, "members": arr})
+
+proc lockKey(scope: RocheLockScope, coordinate: string): string =
+  case scope
+  of rlsRing: "ring:" & normalizedCoordinate(coordinate)
+  of rlsStellar: "stellar:" & normalizedCoordinate(coordinate)
+
+proc purgeExpiredLocks(db: RocheDb, now = epochTime()) =
+  var expired: seq[string] = @[]
+  for key, state in db.activeLocks:
+    if state.expiresAt <= now:
+      expired.add key
+  for key in expired:
+    db.activeLocks.del key
+
+proc newLockToken(keys: seq[string]): string =
+  ## Cooperative lock token. This is not an auth secret; it prevents accidental
+  ## unlock by callers that do not own the lock.
+  $epochTime() & ":" & $keys.len & ":" & $hash(keys.join("|"))
+
+proc acquireLockKeys(db: RocheDb, scope: RocheLockScope, coordinate: string,
+                     keys: seq[string], ttlSeconds = 30.0,
+                     waitMs = 0): RocheLockToken =
+  doAssert db.mode == mEmbedded, "coordinate locks are embedded mode only in this release"
+  if ttlSeconds <= 0:
+    raise newException(ValueError, "ttlSeconds must be positive")
+  let deadline = epochTime() + float(max(waitMs, 0)) / 1000.0
+  var uniqueKeys: seq[string] = @[]
+  for key in keys:
+    if key.len > 0 and key notin uniqueKeys:
+      uniqueKeys.add key
+  if uniqueKeys.len == 0:
+    raise newException(ValueError, "lock key set is empty")
+
+  while true:
+    let now = epochTime()
+    db.purgeExpiredLocks(now)
+    var busy = ""
+    for key in uniqueKeys:
+      if key in db.activeLocks:
+        busy = key
+        break
+    if busy.len == 0:
+      let token = newLockToken(uniqueKeys)
+      let expiresAt = now + ttlSeconds
+      for key in uniqueKeys:
+        db.activeLocks[key] = RocheLockState(scope: scope,
+                                             coordinate: coordinate,
+                                             token: token,
+                                             expiresAt: expiresAt)
+      return RocheLockToken(scope: scope, coordinate: coordinate,
+                            token: token, expiresAt: expiresAt,
+                            keys: uniqueKeys)
+    if waitMs <= 0 or epochTime() >= deadline:
+      raise newException(IOError, "coordinate lock is busy: " & busy)
+    sleep(10)
+
+proc acquireRingLock*(db: RocheDb, ring: string, ttlSeconds = 30.0,
+                      waitMs = 0): RocheLockToken =
+  ## Acquire an opt-in cooperative lock for one ring coordinate.
+  let coord = normalizedCoordinate(ring)
+  if coord.len == 0:
+    raise newException(ValueError, "ring is required")
+  db.acquireLockKeys(rlsRing, coord, @[lockKey(rlsRing, coord)],
+                     ttlSeconds, waitMs)
+
+proc acquireStellarLock*(db: RocheDb, stellar: string, ttlSeconds = 30.0,
+                         waitMs = 0): RocheLockToken =
+  ## Acquire a cooperative lock for a stellar lens and its current member rings.
+  ## The member set is captured at acquisition time.
+  let coord = normalizedCoordinate(stellar)
+  if coord.len == 0:
+    raise newException(ValueError, "stellar is required")
+  var keys = @[lockKey(rlsStellar, coord), lockKey(rlsRing, coord)]
+  for member in db.stellarMembers.getOrDefault(coord, @[]):
+    keys.add lockKey(rlsRing, member)
+  db.acquireLockKeys(rlsStellar, coord, keys, ttlSeconds, waitMs)
+
+proc releaseLock*(db: RocheDb, token: RocheLockToken) =
+  ## Release a cooperative lock. A mismatched token is ignored so callers cannot
+  ## accidentally release another workflow's lock after TTL expiry/reacquire.
+  for key in token.keys:
+    if key in db.activeLocks and db.activeLocks[key].token == token.token:
+      db.activeLocks.del key
+
+proc lockActive*(db: RocheDb, token: RocheLockToken): bool =
+  ## Return true when every key in the token is still owned by the same token.
+  db.purgeExpiredLocks()
+  if token.keys.len == 0:
+    return false
+  for key in token.keys:
+    if key notin db.activeLocks:
+      return false
+    if db.activeLocks[key].token != token.token:
+      return false
+  true
+
+proc withRingLock*(db: RocheDb, ring: string, body: proc(),
+                   ttlSeconds = 30.0, waitMs = 0) =
+  let token = db.acquireRingLock(ring, ttlSeconds, waitMs)
+  try:
+    body()
+  finally:
+    db.releaseLock(token)
+
+proc withStellarLock*(db: RocheDb, stellar: string, body: proc(),
+                      ttlSeconds = 30.0, waitMs = 0) =
+  let token = db.acquireStellarLock(stellar, ttlSeconds, waitMs)
+  try:
+    body()
+  finally:
+    db.releaseLock(token)
+
 # ---------------------------------------------------------------- 開閉と時計
 
 proc open*(nodes: int = 8, dataDir: string = "",
@@ -439,6 +646,9 @@ proc open*(nodes: int = 8, dataDir: string = "",
     result.ringDescriptions[key] = desc
   for key, profile in result.st.ringPayloadProfiles:
     result.ringPayloadProfiles[key] = profile
+  for _, blob in result.st.stellarMaps:
+    result.loadStellarMap(blob)
+  result.rebuildStellarMembership()
   result.galaxyDescription = result.st.galaxyDescription
   for _, blob in result.st.warpJobs:
     let raw = parseJson(blob)
@@ -611,6 +821,13 @@ proc compact*(db: RocheDb): CompactStats =
   if db.mode != mEmbedded:
     raise newException(ValueError, "cluster connection cannot compact remote stores")
   db.st.compact()
+
+proc localityReport*(db: RocheDb): LocalityReport =
+  ## 組み込み Store の WAL 物理配置を調べる。
+  ## ringRuns が ringCount に近いほど、同じ ring の live record が物理的にもまとまっている。
+  if db.mode != mEmbedded:
+    raise newException(ValueError, "cluster connection cannot inspect local WAL locality")
+  db.st.localityReport()
 
 proc backup*(db: RocheDb, dstDir: string): BackupStats =
   ## 現在の embedded Store 状態を compact 済み WAL として dstDir に退避する。
@@ -1208,6 +1425,87 @@ proc transaction*(db: RocheDb, body: proc(tx: RocheTx)) =
     tx.rollback()
     raise
 
+proc batchPutAtomic*(db: RocheDb, payloads: seq[string],
+                     ring: string = "default",
+                     vecs: seq[seq[float32]] = @[]): seq[RocheId] =
+  ## Embedded all-or-nothing bulk insert. If any staged write or commit fails,
+  ## no partial payloads become visible.
+  doAssert db.mode == mEmbedded, "batchPutAtomic is embedded mode only"
+  let tx = db.beginTransaction()
+  try:
+    for i, payload in payloads:
+      let vec = if i < vecs.len: vecs[i] else: @[]
+      result.add tx.put(payload, ring = ring, vec = vec)
+    tx.commit()
+  except CatchableError:
+    tx.rollback()
+    result.setLen(0)
+    raise
+
+proc batchPutAtomic*(db: RocheDb, docs: seq[JsonNode],
+                     ring: string = "default",
+                     vecs: seq[seq[float32]] = @[]): seq[RocheId] =
+  ## Embedded all-or-nothing bulk JSON insert.
+  doAssert db.mode == mEmbedded, "batchPutAtomic is embedded mode only"
+  let tx = db.beginTransaction()
+  try:
+    for i, doc in docs:
+      let vec = if i < vecs.len: vecs[i] else: @[]
+      result.add tx.put(doc, ring = ring, vec = vec)
+    tx.commit()
+  except CatchableError:
+    tx.rollback()
+    result.setLen(0)
+    raise
+
+proc batchUpdateAtomic*(db: RocheDb, ids: seq[RocheId],
+                        payloads: seq[string],
+                        vecs: seq[seq[float32]] = @[]) =
+  ## Embedded all-or-nothing bulk replace. Every ID must exist before commit.
+  doAssert db.mode == mEmbedded, "batchUpdateAtomic is embedded mode only"
+  if ids.len != payloads.len:
+    raise newException(ValueError, "ids and payloads length mismatch")
+  let tx = db.beginTransaction()
+  try:
+    for i, id in ids:
+      let vec = if i < vecs.len: vecs[i] else: @[]
+      tx.update(id, payloads[i], vec = vec)
+    tx.commit()
+  except CatchableError:
+    tx.rollback()
+    raise
+
+proc batchUpdateAtomic*(db: RocheDb, ids: seq[RocheId],
+                        docs: seq[JsonNode],
+                        vecs: seq[seq[float32]] = @[]) =
+  ## Embedded all-or-nothing bulk JSON replace.
+  doAssert db.mode == mEmbedded, "batchUpdateAtomic is embedded mode only"
+  if ids.len != docs.len:
+    raise newException(ValueError, "ids and docs length mismatch")
+  let tx = db.beginTransaction()
+  try:
+    for i, id in ids:
+      let vec = if i < vecs.len: vecs[i] else: @[]
+      tx.update(id, docs[i], vec = vec)
+    tx.commit()
+  except CatchableError:
+    tx.rollback()
+    raise
+
+proc batchDeleteAtomic*(db: RocheDb, ids: seq[RocheId]) =
+  ## Embedded all-or-nothing bulk delete. Every remove is committed together.
+  doAssert db.mode == mEmbedded, "batchDeleteAtomic is embedded mode only"
+  let tx = db.beginTransaction()
+  try:
+    for id in ids:
+      if not db.st.contains(id.parent, id.seq):
+        raise newException(KeyError, "id not found")
+      tx.remove(id)
+    tx.commit()
+  except CatchableError:
+    tx.rollback()
+    raise
+
 # ---------------------------------------------------------------- 読み出し
 
 proc fetchClusterPayload(db: RocheDb, id: RocheId, selection: string,
@@ -1486,6 +1784,18 @@ proc defaultReadOptions*(): RocheReadOptions =
     sortField: "",
     sortDirection: rsDesc)
 
+proc defaultStellarOptions*(): RocheStellarOptions =
+  RocheStellarOptions(
+    filter: newJObject(),
+    selection: "",
+    limitPerRing: 20,
+    maxDepth: 1,
+    branchBudget: 0,
+    subrings: @[],
+    includeRoot: true,
+    sortField: "time",
+    sortDirection: rsDesc)
+
 proc normalizedReadOptions(options: RocheReadOptions): RocheReadOptions =
   result = options
   if result.filter.isNil:
@@ -1588,6 +1898,193 @@ proc readRing*(db: RocheDb, ring: string,
     result.items.add projectReadRecord(matched[i], opts.selection)
   result.count = result.items.len
   result.nextCursor = nextCursor
+
+proc anchorRingName(db: RocheDb, anchor: RocheId): string =
+  result = db.ringKeyNames.getOrDefault(anchor.parent, "")
+  if result.len == 0:
+    raise newException(ValueError,
+      "anchor ring is unknown in this RocheDB handle; configure or read the ring map first")
+
+proc nearRing*(db: RocheDb, anchor: RocheId, relation: string): string =
+  ## Resolve a temporary proximity hint into a normal ring coordinate.
+  ## The relation is not persisted as metadata; only the resulting ring stores data.
+  let root = db.anchorRingName(anchor)
+  let clean = relation.strip(chars = {'/'})
+  if clean.len == 0: root else: root & "/" & clean
+
+proc nearRing*(baseRing, ring: string): string =
+  ## Resolve a write-time coordinate hint into a concrete nearby ring name.
+  ## Example: baseRing=users/123 and ring=orders becomes users/123/orders.
+  let base = baseRing.strip(chars = {'/'})
+  let child = ring.strip(chars = {'/'})
+  if base.len == 0:
+    child
+  elif child.len == 0:
+    base
+  else:
+    base & "/" & child
+
+proc putNear*(db: RocheDb, baseRing: string, encoded: EncodedPayload,
+              ring: string, vec: seq[float32] = @[]): RocheId =
+  ## Store data under a nearby coordinate derived from baseRing + ring.
+  ## Example: baseRing users/123 and ring orders stores into users/123/orders.
+  ## The hint is write-time only; reads use the resulting ring coordinate.
+  db.put(encoded, ring = nearRing(baseRing, ring), vec = vec)
+
+proc putNear*(db: RocheDb, baseRing, payload, ring: string,
+              vec: seq[float32] = @[]): RocheId =
+  db.putNear(baseRing, encodedPayload(payload), ring = ring, vec = vec)
+
+proc putNear*(db: RocheDb, baseRing: string, doc: JsonNode, ring: string,
+              vec: seq[float32] = @[]): RocheId =
+  db.putNear(baseRing, encodedPayload($doc, pcJson), ring = ring, vec = vec)
+
+proc putNear*(db: RocheDb, anchor: RocheId, encoded: EncodedPayload,
+              relation = "context", vec: seq[float32] = @[]): RocheId =
+  ## Store related data in the same stellar coordinate neighborhood as anchor.
+  ## This converts the relation hint to a nearby ring, then uses normal put.
+  db.put(encoded, ring = db.nearRing(anchor, relation), vec = vec)
+
+proc putNear*(db: RocheDb, anchor: RocheId, payload: string,
+              relation = "context", vec: seq[float32] = @[]): RocheId =
+  db.putNear(anchor, encodedPayload(payload), relation = relation, vec = vec)
+
+proc putNear*(db: RocheDb, anchor: RocheId, doc: JsonNode,
+              relation = "context", vec: seq[float32] = @[]): RocheId =
+  db.putNear(anchor, encodedPayload($doc, pcJson), relation = relation, vec = vec)
+
+proc attachStellar*(db: RocheDb, stellar, ring: string) =
+  ## Attach a ring coordinate to a stellar coordinate's visible lens.
+  ## This does not copy payloads or create a strict foreign-key constraint.
+  let stellarCoord = normalizedCoordinate(stellar)
+  let member = normalizedCoordinate(ring)
+  if stellarCoord.len == 0:
+    raise newException(ValueError, "stellar coordinate must not be empty")
+  if member.len == 0:
+    raise newException(ValueError, "stellar member ring must not be empty")
+  discard db.ringKey(stellarCoord)
+  discard db.ringKey(member)
+  var members = db.stellarMembers.getOrDefault(stellarCoord, @[])
+  members.addUniqueString member
+  db.stellarMembers[stellarCoord] = members
+  db.rebuildStellarMembership()
+  if db.mode == mEmbedded:
+    db.st.putStellarMap(stellarCoord, stellarMapBlob(stellarCoord, members))
+
+proc detachStellar*(db: RocheDb, stellar, ring: string) =
+  ## Remove a ring coordinate from a stellar coordinate's visible lens.
+  let stellarCoord = normalizedCoordinate(stellar)
+  let member = normalizedCoordinate(ring)
+  if stellarCoord.len == 0:
+    raise newException(ValueError, "stellar coordinate must not be empty")
+  if member.len == 0:
+    raise newException(ValueError, "stellar member ring must not be empty")
+  var members = db.stellarMembers.getOrDefault(stellarCoord, @[])
+  members.removeString member
+  if members.len == 0:
+    db.stellarMembers.del stellarCoord
+    if db.mode == mEmbedded:
+      db.st.putStellarMap(stellarCoord, "")
+  else:
+    db.stellarMembers[stellarCoord] = members
+    if db.mode == mEmbedded:
+      db.st.putStellarMap(stellarCoord, stellarMapBlob(stellarCoord, members))
+  db.rebuildStellarMembership()
+
+proc stellarMembers*(db: RocheDb, stellar: string): seq[string] =
+  db.stellarMembers.getOrDefault(normalizedCoordinate(stellar), @[])
+
+proc stellarCoordinatesFor*(db: RocheDb, ring: string): seq[string] =
+  db.stellarByMember.getOrDefault(normalizedCoordinate(ring), @[])
+
+proc normalizedStellarOptions(options: RocheStellarOptions): RocheStellarOptions =
+  result = options
+  if result.filter.isNil:
+    result.filter = newJObject()
+  if result.limitPerRing <= 0:
+    result.limitPerRing = 20
+  if result.maxDepth < 0:
+    result.maxDepth = 0
+  if result.branchBudget < 0:
+    result.branchBudget = 0
+  for i, value in result.subrings:
+    result.subrings[i] = value.strip(chars = {'/'})
+  if result.sortField.len == 0:
+    result.sortField = "time"
+  if result.sortField == "write":
+    result.sortField = "time"
+  if result.sortField notin ["id", "time"]:
+    raise newException(ValueError, "sort field must be id, time, or write")
+
+proc subringMatches(root, ringName: string, subrings: seq[string]): bool =
+  if subrings.len == 0:
+    return true
+  let rootClean = normalizedCoordinate(root)
+  let ringClean = normalizedCoordinate(ringName)
+  for subring in subrings:
+    let sub = normalizedCoordinate(subring)
+    if sub.len == 0:
+      continue
+    if ringClean == rootClean & "/" & sub:
+      return true
+    if ringClean == sub or ringClean.startsWith(sub & "/"):
+      return true
+    if ringClean.endsWith("/" & sub):
+      return true
+  false
+
+proc readStellar*(db: RocheDb, root: string,
+                  options: RocheStellarOptions = defaultStellarOptions()): RocheStellarPage =
+  ## Read a stellar neighborhood: the root ring and nearby child coordinates.
+  ## It is similar to pointing a telescope at a ring: nearby satellites are
+  ## naturally visible, and subrings narrow the field when needed. It does not
+  ## chase distant coordinates just to emulate a global join.
+  let opts = normalizedStellarOptions(options)
+  result.root = root
+  result.maxDepth = opts.maxDepth
+  result.branchBudget = opts.branchBudget
+  if root notin db.ringNames:
+    return
+  let rootKey = db.ringNames[root]
+  var keys: seq[uint64] = @[]
+  if opts.subrings.len > 0:
+    if opts.includeRoot:
+      keys.add rootKey
+    for subring in opts.subrings:
+      if subring.len == 0:
+        continue
+      let ringName = root.strip(chars = {'/'}) & "/" & subring
+      if ringName in db.ringNames:
+        keys.add db.ringNames[ringName]
+  else:
+    keys = db.stellarNeighborKeys(rootKey, opts.maxDepth, opts.branchBudget)
+    if not opts.includeRoot and keys.len > 0 and keys[0] == rootKey:
+      keys.delete(0)
+  var visibleCoordinates = db.stellarMembers.getOrDefault(root, @[])
+  for stellar in db.stellarByMember.getOrDefault(root, @[]):
+    visibleCoordinates.addUniqueString stellar
+    for member in db.stellarMembers.getOrDefault(stellar, @[]):
+      visibleCoordinates.addUniqueString member
+  for ringName in visibleCoordinates:
+    if not subringMatches(root, ringName, opts.subrings):
+      continue
+    if ringName in db.ringNames:
+      keys.addUniqueRingKey db.ringNames[ringName]
+  for key in keys:
+    let ringName = db.ringNameOf(key)
+    let page = db.readRing(ringName, RocheReadOptions(
+      filter: opts.filter,
+      selection: opts.selection,
+      limit: opts.limitPerRing,
+      sortField: opts.sortField,
+      sortDirection: opts.sortDirection))
+    if page.items.len == 0:
+      continue
+    result.rings.add RocheStellarRingPage(ring: ringName,
+                                          count: page.count,
+                                          items: page.items)
+    result.count += page.count
+  result.ringsVisited = keys.len
 
 proc batchPut*(db: RocheDb, payloads: seq[string], ring: string = "default",
                vecs: seq[seq[float32]] = @[]): seq[RocheId] =
@@ -2042,6 +2539,37 @@ proc descendantRingKeys(db: RocheDb, root: uint64, maxDepth, branchBudget: int):
     for child in children:
       result.add child
       queue.add (key: child, depth: current.depth + 1)
+
+proc parentRingKey(db: RocheDb, key: uint64): uint64 =
+  let name = db.ringNameOf(key)
+  let parentName = parentRingName(name)
+  if parentName.len > 0 and parentName in db.ringNames:
+    db.ringNames[parentName]
+  else:
+    0'u64
+
+proc stellarNeighborKeys(db: RocheDb, root: uint64, maxDepth, branchBudget: int): seq[uint64] =
+  ## Coordinate-near read set. It includes the target ring, its nearby
+  ## descendants, and parent/sibling rings inside the configured field of view.
+  result.add root
+  if maxDepth <= 0:
+    return
+
+  for key in db.descendantRingKeys(root, maxDepth, branchBudget):
+    result.addUniqueRingKey(key)
+
+  var current = root
+  for depth in 1 .. maxDepth:
+    let parent = db.parentRingKey(current)
+    if parent == 0'u64:
+      break
+    result.addUniqueRingKey(parent)
+    var siblings = db.ringChildren.getOrDefault(parent, @[])
+    if branchBudget > 0 and siblings.len > branchBudget:
+      siblings.setLen(branchBudget)
+    for sibling in siblings:
+      result.addUniqueRingKey(sibling)
+    current = parent
 
 proc addUniqueRingKey(keys: var seq[uint64], key: uint64) =
   if key notin keys:

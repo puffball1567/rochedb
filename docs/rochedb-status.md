@@ -41,7 +41,8 @@ Translations:
 |---|---|---|
 | Append-only WAL | Done | Batched flush by default; `durStrong` / `--durability=strong` adds flush + fsync write boundaries |
 | Reopen recovery | Done | Items / vectors / ring metadata / descriptions |
-| Transaction | Done | Embedded atomic transaction |
+| Transaction | Done | Embedded atomic transaction plus all-or-nothing `batchPutAtomic`, `batchUpdateAtomic`, and `batchDeleteAtomic` helpers |
+| Cooperative coordinate locks | Done | Embedded opt-in `ring` and `stellar` locks for high-integrity workflows; normal NoSQL read/write paths do not check locks |
 | Cluster transaction landing | PoC | node0 landing. `scripts/cluster_tx_smoke.sh` covers apply smoke; `scripts/cluster_failure_smoke.sh` covers owner crash/restart retry; redundancy is not implemented yet |
 | Cluster CRUD/list/count | PoC | `update`, `deleteById`, JSON `patch`, `listByRing`, `countByRing` use landing intents or node fan-out; `scripts/cluster_tx_smoke.sh` covers smoke |
 | Compact | Done | Rebuilds WAL from live records |
@@ -107,6 +108,7 @@ Translations:
 | Redis comparison | Done | Smoke test with conditions and limits documented |
 | C ABI bench | Done | `examples/cbench.c` |
 | Docker case study | Partial | memory pressure / PHP / Swift smoke |
+| Unique data model demo | Done | `examples/stellar_data_model_demo.sh` demonstrates separate rings, stellar attach/detach, narrowed reads, and non-copy visibility changes |
 | Cluster transaction smoke | Partial | `scripts/cluster_tx_smoke.sh` starts 3 local nodes and verifies apply / retrieve |
 | Cluster failure retry smoke | Partial | `scripts/cluster_failure_smoke.sh` kills the owner node, verifies the intent remains pending, restarts the owner, and verifies retry apply |
 | Universe sync demo | Done | `examples/universe_sync_demo.sh` builds a small source/target pair, demonstrates API-level sync, then demonstrates the CLI export/sync/prune boundary. `scripts/universe_sync_failure_smoke.sh` verifies malformed JSONL handling, replay idempotency, and explicit ack/prune. `scripts/universe_sync_remote_smoke.sh` verifies remote `--peers` delivery and target-down retry behavior |

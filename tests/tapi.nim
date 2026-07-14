@@ -240,6 +240,132 @@ suite "public api":
     check db.countByRing("users") == 0
     db.close()
 
+  test "stellar neighborhood reads nearby rings from either side":
+    var db = open()
+    let profile = db.put(%*{"kind": "user", "name": "alice"}, ring = "users/123")
+    let order = db.putNear("users/123", %*{"kind": "order", "orderNo": "A-001"},
+                           ring = "orders")
+    let billing = db.putNear("users/123", %*{"kind": "billing", "plan": "pro"},
+                             ring = "billing")
+    let distant = db.put(%*{"kind": "order", "orderNo": "B-999"}, ring = "users/999/orders")
+
+    let stellar = db.readStellar("users/123", RocheStellarOptions(
+      filter: newJObject(),
+      selection: "{ kind }",
+      limitPerRing: 10,
+      maxDepth: 1,
+      includeRoot: true,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check stellar.count == 3
+    var sawRoot = false
+    var sawOrders = false
+    var sawBilling = false
+    var sawDistant = false
+    for ringPage in stellar.rings:
+      if ringPage.ring == "users/123": sawRoot = true
+      if ringPage.ring == "users/123/orders": sawOrders = true
+      if ringPage.ring == "users/123/billing": sawBilling = true
+      if ringPage.ring == "users/999/orders": sawDistant = true
+    check sawRoot
+    check sawOrders
+    check sawBilling
+    check not sawDistant
+
+    let fromOrders = db.readStellar("users/123/orders", RocheStellarOptions(
+      filter: newJObject(),
+      selection: "{ kind }",
+      limitPerRing: 10,
+      maxDepth: 1,
+      includeRoot: true,
+      sortField: "id",
+      sortDirection: rsAsc))
+    var ordersSawUser = false
+    var ordersSawOrder = false
+    var ordersSawDistant = false
+    for ringPage in fromOrders.rings:
+      if ringPage.ring == "users/123": ordersSawUser = true
+      if ringPage.ring == "users/123/orders": ordersSawOrder = true
+      if ringPage.ring == "users/999/orders": ordersSawDistant = true
+    check ordersSawUser
+    check ordersSawOrder
+    check not ordersSawDistant
+
+    let onlyOrders = db.readStellar("users/123", RocheStellarOptions(
+      filter: newJObject(),
+      limitPerRing: 10,
+      maxDepth: 1,
+      subrings: @["orders"],
+      includeRoot: false,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check onlyOrders.count == 1
+    check onlyOrders.rings.len == 1
+    check onlyOrders.rings[0].ring == "users/123/orders"
+    check onlyOrders.rings[0].items[0].id == order
+    check profile.toRaw().parent != order.toRaw().parent
+    check nearRing("users/123", "orders") == "users/123/orders"
+    check billing.toRaw().parent != distant.toRaw().parent
+    db.close()
+
+  test "stellar attach/detach links existing coordinates without copying data":
+    let dir = createTempDir("rochedb", "stellar")
+    var db = open(dataDir = dir)
+    discard db.put(%*{"kind": "user", "id": "123"}, ring = "users/123")
+    discard db.put(%*{"kind": "shop", "id": "1123"}, ring = "shops/1123")
+    discard db.put(%*{"kind": "order", "id": "A-001", "userId": "123", "shopId": "1123"},
+                   ring = "orders/A-001")
+
+    db.attachStellar("commerce/order/A-001", "users/123")
+    db.attachStellar("commerce/order/A-001", "shops/1123")
+    db.attachStellar("commerce/order/A-001", "orders/A-001")
+    check db.stellarMembers("commerce/order/A-001").len == 3
+
+    let fromStellar = db.readStellar("commerce/order/A-001", RocheStellarOptions(
+      filter: newJObject(),
+      limitPerRing: 10,
+      maxDepth: 1,
+      includeRoot: true,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check fromStellar.count == 3
+
+    let fromShop = db.readStellar("shops/1123", RocheStellarOptions(
+      filter: %*{"kind": "user"},
+      limitPerRing: 10,
+      maxDepth: 1,
+      includeRoot: true,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check fromShop.count == 1
+    check fromShop.rings[0].ring == "users/123"
+
+    let usersOnly = db.readStellar("commerce/order/A-001", RocheStellarOptions(
+      filter: newJObject(),
+      limitPerRing: 10,
+      maxDepth: 1,
+      subrings: @["users"],
+      includeRoot: false,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check usersOnly.count == 1
+    check usersOnly.rings[0].ring == "users/123"
+    db.close()
+
+    var reopened = open(dataDir = dir)
+    check reopened.stellarMembers("commerce/order/A-001").len == 3
+    reopened.detachStellar("commerce/order/A-001", "users/123")
+    let afterDetach = reopened.readStellar("shops/1123", RocheStellarOptions(
+      filter: %*{"kind": "user"},
+      limitPerRing: 10,
+      maxDepth: 1,
+      includeRoot: true,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check afterDetach.count == 0
+    reopened.close()
+    removeDir(dir)
+
   test "warp は小惑星帯のように登録順で少しずつ patch を落とす":
     var db = open()
     let a1 = db.put(%*{"orderId": "o1", "status": "paid"},
@@ -1057,6 +1183,186 @@ suite "transaction":
         raise newException(ValueError, "boom")
       )
     check not (id in db)
+    db.close()
+
+  test "atomic batch put rolls back every staged write on failure":
+    var db = open()
+    var ids: seq[RocheId] = @[]
+    expect ValueError:
+      db.transaction(proc(tx: RocheTx) =
+        ids.add tx.put("a", ring = "bulk")
+        ids.add tx.put("b", ring = "bulk")
+        raise newException(ValueError, "bulk validation failed")
+      )
+    check ids.len == 2
+    check not (ids[0] in db)
+    check not (ids[1] in db)
+    db.close()
+
+  test "batchUpdateAtomic rolls back earlier staged updates when one id fails":
+    var db = open()
+    let id = db.put("before", ring = "bulk")
+    let missing = fromRaw(id.toRaw().parent, id.toRaw().epoch,
+                          id.toRaw().seq + 100'u32, id.toRaw().tWrite)
+    expect KeyError:
+      db.batchUpdateAtomic(@[id, missing], @["after", "missing"])
+    check db.get(id) == "before"
+    db.close()
+
+  test "batchPutAtomic commits all writes together":
+    var db = open()
+    let ids = db.batchPutAtomic(@["a", "b", "c"], ring = "bulk")
+    check ids.len == 3
+    check db.get(ids[0]) == "a"
+    check db.get(ids[1]) == "b"
+    check db.get(ids[2]) == "c"
+    db.close()
+
+  test "ring and stellar locks are opt-in cooperative guards":
+    var db = open()
+    discard db.put("user", ring = "users/123")
+    discard db.put("order", ring = "orders/A-001")
+    db.attachStellar("commerce/order/A-001", "users/123")
+    db.attachStellar("commerce/order/A-001", "orders/A-001")
+
+    let stellarLock = db.acquireStellarLock("commerce/order/A-001", ttlSeconds = 5)
+    expect IOError:
+      discard db.acquireRingLock("users/123", ttlSeconds = 5)
+    db.releaseLock(stellarLock)
+
+    let ringLock = db.acquireRingLock("users/123", ttlSeconds = 5)
+    expect IOError:
+      discard db.acquireStellarLock("commerce/order/A-001", ttlSeconds = 5)
+    db.releaseLock(ringLock)
+
+    var ran = false
+    db.withRingLock("users/123", proc() =
+      ran = true
+      db.transaction(proc(tx: RocheTx) =
+        discard tx.put("audit", ring = "users/123/audit")
+      )
+    )
+    check ran
+    check db.readRing("users/123/audit").count == 1
+    db.close()
+
+  test "atomic batch matrix covers commit, rollback, mismatch, delete, and replay":
+    let dir = createTempDir("rochedb", "atomic-matrix")
+    var db = open(dataDir = dir)
+
+    block putSuccess:
+      let ids = db.batchPutAtomic(@["a", "b"], ring = "matrix")
+      check ids.len == 2
+      check db.get(ids[0]) == "a"
+      check db.get(ids[1]) == "b"
+
+    block updateLengthMismatch:
+      let id = db.put("unchanged", ring = "matrix")
+      expect ValueError:
+        db.batchUpdateAtomic(@[id], @["x", "extra"])
+      check db.get(id) == "unchanged"
+
+    block updateMissingIdRollback:
+      let first = db.put("first-before", ring = "matrix")
+      let second = db.put("second-before", ring = "matrix")
+      let raw = second.toRaw()
+      let missing = fromRaw(raw.parent, raw.epoch, raw.seq + 999'u32, raw.tWrite)
+      expect KeyError:
+        db.batchUpdateAtomic(@[first, missing], @["first-after", "missing"])
+      check db.get(first) == "first-before"
+      check db.get(second) == "second-before"
+
+    block deleteMissingIdRollback:
+      let keepA = db.put("keep-a", ring = "matrix")
+      let keepB = db.put("keep-b", ring = "matrix")
+      let raw = keepB.toRaw()
+      let missing = fromRaw(raw.parent, raw.epoch, raw.seq + 999'u32, raw.tWrite)
+      expect KeyError:
+        db.batchDeleteAtomic(@[keepA, missing])
+      check keepA in db
+      check keepB in db
+      check db.get(keepA) == "keep-a"
+      check db.get(keepB) == "keep-b"
+
+    block deleteSuccess:
+      let goneA = db.put("gone-a", ring = "matrix")
+      let goneB = db.put("gone-b", ring = "matrix")
+      db.batchDeleteAtomic(@[goneA, goneB])
+      check not (goneA in db)
+      check not (goneB in db)
+
+    block replay:
+      let persisted = db.batchPutAtomic(@["persist-a", "persist-b"], ring = "matrix")
+      db.close()
+      var reopened = open(dataDir = dir)
+      check reopened.get(persisted[0]) == "persist-a"
+      check reopened.get(persisted[1]) == "persist-b"
+      reopened.close()
+      removeDir(dir)
+
+  test "coordinate lock conflict matrix covers overlap, disjoint, ttl, and finally release":
+    var db = open()
+    discard db.put("user", ring = "users/123")
+    discard db.put("order", ring = "orders/A-001")
+    discard db.put("shop", ring = "shops/1123")
+    db.attachStellar("commerce/order/A-001", "users/123")
+    db.attachStellar("commerce/order/A-001", "orders/A-001")
+    db.attachStellar("commerce/order/A-001", "shops/1123")
+
+    block sameRingConflicts:
+      let lock = db.acquireRingLock("users/123", ttlSeconds = 5)
+      check db.lockActive(lock)
+      expect IOError:
+        discard db.acquireRingLock("users/123", ttlSeconds = 5)
+      db.releaseLock(lock)
+      check not db.lockActive(lock)
+
+    block disjointRingsDoNotConflict:
+      let a = db.acquireRingLock("users/123", ttlSeconds = 5)
+      let b = db.acquireRingLock("products/9", ttlSeconds = 5)
+      check db.lockActive(a)
+      check db.lockActive(b)
+      db.releaseLock(a)
+      db.releaseLock(b)
+
+    block stellarConflictsWithMemberRings:
+      let stellar = db.acquireStellarLock("commerce/order/A-001", ttlSeconds = 5)
+      for ring in ["users/123", "orders/A-001", "shops/1123"]:
+        expect IOError:
+          discard db.acquireRingLock(ring, ttlSeconds = 5)
+      db.releaseLock(stellar)
+
+    block memberRingConflictsWithStellar:
+      let orderLock = db.acquireRingLock("orders/A-001", ttlSeconds = 5)
+      expect IOError:
+        discard db.acquireStellarLock("commerce/order/A-001", ttlSeconds = 5)
+      db.releaseLock(orderLock)
+
+    block unrelatedStellarDoesNotConflict:
+      let one = db.acquireStellarLock("commerce/order/A-001", ttlSeconds = 5)
+      let other = db.acquireStellarLock("support/ticket/T-001", ttlSeconds = 5)
+      check db.lockActive(one)
+      check db.lockActive(other)
+      db.releaseLock(one)
+      db.releaseLock(other)
+
+    block ttlExpiryReleasesLock:
+      let short = db.acquireRingLock("users/123", ttlSeconds = 0.01)
+      sleep(30)
+      check not db.lockActive(short)
+      let next = db.acquireRingLock("users/123", ttlSeconds = 5)
+      check db.lockActive(next)
+      db.releaseLock(next)
+
+    block finallyReleaseOnException:
+      expect ValueError:
+        db.withStellarLock("commerce/order/A-001", proc() =
+          raise newException(ValueError, "workflow failed")
+        )
+      let after = db.acquireRingLock("users/123", ttlSeconds = 5)
+      check db.lockActive(after)
+      db.releaseLock(after)
+
     db.close()
 
 suite "galaxy router":

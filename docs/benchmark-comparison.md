@@ -15,57 +15,79 @@ These are local measurements, not universal performance claims.
 
 Environment summary: same machine as RocheDB, AMD Ryzen 5 5600H, Linux 6.8,
 Nim 2.2.10, PostgreSQL 14.23, local TCP, single client, 100-byte payload where
-applicable.
+applicable. Measured on 2026-07-15.
 
 Reproduction helper: `N=10000 examples/postgres_bench.sh`.
+The helper creates a fresh temporary RocheDB data directory and a fresh
+temporary PostgreSQL cluster for each run, then removes them on exit.
 
 Docker reproduction helper: `N=10000 examples/postgres_docker_bench.sh`.
 
 | Group | Operation | us/op | Notes |
 |---|---|---:|---|
-| RocheDB | single-key read | 45.9 | Three `roched` nodes, persistence enabled |
-| RocheDB | single-row write | 47.7 | Three `roched` nodes, persistence enabled |
+| RocheDB | single-key read | 46.8 | Three `roched` nodes, persistence enabled |
+| RocheDB | single-row write | 48.8 | Three `roched` nodes, persistence enabled |
+| RocheDB | query projection | 53.3 | Server-side JSON projection |
 | RocheDB | strong-durability write | not measured | `durStrong` / `--durability=strong` was not part of this comparison |
-| PostgreSQL 14.23 | primary-key `SELECT` | 67 | `pgbench -M prepared`, 14,986 tps |
-| PostgreSQL 14.23 | single-row write, `synchronous_commit=off` | 79 | `pgbench -M prepared`, 12,699 tps |
-| PostgreSQL 14.23 | single-row write, `synchronous_commit=on` | 1998 | `pgbench -M prepared`, 501 tps |
+| PostgreSQL 14.23 | primary-key `SELECT` | 68 | `pgbench -M prepared`, 14,659 tps |
+| PostgreSQL 14.23 | single-row write, `synchronous_commit=off` | 80 | `pgbench -M prepared`, 12,433 tps |
+| PostgreSQL 14.23 | single-row write, `synchronous_commit=on` | 1935 | `pgbench -M prepared`, 517 tps |
 
 ## PostgreSQL Docker Reference
 
 Environment summary: same host as RocheDB, Docker `overlay2`, RocheDB image
 built from `examples/compose/Dockerfile`, PostgreSQL image `postgres:14`, same
 Docker network, single client, 100-byte payload, `n=10000`. Data directories
-are bind-mounted from the repository `.tmp` directory during the helper run.
+are bind-mounted from a temporary helper directory during the helper run.
+Measured on 2026-07-15.
 
 Reproduction helper: `N=10000 examples/postgres_docker_bench.sh`.
+The helper starts fresh RocheDB and PostgreSQL containers on a fresh Docker
+network and removes the containers, network, and temporary data directory on
+exit.
 
 | Group | Operation | us/op | Notes |
 |---|---|---:|---|
-| RocheDB Docker | single-key read | 53.5 | Three `roched` containers |
-| RocheDB Docker | single-row write | 56.4 | Three `roched` containers |
-| RocheDB Docker | query projection | 60.0 | Server-side JSON projection |
-| PostgreSQL 14 Docker | primary-key `SELECT` | 92 | `pgbench -M prepared`, 10,869 tps |
-| PostgreSQL 14 Docker | single-row write, `synchronous_commit=off` | 130 | `pgbench -M prepared`, 7,666 tps |
-| PostgreSQL 14 Docker | single-row write, `synchronous_commit=on` | 1134 | `pgbench -M prepared`, 882 tps |
+| RocheDB Docker | single-key read | 61.3 | Three `roched` containers |
+| RocheDB Docker | single-row write | 103.6 | Three `roched` containers |
+| RocheDB Docker | query projection | 65.3 | Server-side JSON projection |
+| PostgreSQL 14 Docker | primary-key `SELECT` | 103 | `pgbench -M prepared`, 9,669 tps |
+| PostgreSQL 14 Docker | single-row write, `synchronous_commit=off` | 149 | `pgbench -M prepared`, 6,720 tps |
+| PostgreSQL 14 Docker | single-row write, `synchronous_commit=on` | 1162 | `pgbench -M prepared`, 860 tps |
 
 ## Redis Reference
 
 Environment summary: same machine as RocheDB, AMD Ryzen 5 5600H, Linux 6.8,
 Nim 2.2.10, local Redis 6.0.16, one local `roched`, persistence disabled,
 local TCP, single client, 100-byte payload, `n=1000`, Redis pipeline batch size
-256.
+256. Measured on 2026-07-15.
 
 Local reproduction helper: `N=1000 examples/redis_local_bench.sh`.
+The helper starts RocheDB with a fresh temporary data directory and removes it on
+exit. Redis local uses the existing Redis server, but the benchmark writes under
+a unique `rochedb:bench:<timestamp>:` prefix and deletes those keys before exit.
 
 Docker reproduction helper: `N=1000 examples/redis_docker_bench.sh`.
+The Docker helper starts fresh Redis and RocheDB containers on a fresh Docker
+network and removes them on exit.
 
 | Group | Operation | us/op | Notes |
 |---|---|---:|---|
 | RocheDB | embedded get | 0.03 | In-process hot path; no TCP |
-| RocheDB | TCP GET | 44.87 | One request / one response |
-| RocheDB | TCP BGET | 1.47 | Batch read; comparable axis to Redis pipeline |
-| Redis 6.0.16 | TCP GET | 41.23 | Non-pipelined local Redis |
-| Redis 6.0.16 | pipeline GET | 3.68 | Batch size 256 |
+| RocheDB | TCP GET | 45.26 | One request / one response |
+| RocheDB | TCP BGET | 1.48 | Batch read; comparable axis to Redis pipeline |
+| Redis 6.0.16 | TCP GET | 42.85 | Non-pipelined local Redis |
+| Redis 6.0.16 | pipeline GET | 3.53 | Batch size 256 |
+
+Docker-Docker measurements under the same benchmark shape:
+
+| Group | Operation | us/op | Notes |
+|---|---|---:|---|
+| RocheDB Docker | embedded get | 0.04 | In-process hot path inside the benchmark container |
+| RocheDB Docker | TCP GET | 55.78 | One request / one response across Docker network |
+| RocheDB Docker | TCP BGET | 1.71 | Batch read; comparable axis to Redis pipeline |
+| Redis 7 Docker | TCP GET | 48.74 | Non-pipelined Redis on the same Docker network |
+| Redis 7 Docker | pipeline GET | 2.06 | Batch size 256 |
 
 ## Working-Set And Token Reduction
 
@@ -73,5 +95,5 @@ Docker reproduction helper: `N=1000 examples/redis_docker_bench.sh`.
 |---|---|---|
 | Working-set | 100 rings / 10k docs | scanned/query `10000 -> 100` |
 | Memory-pressure | 100 rings / 100k docs / 512-byte payload | candidate memory/query `93.079 MiB -> 0.931 MiB` |
-| Synthetic RAG | fixed recall | recall `1.000`, scanned/query `8000 -> 1000`, tokens/query `3960 -> 657.8` |
+| Synthetic RAG | fixed recall | recall `1.000`, scanned/query `8000 -> 1000`, tokens/query `3955 -> 657` |
 | AI/RAG case study | generated JSONL, 400 docs / 6 rings | recall `1.000`, scanned/query `400 -> 40`, tokens/query `615.2 -> 231.6` |
