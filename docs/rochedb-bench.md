@@ -96,7 +96,7 @@ measured layer: core `27.5 ns`, public API `54.7 ns`, and C ABI `77.7 ns`.
 
 # Cluster Mode and PostgreSQL Reference
 
-- Date: 2026-07-08, after the v0.2.5 read-path and benchmark-ring fixes
+- Date: 2026-07-15, after the locality/stellar branch verification run
 - Environment: same machine, AMD Ryzen 5 5600H / Linux 6.8 / Nim 2.2.10
 - RocheDB setup: three `roched` nodes, persistence enabled, single client,
   persistent TCP connection, 100-byte payload, `n=10000`
@@ -105,10 +105,14 @@ measured layer: core `27.5 ns`, public API `54.7 ns`, and C ABI `77.7 ns`.
 - Reproduction helper: `N=10000 examples/postgres_bench.sh` starts a temporary
   three-node RocheDB cluster and a temporary local PostgreSQL cluster, then runs
   both benchmark shapes. It requires `initdb`, `pg_ctl`, `psql`, and `pgbench`
-  from a local PostgreSQL installation.
+  from a local PostgreSQL installation. Both RocheDB and PostgreSQL use fresh
+  temporary data directories for each helper run, and the helper removes them on
+  exit.
 - Docker reproduction helper: `N=10000 examples/postgres_docker_bench.sh`
   starts three RocheDB containers and one PostgreSQL container on the same
   Docker network, then runs the same benchmark shapes from inside containers.
+  It creates fresh containers, a fresh Docker network, and temporary data
+  directories for each run.
 - Benchmark guard: the client configures a long-period benchmark ring and
   samples `locate` across the measurement horizon. The selected ring must stay
   on one owner during the run so handoff traffic is not mixed into the local
@@ -118,9 +122,9 @@ measured layer: core `27.5 ns`, public API `54.7 ns`, and C ABI `77.7 ns`.
 
 | Operation | us/op | ops/s |
 |---|---:|---:|
-| put, location calculation + 1 RTT + append log | 47.7 | 20,976 |
-| get, location calculation + 1 RTT | 45.9 | 21,797 |
-| query, server-side JSON projection | 50.2 | 19,904 |
+| put, location calculation + 1 RTT + append log | 48.8 | 20,490 |
+| get, location calculation + 1 RTT | 46.8 | 21,368 |
+| query, server-side JSON projection | 53.3 | 18,772 |
 
 ## PostgreSQL 14 Reference
 
@@ -131,61 +135,62 @@ thread, local TCP endpoint, `pgbench -M prepared`.
 
 | Operation | us/op | Notes |
 |---|---:|---|
-| single-key read | 45.9 | Three `roched` nodes, persistence enabled |
-| single-row write | 47.7 | Three `roched` nodes, persistence enabled |
+| single-key read | 46.8 | Three `roched` nodes, persistence enabled |
+| single-row write | 48.8 | Three `roched` nodes, persistence enabled |
+| query projection | 53.3 | Server-side JSON projection |
 | strong-durability write | not measured | `durStrong` / `--durability=strong` was not part of this comparison |
 
 ### PostgreSQL Measurements
 
 | Operation | us/op | Notes |
 |---|---:|---|
-| primary-key `SELECT` | 67 | 14,986 tps |
-| single-row write, `synchronous_commit=off` | 79 | 12,699 tps |
-| single-row write, `synchronous_commit=on` | 1998 | 501 tps |
+| primary-key `SELECT` | 68 | 14,659 tps |
+| single-row write, `synchronous_commit=off` | 80 | 12,433 tps |
+| single-row write, `synchronous_commit=on` | 1935 | 517 tps |
 
 Interpretation: this compares a thin KV/document path with a SQL RDBMS path that
 includes parsing, planning, MVCC, and index maintenance. The defensible claim is
 that RocheDB's network KV path is in the same latency class as PostgreSQL
 primary-key access and is ahead under these local conditions: PostgreSQL SELECT
-was about 1.5x slower than RocheDB read, and PostgreSQL
-`synchronous_commit=off` write was about 1.7x slower than RocheDB write in this
+was about 1.45x slower than RocheDB read, and PostgreSQL
+`synchronous_commit=off` write was about 1.64x slower than RocheDB write in this
 run. RocheDB's durability mode in this comparison was closer to
 `synchronous_commit=off`.
 RocheDB now has `durStrong` / `--durability=strong`, but that path was not part
-of the 2026-07-08 PostgreSQL comparison.
+of the 2026-07-15 PostgreSQL comparison.
 
 ## Docker-Docker PostgreSQL Reference
 
-- Date: 2026-07-08
+- Date: 2026-07-15
 - Environment: same host, Docker `overlay2`, RocheDB image built from
   `examples/compose/Dockerfile`, PostgreSQL image `postgres:14`
 - Setup: three RocheDB containers and one PostgreSQL container on the same
   Docker network, single client, 100-byte payload, `n=10000`
 - Data placement: RocheDB and PostgreSQL data directories are bind-mounted from
-  the repository `.tmp` directory during the helper run. They are not tmpfs
-  mounts.
+  a temporary helper directory during the run. They are not tmpfs mounts. The
+  helper removes the temporary data on exit.
 - Reproduction: `N=10000 examples/postgres_docker_bench.sh`
 
 ### RocheDB Docker Measurements
 
 | Operation | us/op | ops/s |
 |---|---:|---:|
-| put, location calculation + 1 RTT + append log | 56.4 | 17,744 |
-| get, location calculation + 1 RTT | 53.5 | 18,683 |
-| query, server-side JSON projection | 60.0 | 16,665 |
+| put, location calculation + 1 RTT + append log | 103.6 | 9,655 |
+| get, location calculation + 1 RTT | 61.3 | 16,323 |
+| query, server-side JSON projection | 65.3 | 15,310 |
 
 ### PostgreSQL Docker Measurements
 
 | Operation | us/op | Notes |
 |---|---:|---|
-| primary-key `SELECT` | 92 | 10,869 tps |
-| single-row write, `synchronous_commit=off` | 130 | 7,666 tps |
-| single-row write, `synchronous_commit=on` | 1134 | 882 tps |
+| primary-key `SELECT` | 103 | 9,669 tps |
+| single-row write, `synchronous_commit=off` | 149 | 6,720 tps |
+| single-row write, `synchronous_commit=on` | 1162 | 860 tps |
 
 Interpretation: this is a container-to-container comparison, not the same axis
 as the local-host PostgreSQL reference above. In this Docker run, PostgreSQL
 SELECT was about 1.7x slower than RocheDB read, and PostgreSQL
-`synchronous_commit=off` write was about 2.3x slower than RocheDB write.
+`synchronous_commit=off` write was about 1.4x slower than RocheDB write.
 
 ## Optimization History
 
@@ -215,7 +220,7 @@ revisit fixes this because movement is forward-only.
 
 # Redis Approximation and BGET
 
-- Date: 2026-07-08, after the v0.2.5 landing-zone read-path fix
+- Date: 2026-07-15
 - Environment: same machine, AMD Ryzen 5 5600H / Linux 6.8 / Nim 2.2.10
   `-d:release`
 - Redis: local `/usr/bin/redis-server`, Redis 6.0.16, endpoint
@@ -228,29 +233,44 @@ revisit fixes this because movement is forward-only.
   `roche redis-bench --n=1000 --payload-bytes=100 --redis=127.0.0.1:6379
   --peers=127.0.0.1:17301`
 - Local reproduction helper: `N=1000 examples/redis_local_bench.sh` starts one
-  local `roched` and compares it with an existing local Redis endpoint.
+  local `roched` with a fresh temporary data directory and compares it with an
+  existing local Redis endpoint. Redis keys use a unique
+  `rochedb:bench:<timestamp>:` prefix and are deleted before exit.
 - Docker reproduction helper: `N=1000 examples/redis_docker_bench.sh` builds a
   RocheDB Docker image, starts Redis and RocheDB on the same Docker network, and
-  runs the benchmark from inside that network.
+  runs the benchmark from inside that network. With an already-built image, use
+  `BUILD_IMAGE=0 N=1000 examples/redis_docker_bench.sh`.
 - Purpose: smoke-test whether RocheDB simple read and batch read are in the same
   latency class as Redis TCP and Redis pipeline under local constraints
 
 | Operation | us/op | Interpretation |
 |---|---:|---|
 | RocheDB embedded get | 0.03 | In-process hot path; no TCP |
-| RocheDB TCP get | 44.87 | One request / one response |
-| RocheDB TCP BGET | 1.47 | Batch read; comparable axis to Redis pipeline |
+| RocheDB TCP get | 45.26 | One request / one response |
+| RocheDB TCP BGET | 1.48 | Batch read; comparable axis to Redis pipeline |
 
 Redis measurements under the same local benchmark shape:
 
 | Operation | us/op | Interpretation |
 |---|---:|---|
-| Redis TCP GET | 41.23 | Local Redis, non-pipelined |
-| Redis pipeline GET | 3.68 | Batch size 256 |
+| Redis TCP GET | 42.85 | Local Redis, non-pipelined |
+| Redis pipeline GET | 3.53 | Batch size 256 |
+
+Docker-Docker measurements under the same benchmark shape:
+
+| Operation | us/op | Interpretation |
+|---|---:|---|
+| RocheDB embedded get | 0.04 | In-process hot path inside the benchmark container |
+| RocheDB TCP get | 55.78 | One request / one response across the Docker network |
+| RocheDB TCP BGET | 1.71 | Batch read; comparable axis to Redis pipeline |
+| Redis TCP GET | 48.74 | Redis 7 container, non-pipelined |
+| Redis pipeline GET | 2.06 | Batch size 256 |
 
 Interpretation: RocheDB TCP get is in the same latency class as non-pipelined
 Redis GET, but local Redis was slightly faster for single GET. In this smoke
-test, RocheDB TCP BGET was about 2.5x faster than Redis pipeline GET. This is
+test, RocheDB TCP BGET was about 2.4x faster than Redis pipeline GET. In the
+Docker-Docker run, RocheDB TCP BGET was about 1.2x faster than Redis pipeline
+GET. This is
 not a claim that RocheDB is always faster than Redis.
 Payload size, batch size, Redis configuration, network mode, and data size need
 broader measurement.
@@ -263,18 +283,18 @@ working set can still be read in a competitive latency class.
 
 # Semantic Working-Set Reduction
 
-- Date: 2026-07-04
+- Date: 2026-07-15
 - Environment: same machine, AMD Ryzen 5 5600H / Linux 6.8 / Nim 2.2.10
   `-d:release`, embedded mode, persistence disabled
 - Reproduction: `roche working-set-bench --n=10000 --rings=100
-  --queries=10 --budget=20`
+  --queries=50 --budget=20`
 - Purpose: measure whether ring routing reduces physically scanned records per
   query, rather than full-scanning the entire corpus faster
 
 | Condition | scanned/query | latency/query |
 |---|---:|---:|
-| global retrieve | 10000.0 | 2129.1 us |
-| routed retrieve | 100.0 | 31.6 us |
+| global retrieve | 10000.0 | 1954.9 us |
+| routed retrieve | 100.0 | 31.4 us |
 
 ```text
 reduction scanned=99.00%
@@ -316,7 +336,7 @@ fewer records.
 
 # Memory-Pressure Case Study
 
-- Date: 2026-07-05
+- Date: 2026-07-15
 - Environment: same machine, AMD Ryzen 5 5600H / Linux 6.8 / Nim 2.2.10
   `-d:release`, embedded mode, persistence disabled
 - Reproduction: `roche memory-pressure-bench --n=100000 --rings=100
@@ -327,8 +347,8 @@ fewer records.
 
 | Condition | scanned/query | candidate memory/query | latency/query |
 |---|---:|---:|---:|
-| global retrieve | 100000.0 | 93.079 MiB | 37186.3 us |
-| routed retrieve | 1000.0 | 0.931 MiB | 508.9 us |
+| global retrieve | 100000.0 | 93.079 MiB | 34750.2 us |
+| routed retrieve | 1000.0 | 0.931 MiB | 462.3 us |
 
 ```text
 reduction scanned=99.00% candidate_memory=99.00% memory_ratio=100.0x
@@ -349,7 +369,7 @@ Token reduction is covered by the RAG-style quality-fixed benchmark.
 
 # RAG-Style Quality-Fixed Benchmark
 
-- Date: 2026-07-04
+- Date: 2026-07-15
 - Environment: same machine, AMD Ryzen 5 5600H / Linux 6.8 / Nim 2.2.10
   `-d:release`, embedded mode, persistence disabled
 - Reproduction: `roche rag-bench --n=8000 --queries=80 --budget=20
@@ -359,8 +379,8 @@ Token reduction is covered by the RAG-style quality-fixed benchmark.
 
 | Condition | recall | scanned/query | tokens/query | budget |
 |---|---:|---:|---:|---:|
-| global | 1.000 | 8000.0 | 3960.0 | 20 |
-| routed | 1.000 | 1000.0 | 657.8 | 3 |
+| global | 1.000 | 8000.0 | 3955.0 | 20 |
+| routed | 1.000 | 1000.0 | 657.0 | 3 |
 
 Interpretation: synthetic data showed no recall loss while reducing scanned
 records to 1/8 and estimated tokens to roughly 1/6. This supports the first

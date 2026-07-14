@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.5.0
+
+### Added
+
+- Added stellar locality lens workflows. Existing rings can be attached to or
+  detached from a stellar coordinate, allowing related records to be read
+  together without copying payloads.
+- Added `readStellar` / `roche get --stellar=...` workflows with `--subring`,
+  filter, selection, and grouped ring output.
+- Added embedded all-or-nothing bulk helpers:
+  `batchPutAtomic`, `batchUpdateAtomic`, and `batchDeleteAtomic`.
+- Added opt-in embedded cooperative coordinate locks:
+  `acquireRingLock`, `acquireStellarLock`, `withRingLock`,
+  `withStellarLock`, `releaseLock`, and `lockActive`.
+- Added `docs/unique-data-model.md` and
+  `examples/stellar_data_model_demo.sh` to demonstrate RocheDB-specific
+  ring/stellar data modeling.
+
+### Changed
+
+- Updated Redis, PostgreSQL, Docker-Docker, working-set, memory-pressure, and
+  RAG benchmark documentation with the latest local verification numbers.
+- Documented that benchmark helpers use fresh temporary RocheDB/PostgreSQL
+  data directories, fresh Docker containers where applicable, or unique Redis
+  key prefixes that are deleted before exit.
+- Expanded public API and test coverage documentation for high-integrity
+  application workflows.
+- Bumped package metadata to `0.5.0`.
+
+### Fixed / Hardened
+
+- Added matrix coverage for atomic batch commit/rollback, update/delete
+  failure rollback, persistence replay, ring lock conflicts, stellar/member
+  lock conflicts, disjoint lock coexistence, TTL expiry, and release on
+  exception.
+- Kept cooperative locks opt-in so ordinary `put`, `get`, `list`, and
+  `retrieve` paths remain outside the lock-check path.
+
 ## v0.3.0
 
 ### Added

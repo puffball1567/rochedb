@@ -334,6 +334,50 @@ suite "store persistence":
     st2.close()
     removeDir(dir)
 
+  test "locality report は interleaved WAL と compact 後の ring grouping を測る":
+    let dir = createTempDir("roche-store", "locality")
+    var st = openStore(dir)
+    for i in 0'u32 ..< 12'u32:
+      let ring = uint64((i mod 3) + 1)
+      st.upsert Particle(parent: ring, seq: i div 3, period: 60.0,
+                         head: float(ring), tWrite: float(i),
+                         payload: "p" & $i, codec: pcRaw)
+
+    let before = st.localityReport()
+    check before.persistent
+    check before.liveParticleRecords == 12
+    check before.ringCount == 3
+    check before.ringRuns == 12
+    check before.fragmentedRings == 3
+    check before.localityScore < 1.0
+
+    discard st.compact()
+    let after = st.localityReport()
+    check after.liveParticleRecords == 12
+    check after.ringCount == 3
+    check after.ringRuns == 3
+    check after.fragmentedRings == 0
+    check after.localityScore == 1.0
+    check after.avgRunRecords == 4.0
+    st.close()
+    removeDir(dir)
+
+  test "locality report は上書き済み particle record を dead として数える":
+    let dir = createTempDir("roche-store", "locality-dead")
+    var st = openStore(dir)
+    st.upsert Particle(parent: 7'u64, seq: 0'u32, period: 60.0,
+                       head: 0.0, tWrite: 1.0, payload: "old",
+                       codec: pcRaw)
+    st.upsert Particle(parent: 7'u64, seq: 0'u32, period: 60.0,
+                       head: 0.0, tWrite: 2.0, payload: "new",
+                       codec: pcRaw)
+    let report = st.localityReport()
+    check report.totalParticleRecords == 2
+    check report.liveParticleRecords == 1
+    check report.deadParticleRecords == 1
+    st.close()
+    removeDir(dir)
+
   test "strong durability の compact 後も WAL は復元できる":
     let dir = createTempDir("roche-store", "strong-compact")
     var st = openStore(dir, durability = durStrong)

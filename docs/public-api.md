@@ -20,6 +20,9 @@ technical preview. The canonical Nim definitions live in `src/rochedb.nim`.
 | `RocheListPage` | `items`, `nextCursor` | Cursor-paginated list result. Empty `nextCursor` means there is no next page. |
 | `RocheReadOptions` | `filter`, `selection`, `limit`, `cursor`, `pagination`, `page`, `pageLimit`, `sortField`, `sortDirection` | Ring read options shared with CLI semantics. |
 | `RocheReadPage` | `ring`, `count`, `items`, `nextCursor`, `pagination`, `page`, `pageLimit`, `sortField`, `sortDirection` | Ring read result. `count` is the number of returned items; use `countByRing` for the total ring size. |
+| `RocheStellarOptions` | `filter`, `selection`, `limitPerRing`, `maxDepth`, `branchBudget`, `subrings`, `includeRoot`, `sortField`, `sortDirection` | Coordinate-near read options. A root ring behaves like a telescope target; nearby rings are visible unless narrowed by `subrings`. |
+| `RocheStellarPage` | `root`, `ringsVisited`, `count`, `rings` | Grouped result for a stellar neighborhood read. |
+| `RocheLockToken` | `scope`, `coordinate`, `token`, `expiresAt`, `keys` | Cooperative opt-in lock token for high-integrity embedded workflows. |
 | `RocheHit` | `id`, `score`, `payload` | Retrieval hit. `score` is cosine similarity, higher is closer. |
 
 `RocheId` should normally be treated as opaque. `toRaw` and `fromRaw` exist for
@@ -86,6 +89,7 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 | `put(payload, ring = "default", vec = @[])` | Store a string payload in a ring. |
 | `put(doc: JsonNode, ring = "default", vec = @[])` | Store a JSON document. |
 | `put(encodedPayload(bytes, codec), ring, vec)` | Store `raw`, `json`, `nif`, or `bif` bytes with format metadata. |
+| `putNear(baseRing, payload/doc/encoded, ring, vec = @[])` | Store under a nearby coordinate derived from `baseRing/ring`, for example `users/123` + `orders` -> `users/123/orders`. The near hint is not stored separately. |
 | `get(id)` | Fetch by RocheDB ID. |
 | `getEncoded(id)` | Fetch payload bytes together with their `PayloadCodec`. |
 | `query(id, selection)` | Fetch a JSON projection using GraphQL-style selection syntax. |
@@ -95,8 +99,11 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 | `patch(id, patchDoc)` | Apply a JSON merge patch. |
 | `deleteById(id)` / `remove(id)` | Delete by ID. |
 | `batchPut(payloads, ring, vecs)` | Insert multiple records. |
+| `batchPutAtomic(payloads/docs, ring, vecs)` | Embedded all-or-nothing bulk insert. Rolls back every staged write if any step fails. |
 | `batchGet(ids)` | Fetch multiple IDs. |
 | `batchDelete(ids)` | Delete multiple IDs. |
+| `batchUpdateAtomic(ids, payloads/docs, vecs)` | Embedded all-or-nothing bulk replace. Every ID must exist before commit. |
+| `batchDeleteAtomic(ids)` | Embedded all-or-nothing bulk delete. |
 
 The C ABI exposes matching additive functions: `roche_put_codec`,
 `roche_put_vec_codec`, and `roche_get_codec`. See [Payload Codecs](payload-codecs.md).
@@ -107,12 +114,15 @@ The C ABI exposes matching additive functions: `roche_put_codec`,
 |---|---|
 | `listByRing(ring, limit = 100, cursor = "")` | List records in one ring with cursor pagination. |
 | `readRing(ring, options = defaultReadOptions())` | Read one ring with filter, selection, cursor/page limit, and page-local sort. |
+| `readStellar(root, options = defaultStellarOptions())` | Read the root ring and nearby coordinate rings. Parent, child, and sibling rings can be in the same field of view; distant rings are not forced into the read path. |
+| `nearRing(baseRing, ring)` | Resolve a write-time nearby coordinate, for example `nearRing("users/123", "orders") == "users/123/orders"`. |
 | `countByRing(ring)` | Count records in one ring. |
 | `retrieve(queryVec, ring = "", budget = 8, ...)` | Vector/RAG-style retrieval with ring-aware planning. |
 | `retrievalPlan(...)` | Build a readable retrieval plan without executing it. |
 | `tunedRetrievalPlan(db, profile = "default", ...)` | Build a plan from a stored profile. |
 | `searchPlan(...)` | Build a plan from human-facing amount/scope/depth terms. |
 | `ringMetrics()` | Return low-level ring metrics. |
+| `localityReport()` | Return physical WAL locality metrics for embedded stores. |
 | `ringSummaries(queryVec = @[])` | Return ring centroids, coherence, mass, and optional similarity scores. |
 | `retrievalEnvelope(...)` | Return retrieval results with source metadata for RAG/MCP adapters. |
 
@@ -139,6 +149,26 @@ The C ABI exposes matching additive functions: `roche_put_codec`,
 
 Cluster transactions are a PoC. They use a landing intent and retry apply, but
 coordinator redundancy is still planned.
+
+## Cooperative Locks
+
+Coordinate locks are opt-in guards for high-integrity embedded workflows. Normal
+`put`, `get`, `list`, and `retrieve` do not check these locks, so the lightweight
+NoSQL path remains unchanged. Use locks around workflows that need explicit
+coordination, idempotency, or rollback behavior.
+
+| API | Purpose |
+|---|---|
+| `acquireRingLock(ring, ttlSeconds = 30.0, waitMs = 0)` | Acquire a cooperative lock for one ring coordinate. |
+| `acquireStellarLock(stellar, ttlSeconds = 30.0, waitMs = 0)` | Acquire a cooperative lock for a stellar lens and its current member rings. |
+| `releaseLock(token)` | Release a lock if the owner token still matches. |
+| `withRingLock(ring, proc())` | Acquire/release a ring lock around a body. |
+| `withStellarLock(stellar, proc())` | Acquire/release a stellar lock around a body. |
+
+These locks are not presented as a payment-ledger or financial-core mechanism.
+They are intended for application workflows such as order state updates,
+webhook processing, retry-safe maintenance, and coordinated edits around a ring
+or stellar lens.
 
 ## Atlas And Descriptions
 
