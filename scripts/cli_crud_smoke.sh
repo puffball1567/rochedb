@@ -58,6 +58,58 @@ bin/roche get --ring=docs/japan --filter='{"status":"draft"}' --selection='{ tit
 bin/roche query --ring=docs/japan --filter="{\"id\":\"$raw_id\"}" --selection='{ title }' |
   grep -q '"title": "Hello"'
 
+echo "[cli-crud] stellar-near ring reads"
+bin/roche put --ring=users/123 \
+  --payload='{"kind":"user","name":"Alice"}' --codec=json >/dev/null
+bin/roche put --ring=orders --near=users/123 \
+  --payload='{"kind":"order","orderNo":"A-001"}' --codec=json >/dev/null
+bin/roche put --ring=billing --near=users/123 \
+  --payload='{"kind":"billing","plan":"pro"}' --codec=json >/dev/null
+bin/roche put --ring=users/999/orders \
+  --payload='{"kind":"order","orderNo":"B-999"}' --codec=json >/dev/null
+stellar_user="$(bin/roche get --ring=users/123 --limit=10)"
+grep -q '"ring": "users/123/orders"' <<<"$stellar_user"
+grep -q '"ring": "users/123/billing"' <<<"$stellar_user"
+if grep -q 'B-999' <<<"$stellar_user"; then
+  echo "stellar user read included a distant ring" >&2
+  exit 1
+fi
+stellar_order="$(bin/roche get --ring=users/123/orders --limit=10)"
+grep -q '"ring": "users/123"' <<<"$stellar_order"
+grep -q '"orderNo": "A-001"' <<<"$stellar_order"
+stellar_subring="$(bin/roche get --ring=users/123 --subring=orders --limit=10)"
+grep -q '"ring": "users/123/orders"' <<<"$stellar_subring"
+if grep -q '"ring": "users/123/billing"' <<<"$stellar_subring"; then
+  echo "subring read included billing" >&2
+  exit 1
+fi
+stellar_named="$(bin/roche get --stellar=users/123 --filter='{"kind":"order"}' --subring=orders --limit=10)"
+grep -q '"ring": "users/123/orders"' <<<"$stellar_named"
+grep -q '"orderNo": "A-001"' <<<"$stellar_named"
+if grep -q '"ring": "users/123/billing"' <<<"$stellar_named"; then
+  echo "stellar read included billing" >&2
+  exit 1
+fi
+bin/roche put --ring=shops/1123 \
+  --payload='{"kind":"shop","name":"Shop 1123"}' --codec=json >/dev/null
+bin/roche put --ring=orders/A-002 \
+  --payload='{"kind":"order","orderNo":"A-002","userId":"123","shopId":"1123"}' --codec=json >/dev/null
+bin/roche stellar attach --stellar=commerce/order/A-002 --ring=users/123 |
+  grep -q '"status": "attached"'
+bin/roche stellar attach --stellar=commerce/order/A-002 --ring=shops/1123 |
+  grep -q '"status": "attached"'
+bin/roche stellar attach --stellar=commerce/order/A-002 --ring=orders/A-002 |
+  grep -q '"status": "attached"'
+stellar_attached="$(bin/roche get --stellar=commerce/order/A-002 --filter='{"kind":"shop"}' --limit=10)"
+grep -q '"ring": "shops/1123"' <<<"$stellar_attached"
+bin/roche stellar detach --stellar=commerce/order/A-002 --ring=shops/1123 |
+  grep -q '"status": "detached"'
+stellar_detached="$(bin/roche get --stellar=commerce/order/A-002 --filter='{"kind":"shop"}' --limit=10)"
+if grep -q '"ring": "shops/1123"' <<<"$stellar_detached"; then
+  echo "detached stellar member remained visible" >&2
+  exit 1
+fi
+
 echo "[cli-crud] explicit and profile-driven codecs"
 printf '(object (title "NIF text"))' >"$WORK/payload.nif"
 nif_out="$(bin/roche put --ring=artifacts/nif \

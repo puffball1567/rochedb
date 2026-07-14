@@ -15,6 +15,7 @@
 ##   RD <ringKey> <len>\n<description>\n                     環説明
 ##   R <ringKey> <period> <head>\n                             環メタ
 ##   RP <ringKey> <len>\n<json>\n                              環payload profile
+##   SM <len>\n<json>\n                                    stellar coordinate map
 ##   P <parent> <seq> <period> <head> <tWrite> <len> <dim> <codec>\n<payload><vec>\n
 ##                                                               粒子 upsert
 ##   E <parent> <seq> <dim>\n<dim×float32>\n                    埋め込み
@@ -155,6 +156,7 @@ type
     ringNames*: Table[uint64, string]
     ringDescriptions*: Table[uint64, string]
     ringPayloadProfiles*: Table[uint64, RingPayloadProfile]
+    stellarMaps*: Table[string, string]
     galaxy*: string
     galaxyDescription*: string
     clusterTx*: Table[uint64, ClusterTxIntent]
@@ -417,6 +419,17 @@ proc replay(s: Store, path: string, repair = true) =
           charset: profile{"charset"}.getStr(""),
           formatVersion: profile{"formatVersion"}.getStr(""))
         fs.readRecordSep()
+      of "SM":
+        let len = parseInt(parts[1])
+        let raw = fs.readExactStr(len)
+        let node = parseJson(raw)
+        let stellar = node{"stellar"}.getStr("")
+        if stellar.len > 0:
+          if node{"deleted"}.getBool(false):
+            s.stellarMaps.del stellar
+          else:
+            s.stellarMaps[stellar] = raw
+        fs.readRecordSep()
       of "P":
         let p = fs.readParticleRecord(parts, 1)
         s.applyOp(TxOp(kind: txUpsert, p: p))
@@ -655,6 +668,15 @@ proc writeSnapshotFile(s: Store, path: string) =
         "formatVersion": profile.formatVersion
       })
       file.write("RP " & $ringKey & " " & $raw.len & "\n")
+      file.write(raw)
+      file.write("\n")
+    var stellarKeys: seq[string] = @[]
+    for stellar in s.stellarMaps.keys:
+      stellarKeys.add stellar
+    stellarKeys.sort()
+    for stellar in stellarKeys:
+      let raw = s.stellarMaps[stellar]
+      file.write("SM " & $raw.len & "\n")
       file.write(raw)
       file.write("\n")
     var metaKeys: seq[uint64] = @[]
@@ -1070,6 +1092,25 @@ proc putRingPayloadProfile*(s: Store, ringKey: uint64,
     })
     s.logFile.write("RP " & $ringKey & " " & $raw.len & "\n")
     s.logFile.write(raw)
+    s.logFile.write("\n")
+    s.flushMaybe(force = true)
+
+proc putStellarMap*(s: Store, stellar, blob: string) =
+  if stellar.len == 0:
+    raise newException(ValueError, "stellar coordinate is empty")
+  if blob.len == 0:
+    s.stellarMaps.del stellar
+    if s.persistent:
+      let raw = $(%*{"stellar": stellar, "deleted": true})
+      s.logFile.write("SM " & $raw.len & "\n")
+      s.logFile.write(raw)
+      s.logFile.write("\n")
+      s.flushMaybe(force = true)
+    return
+  s.stellarMaps[stellar] = blob
+  if s.persistent:
+    s.logFile.write("SM " & $blob.len & "\n")
+    s.logFile.write(blob)
     s.logFile.write("\n")
     s.flushMaybe(force = true)
 

@@ -118,6 +118,11 @@ running cluster. When `--data=DIR` is omitted, embedded commands use
 ```sh
 roche put --ring=docs/japan --payload='{"title":"Hello"}' --codec=json
 roche get --ring=docs/japan
+roche put --ring=orders --near=users/123 --payload='{"orderNo":"A-001"}' --codec=json
+roche get --ring=users/123 --subring=orders
+roche get --stellar=users/123 --filter='{"kind":"order"}' --subring=orders
+roche stellar attach --stellar=commerce/order/A-001 --ring=users/123
+roche stellar detach --stellar=commerce/order/A-001 --ring=users/123
 roche get --ring=docs/japan --limit=1 --rsort=time
 roche get --ring=docs/japan --pagination=on --page=2 --pagelimit=20 --sort=id
 roche get --ring=docs/japan --filter='{"id":"RAW_ID"}' --selection='{ title }'
@@ -151,8 +156,11 @@ roche get --ring=logs/raw --limit=1
 
 | Command | Required flags | Purpose |
 |---|---|---|
-| `put` | `--ring=RING` plus `--payload=TEXT` or `--in=FILE`; optional `--codec=auto|raw|json|nif|bif` | Store a document and print `id`, `rawId`, and codec. `auto` uses the ring profile. |
-| `get` | `--ring=RING`; optional `--filter=JSON`, `--selection=SEL`, `--limit=N`, `--cursor=CURSOR`, `--sort=id|time`, `--rsort=id|time`, `--pagination=on|off`, `--page=N`, `--pagelimit=N`, `--view=raw|auto|base64|hex` | Read from one ring. It always returns an `items` array with returned-item `count` and `nextCursor`; use `--limit=1` when you only want one item. Sorting is applied to the fetched page/filter window, not as a global full-ring sort. The default view is `auto`: payload codec is inferred from stored metadata. |
+| `put` | `--ring=RING` plus `--payload=TEXT` or `--in=FILE`; optional `--near=BASE_RING`, `--codec=auto|raw|json|nif|bif` | Store a document and print `id`, `rawId`, resolved ring, and codec. `--near=users/123 --ring=orders` stores into the nearby coordinate `users/123/orders`. `auto` uses the ring profile. |
+| `get` | `--ring=RING` or `--stellar=RING`; optional `--subring=a,b`, `--filter=JSON`, `--selection=SEL`, `--limit=N`, `--cursor=CURSOR`, `--sort=id|time`, `--rsort=id|time`, `--pagination=on|off`, `--page=N`, `--pagelimit=N`, `--view=raw|auto|base64|hex` | Read the ring or stellar coordinate's neighborhood. It always returns an `items` array and includes per-ring groups in `rings`. Use `--subring` to narrow the field of view. A `--filter='{"id":"RAW_ID"}'` read stays on the exact ring path for script compatibility. Sorting is applied to the fetched page/filter window, not as a global full-ring sort. The default view is `auto`: payload codec is inferred from stored metadata. |
+| `stellar attach` | `--stellar=RING --ring=RING` | Add an existing ring coordinate to a stellar coordinate's visible lens. Payloads are not copied. |
+| `stellar detach` | `--stellar=RING --ring=RING` | Remove a ring coordinate from a stellar coordinate's visible lens. Payloads are not deleted. |
+| `stellar list` | `--stellar=RING` | List rings attached to a stellar coordinate. |
 | `query` | `--ring=RING --filter='{"id":"ID"}' --selection=SEL`; optional `--id=ID` | Compatibility command for JSON projection by ID. Prefer `get --selection=...` for new CLI use. |
 | `list-ring` | `--ring=RING` | Compatibility command for listing records in one ring. Prefer `get --ring=...` for new CLI use. |
 | `count-ring` | `--ring=RING` | Count records in one ring. |
@@ -172,6 +180,40 @@ administration is not available in this release.
 `--filter` is a JSON object. `{"id":"RAW_ID"}` performs an exact read, while
 other top-level fields filter JSON records in the selected ring. `--where` is
 accepted as a compatibility alias for `--filter`.
+
+`--near` is a write-time placement hint, not a persistent relationship field.
+For example, `roche put --near=users/123 --ring=orders ...` writes the record to
+`users/123/orders`. Later reads use the coordinate itself:
+
+```sh
+roche get --ring=users/123
+roche get --stellar=users/123 --filter='{"kind":"order"}' --subring=orders
+roche get --ring=users/123/orders
+roche get --ring=users/123 --subring=orders
+```
+
+This is similar to pointing a telescope at a ring. Nearby satellites are in the
+same field of view; distant rings are not pulled in just to emulate a global
+join.
+
+`stellar attach` and `stellar detach` adjust a stellar coordinate's lens after
+data already exists:
+
+```sh
+roche put --ring=users/123 --payload='{"kind":"user"}' --codec=json
+roche put --ring=shops/1123 --payload='{"kind":"shop"}' --codec=json
+roche put --ring=orders/A-001 --payload='{"kind":"order"}' --codec=json
+
+roche stellar attach --stellar=commerce/order/A-001 --ring=users/123
+roche stellar attach --stellar=commerce/order/A-001 --ring=shops/1123
+roche stellar attach --stellar=commerce/order/A-001 --ring=orders/A-001
+
+roche get --stellar=commerce/order/A-001 --filter='{"kind":"shop"}'
+roche stellar detach --stellar=commerce/order/A-001 --ring=shops/1123
+```
+
+This is a lens relationship, not a copy operation. Compaction can later use the
+same metadata to place related coordinates more favorably on disk.
 
 `--sort=FIELD` sorts ascending and `--rsort=FIELD` sorts descending. Supported
 fields are `id` and `time` (`write` is accepted as a compatibility alias for

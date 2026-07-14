@@ -20,6 +20,8 @@ technical preview. The canonical Nim definitions live in `src/rochedb.nim`.
 | `RocheListPage` | `items`, `nextCursor` | Cursor-paginated list result. Empty `nextCursor` means there is no next page. |
 | `RocheReadOptions` | `filter`, `selection`, `limit`, `cursor`, `pagination`, `page`, `pageLimit`, `sortField`, `sortDirection` | Ring read options shared with CLI semantics. |
 | `RocheReadPage` | `ring`, `count`, `items`, `nextCursor`, `pagination`, `page`, `pageLimit`, `sortField`, `sortDirection` | Ring read result. `count` is the number of returned items; use `countByRing` for the total ring size. |
+| `RocheStellarOptions` | `filter`, `selection`, `limitPerRing`, `maxDepth`, `branchBudget`, `subrings`, `includeRoot`, `sortField`, `sortDirection` | Coordinate-near read options. A root ring behaves like a telescope target; nearby rings are visible unless narrowed by `subrings`. |
+| `RocheStellarPage` | `root`, `ringsVisited`, `count`, `rings` | Grouped result for a stellar neighborhood read. |
 | `RocheHit` | `id`, `score`, `payload` | Retrieval hit. `score` is cosine similarity, higher is closer. |
 
 `RocheId` should normally be treated as opaque. `toRaw` and `fromRaw` exist for
@@ -86,6 +88,7 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 | `put(payload, ring = "default", vec = @[])` | Store a string payload in a ring. |
 | `put(doc: JsonNode, ring = "default", vec = @[])` | Store a JSON document. |
 | `put(encodedPayload(bytes, codec), ring, vec)` | Store `raw`, `json`, `nif`, or `bif` bytes with format metadata. |
+| `putNear(baseRing, payload/doc/encoded, ring, vec = @[])` | Store under a nearby coordinate derived from `baseRing/ring`, for example `users/123` + `orders` -> `users/123/orders`. The near hint is not stored separately. |
 | `get(id)` | Fetch by RocheDB ID. |
 | `getEncoded(id)` | Fetch payload bytes together with their `PayloadCodec`. |
 | `query(id, selection)` | Fetch a JSON projection using GraphQL-style selection syntax. |
@@ -107,6 +110,8 @@ The C ABI exposes matching additive functions: `roche_put_codec`,
 |---|---|
 | `listByRing(ring, limit = 100, cursor = "")` | List records in one ring with cursor pagination. |
 | `readRing(ring, options = defaultReadOptions())` | Read one ring with filter, selection, cursor/page limit, and page-local sort. |
+| `readStellar(root, options = defaultStellarOptions())` | Read the root ring and nearby coordinate rings. Parent, child, and sibling rings can be in the same field of view; distant rings are not forced into the read path. |
+| `nearRing(baseRing, ring)` | Resolve a write-time nearby coordinate, for example `nearRing("users/123", "orders") == "users/123/orders"`. |
 | `countByRing(ring)` | Count records in one ring. |
 | `retrieve(queryVec, ring = "", budget = 8, ...)` | Vector/RAG-style retrieval with ring-aware planning. |
 | `retrievalPlan(...)` | Build a readable retrieval plan without executing it. |

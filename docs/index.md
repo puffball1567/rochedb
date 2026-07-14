@@ -18,6 +18,7 @@ downstream AI/RAG or application logic.
 - [Configuration Reference](config-reference.md)
 - [CLI Reference](cli-reference.md)
 - [How RocheDB Differs From Typical NoSQL](nosql-positioning.md)
+- [Unique Data Model And Operating Patterns](unique-data-model.md)
 - [Feature Status / Roadmap](rochedb-status.md)
 - [Benchmark Notes](rochedb-bench.md)
 - [Benchmark Comparison Tables](benchmark-comparison.md)

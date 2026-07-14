@@ -240,6 +240,132 @@ suite "public api":
     check db.countByRing("users") == 0
     db.close()
 
+  test "stellar neighborhood reads nearby rings from either side":
+    var db = open()
+    let profile = db.put(%*{"kind": "user", "name": "alice"}, ring = "users/123")
+    let order = db.putNear("users/123", %*{"kind": "order", "orderNo": "A-001"},
+                           ring = "orders")
+    let billing = db.putNear("users/123", %*{"kind": "billing", "plan": "pro"},
+                             ring = "billing")
+    let distant = db.put(%*{"kind": "order", "orderNo": "B-999"}, ring = "users/999/orders")
+
+    let stellar = db.readStellar("users/123", RocheStellarOptions(
+      filter: newJObject(),
+      selection: "{ kind }",
+      limitPerRing: 10,
+      maxDepth: 1,
+      includeRoot: true,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check stellar.count == 3
+    var sawRoot = false
+    var sawOrders = false
+    var sawBilling = false
+    var sawDistant = false
+    for ringPage in stellar.rings:
+      if ringPage.ring == "users/123": sawRoot = true
+      if ringPage.ring == "users/123/orders": sawOrders = true
+      if ringPage.ring == "users/123/billing": sawBilling = true
+      if ringPage.ring == "users/999/orders": sawDistant = true
+    check sawRoot
+    check sawOrders
+    check sawBilling
+    check not sawDistant
+
+    let fromOrders = db.readStellar("users/123/orders", RocheStellarOptions(
+      filter: newJObject(),
+      selection: "{ kind }",
+      limitPerRing: 10,
+      maxDepth: 1,
+      includeRoot: true,
+      sortField: "id",
+      sortDirection: rsAsc))
+    var ordersSawUser = false
+    var ordersSawOrder = false
+    var ordersSawDistant = false
+    for ringPage in fromOrders.rings:
+      if ringPage.ring == "users/123": ordersSawUser = true
+      if ringPage.ring == "users/123/orders": ordersSawOrder = true
+      if ringPage.ring == "users/999/orders": ordersSawDistant = true
+    check ordersSawUser
+    check ordersSawOrder
+    check not ordersSawDistant
+
+    let onlyOrders = db.readStellar("users/123", RocheStellarOptions(
+      filter: newJObject(),
+      limitPerRing: 10,
+      maxDepth: 1,
+      subrings: @["orders"],
+      includeRoot: false,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check onlyOrders.count == 1
+    check onlyOrders.rings.len == 1
+    check onlyOrders.rings[0].ring == "users/123/orders"
+    check onlyOrders.rings[0].items[0].id == order
+    check profile.toRaw().parent != order.toRaw().parent
+    check nearRing("users/123", "orders") == "users/123/orders"
+    check billing.toRaw().parent != distant.toRaw().parent
+    db.close()
+
+  test "stellar attach/detach links existing coordinates without copying data":
+    let dir = createTempDir("rochedb", "stellar")
+    var db = open(dataDir = dir)
+    discard db.put(%*{"kind": "user", "id": "123"}, ring = "users/123")
+    discard db.put(%*{"kind": "shop", "id": "1123"}, ring = "shops/1123")
+    discard db.put(%*{"kind": "order", "id": "A-001", "userId": "123", "shopId": "1123"},
+                   ring = "orders/A-001")
+
+    db.attachStellar("commerce/order/A-001", "users/123")
+    db.attachStellar("commerce/order/A-001", "shops/1123")
+    db.attachStellar("commerce/order/A-001", "orders/A-001")
+    check db.stellarMembers("commerce/order/A-001").len == 3
+
+    let fromStellar = db.readStellar("commerce/order/A-001", RocheStellarOptions(
+      filter: newJObject(),
+      limitPerRing: 10,
+      maxDepth: 1,
+      includeRoot: true,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check fromStellar.count == 3
+
+    let fromShop = db.readStellar("shops/1123", RocheStellarOptions(
+      filter: %*{"kind": "user"},
+      limitPerRing: 10,
+      maxDepth: 1,
+      includeRoot: true,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check fromShop.count == 1
+    check fromShop.rings[0].ring == "users/123"
+
+    let usersOnly = db.readStellar("commerce/order/A-001", RocheStellarOptions(
+      filter: newJObject(),
+      limitPerRing: 10,
+      maxDepth: 1,
+      subrings: @["users"],
+      includeRoot: false,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check usersOnly.count == 1
+    check usersOnly.rings[0].ring == "users/123"
+    db.close()
+
+    var reopened = open(dataDir = dir)
+    check reopened.stellarMembers("commerce/order/A-001").len == 3
+    reopened.detachStellar("commerce/order/A-001", "users/123")
+    let afterDetach = reopened.readStellar("shops/1123", RocheStellarOptions(
+      filter: %*{"kind": "user"},
+      limitPerRing: 10,
+      maxDepth: 1,
+      includeRoot: true,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check afterDetach.count == 0
+    reopened.close()
+    removeDir(dir)
+
   test "warp は小惑星帯のように登録順で少しずつ patch を落とす":
     var db = open()
     let a1 = db.put(%*{"orderId": "o1", "status": "paid"},

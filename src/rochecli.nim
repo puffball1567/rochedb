@@ -1,8 +1,8 @@
 ## roche - RocheDB command-line client
 ##
 ## usage:
-##   roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE] [--codec=raw|json|nif|bif]
-##   roche get [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{"id":"RAW_ID"}'] [--selection=SEL] [--sort=id|time] [--rsort=id|time]
+##   roche put [--data=DIR | --peers=host:port,...] --ring=RING [--near=BASE_RING] [--payload=TEXT | --in=FILE] [--codec=raw|json|nif|bif]
+##   roche get [--data=DIR | --peers=host:port,...] [--ring=RING | --stellar=RING] [--subring=orders,billing] [--filter='{"id":"RAW_ID"}'] [--selection=SEL] [--sort=id|time] [--rsort=id|time]
 ##   roche query [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{"id":"RAW_ID"}' | --id=RAW_ID] --selection=SEL
 ##   roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]
 ##   roche count-ring [--data=DIR | --peers=host:port,...] --ring=RING
@@ -592,7 +592,7 @@ proc runAtlas(dataDir, peers, username, password, authToken, secretKey,
   db.close()
 
 proc runPut(dataDir, peers, username, password, authToken, secretKey,
-            galaxy, ring, payload, inPath, codecName: string,
+            galaxy, ring, nearRingBase, payload, inPath, codecName: string,
             tls: bool, tlsCaFile, tlsServerName: string,
             tlsInsecureSkipVerify: bool) =
   let actualDataDir = requireCliTarget(dataDir, peers)
@@ -603,13 +603,18 @@ proc runPut(dataDir, peers, username, password, authToken, secretKey,
                      tlsServerName = tlsServerName,
                      tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   try:
+    let targetRing =
+      if nearRingBase.len > 0:
+        nearRing(nearRingBase, ring)
+      else:
+        ring
     let codec =
       if codecName.toLowerAscii() == "auto":
-        db.ringPayloadProfile(ring).defaultCodec
+        db.ringPayloadProfile(targetRing).defaultCodec
       else:
         parsePayloadCodec(codecName)
-    let id = db.put(encodedPayload(cliPayload(payload, inPath), codec), ring = ring)
-    echo &"put OK id={id} rawId={cliIdString(id)} ring={ring} codec={codec.payloadCodecName}"
+    let id = db.put(encodedPayload(cliPayload(payload, inPath), codec), ring = targetRing)
+    echo &"put OK id={id} rawId={cliIdString(id)} ring={targetRing} codec={codec.payloadCodecName}"
   finally:
     db.close()
 
@@ -718,6 +723,44 @@ proc readPageNode(page: RocheReadPage, view: string): JsonNode =
     "nextCursor": page.nextCursor
   }
 
+proc stellarPageNode(page: RocheStellarPage, view, sortField: string,
+                     sortDirection: RocheReadSortDirection): JsonNode =
+  var rings = newJArray()
+  var flatItems = newJArray()
+  for ringPage in page.rings:
+    var items = newJArray()
+    for item in ringPage.items:
+      let display = recordPayloadDisplay(item, view)
+      var node = %*{
+        "id": $item.id,
+        "rawId": item.id.cliIdString(),
+        "codec": item.codec.payloadCodecName,
+        "encoding": display["encoding"].getStr(),
+        "payload": display["payload"]
+      }
+      if display.hasKey("adapter"):
+        node["adapter"] = display["adapter"]
+      items.add node
+      var flatNode = node.copy()
+      flatNode["ring"] = %ringPage.ring
+      flatItems.add flatNode
+    rings.add %*{
+      "ring": ringPage.ring,
+      "count": ringPage.count,
+      "items": items
+    }
+  %*{
+    "root": page.root,
+    "maxDepth": page.maxDepth,
+    "branchBudget": page.branchBudget,
+    "ringsVisited": page.ringsVisited,
+    "count": page.count,
+    "sort": sortField,
+    "sortDirection": sortDirection.sortDirectionName,
+    "items": flatItems,
+    "rings": rings
+  }
+
 proc readSortOptions(sortArg, rsortArg: string): tuple[field: string, direction: RocheReadSortDirection] =
   if sortArg.len > 0 and rsortArg.len > 0:
     raise newException(ValueError, "--sort and --rsort cannot be used together")
@@ -734,9 +777,18 @@ proc readPaginationMode(value: string): RochePaginationMode =
   else:
     raise newException(ValueError, "pagination must be on or off")
 
+proc parseSubrings(value: string): seq[string] =
+  if value.len == 0:
+    return @[]
+  for part in value.split(","):
+    let clean = part.strip(chars = {' ', '\t', '\r', '\n', '/'})
+    if clean.len > 0:
+      result.add clean
+
 proc runGet(dataDir, peers, username, password, authToken, secretKey,
-            galaxy, idArg, filterArg, ring, view, selection, cursor: string,
-            limit, page, pageLimit: int, paginationArg, sortArg, rsortArg: string,
+            galaxy, idArg, filterArg, ring, subringArg, view, selection,
+            cursor: string, limit, page, pageLimit, depth, branchBudget: int,
+            paginationArg, sortArg, rsortArg: string,
             tls: bool, tlsCaFile, tlsServerName: string,
             tlsInsecureSkipVerify: bool) =
   let actualDataDir = requireCliTarget(dataDir, peers)
@@ -751,6 +803,7 @@ proc runGet(dataDir, peers, username, password, authToken, secretKey,
                      tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   try:
     db.configureRing(ring, 60.0)
+    let subrings = parseSubrings(subringArg)
     let options = RocheReadOptions(
       filter: filterWithId(filterNode, resolvedId),
       selection: selection,
@@ -761,7 +814,20 @@ proc runGet(dataDir, peers, username, password, authToken, secretKey,
       pageLimit: pageLimit,
       sortField: sortOptions.field,
       sortDirection: sortOptions.direction)
-    echo db.readRing(ring, options).readPageNode(view).pretty
+    if subrings.len > 0 or resolvedId.len == 0:
+      let stellar = db.readStellar(ring, RocheStellarOptions(
+        filter: options.filter,
+        selection: selection,
+        limitPerRing: limit,
+        maxDepth: depth,
+        branchBudget: branchBudget,
+        subrings: subrings,
+        includeRoot: true,
+        sortField: sortOptions.field,
+        sortDirection: sortOptions.direction))
+      echo stellar.stellarPageNode(view, sortOptions.field, sortOptions.direction).pretty
+    else:
+      echo db.readRing(ring, options).readPageNode(view).pretty
   finally:
     db.close()
 
@@ -840,6 +906,52 @@ proc runRingProfile(dataDir, peers, username, password, authToken, secretKey,
       "charset": profile.charset,
       "formatVersion": profile.formatVersion
     }).pretty
+  finally:
+    db.close()
+
+proc runStellar(dataDir, peers, username, password, authToken, secretKey,
+                galaxy: string, args: seq[string], stellarName, ringName: string,
+                tls: bool, tlsCaFile, tlsServerName: string,
+                tlsInsecureSkipVerify: bool) =
+  let actualDataDir = requireCliTarget(dataDir, peers)
+  if args.len < 2:
+    raise newException(ValueError, "stellar requires attach, detach, or list")
+  let action = args[1]
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
+                     galaxy, tls = tls, tlsCaFile = tlsCaFile,
+                     tlsServerName = tlsServerName,
+                     tlsInsecureSkipVerify = tlsInsecureSkipVerify)
+  try:
+    case action
+    of "attach":
+      if stellarName.len == 0 or ringName.len == 0:
+        raise newException(ValueError, "stellar attach requires --stellar=RING --ring=RING")
+      db.attachStellar(stellarName, ringName)
+      echo (%*{
+        "status": "attached",
+        "stellar": stellarName,
+        "ring": ringName,
+        "members": db.stellarMembers(stellarName)
+      }).pretty
+    of "detach":
+      if stellarName.len == 0 or ringName.len == 0:
+        raise newException(ValueError, "stellar detach requires --stellar=RING --ring=RING")
+      db.detachStellar(stellarName, ringName)
+      echo (%*{
+        "status": "detached",
+        "stellar": stellarName,
+        "ring": ringName,
+        "members": db.stellarMembers(stellarName)
+      }).pretty
+    of "list":
+      if stellarName.len == 0:
+        raise newException(ValueError, "stellar list requires --stellar=RING")
+      echo (%*{
+        "stellar": stellarName,
+        "members": db.stellarMembers(stellarName)
+      }).pretty
+    else:
+      raise newException(ValueError, "unknown stellar action: " & action)
   finally:
     db.close()
 
@@ -2101,8 +2213,9 @@ proc printHelp() =
   echo "RocheDB command-line client"
   echo ""
   echo "Usage:"
-  echo "  roche put [--data=DIR | --peers=host:port,...] --ring=RING [--payload=TEXT | --in=FILE] [--codec=auto|raw|json|nif|bif]"
-  echo "  roche get [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{\"id\":\"RAW_ID\"}'] [--selection=SEL] [--limit=N] [--cursor=CURSOR] [--sort=id|time] [--rsort=id|time] [--pagination=on|off] [--page=N] [--pagelimit=N]"
+  echo "  roche put [--data=DIR | --peers=host:port,...] --ring=RING [--near=BASE_RING] [--payload=TEXT | --in=FILE] [--codec=auto|raw|json|nif|bif]"
+  echo "  roche get [--data=DIR | --peers=host:port,...] [--ring=RING | --stellar=RING] [--subring=orders,billing] [--filter='{\"id\":\"RAW_ID\"}'] [--selection=SEL] [--limit=N] [--cursor=CURSOR] [--sort=id|time] [--rsort=id|time] [--pagination=on|off] [--page=N] [--pagelimit=N]"
+  echo "  roche stellar attach|detach|list --stellar=RING [--ring=RING]"
   echo "  roche query [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{\"id\":\"RAW_ID\"}' | --id=RAW_ID] --selection=SEL"
   echo "  roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]"
   echo "  roche count-ring [--data=DIR | --peers=host:port,...] --ring=RING"
@@ -2147,6 +2260,8 @@ proc main() =
   var formatVersion = ""
   var view = "auto"
   var idArg = ""
+  var nearRingBase = ""
+  var subringArg = ""
   var whereArg = ""
   var filterArg = ""
   var sortArg = ""
@@ -2156,6 +2271,7 @@ proc main() =
   var cursor = ""
   var defaultRing = "imported"
   var ringName = ""
+  var stellarName = ""
   var description = ""
   var ringField = ""
   var ringPrefix = ""
@@ -2199,6 +2315,8 @@ proc main() =
   var limit = 100
   var page = 1
   var pageLimit = 20
+  var depth = 1
+  var branchBudget = 0
   var positionals: seq[string] = @[]
   for kind, key, val in getopt():
     case kind
@@ -2225,6 +2343,8 @@ proc main() =
       of "format-version": formatVersion = val
       of "view": view = val
       of "id": idArg = val
+      of "near": nearRingBase = val
+      of "subring", "subrings": subringArg = val
       of "where": whereArg = val
       of "filter": filterArg = val
       of "sort":
@@ -2246,11 +2366,14 @@ proc main() =
       of "pagination": paginationArg = val
       of "page": page = parseInt(val)
       of "pagelimit", "page-limit": pageLimit = parseInt(val)
+      of "depth": depth = parseInt(val)
+      of "branch-budget": branchBudget = parseInt(val)
       of "select": selection = val
       of "selection": selection = val
       of "cursor": cursor = val
       of "default-ring": defaultRing = val
       of "ring": ringName = val
+      of "stellar": stellarName = val
       of "description": description = val
       of "ring-field": ringField = val
       of "ring-prefix": ringPrefix = val
@@ -2297,17 +2420,25 @@ proc main() =
   if help or cmd.len == 0:
     printHelp()
     quit 0
+  if cmd == "get" and stellarName.len > 0:
+    if ringName.len > 0 and ringName != stellarName:
+      raise newException(ValueError, "--ring and --stellar cannot differ")
+    ringName = stellarName
   case cmd
   of "put":
     runPut(dataDir, peers, username, password, authToken, secretKey, galaxy,
-           ringName, payload, inPath, codecName, tls, tlsCaFile,
-           tlsServerName, tlsInsecureSkipVerify)
+           ringName, nearRingBase, payload, inPath, codecName, tls,
+           tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
   of "get":
     let readFilter = effectiveFilter(filterArg, whereArg)
     runGet(dataDir, peers, username, password, authToken, secretKey, galaxy,
-           idArg, readFilter, ringName, view, selection, cursor, limit,
-           page, pageLimit, paginationArg, sortArg, rsortArg, tls, tlsCaFile,
-           tlsServerName, tlsInsecureSkipVerify)
+           idArg, readFilter, ringName, subringArg, view, selection, cursor,
+           limit, page, pageLimit, depth, branchBudget, paginationArg, sortArg,
+           rsortArg, tls, tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
+  of "stellar":
+    runStellar(dataDir, peers, username, password, authToken, secretKey, galaxy,
+               positionals, stellarName, ringName, tls, tlsCaFile,
+               tlsServerName, tlsInsecureSkipVerify)
   of "query":
     let readFilter = effectiveFilter(filterArg, whereArg)
     runQuery(dataDir, peers, username, password, authToken, secretKey, galaxy,

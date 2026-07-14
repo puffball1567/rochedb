@@ -52,6 +52,7 @@ corpus size toward semantic working-set size.
 - Configuration reference: [docs/config-reference.md](docs/config-reference.md)
 - CLI reference: [docs/cli-reference.md](docs/cli-reference.md)
 - How RocheDB differs from typical NoSQL: [docs/nosql-positioning.md](docs/nosql-positioning.md)
+- Unique data model and operating patterns: [docs/unique-data-model.md](docs/unique-data-model.md)
 - Concept: [docs/rochedb-concept.md](docs/rochedb-concept.md)
 - Detailed design: [docs/rochedb-design.md](docs/rochedb-design.md)
 - Feature status / roadmap: [docs/rochedb-status.md](docs/rochedb-status.md)
@@ -318,7 +319,7 @@ application processing.
 |---|---|---|
 | Working-set | 100 rings / 10k docs | scanned/query `10000 -> 100` (99% reduction) |
 | Memory-pressure | 100 rings / 100k docs / 512B payload | candidate memory/query `93.079 MiB -> 0.931 MiB` (99% reduction) |
-| Synthetic RAG | fixed recall | recall `1.000`, scanned/query `8000 -> 1000`, tokens/query `3960 -> 657.8` |
+| Synthetic RAG | fixed recall | recall `1.000`, scanned/query `8000 -> 1000`, tokens/query `3955 -> 657` |
 | AI/RAG case study | generated JSONL, 400 docs / 6 rings | recall `1.000`, scanned/query `400 -> 40`, tokens/query `615.2 -> 231.6` |
 | API minimum test | 2 rings / 4 vectors | `skippedVectors` and `candidateReduction` confirm pre-filtered search scope |
 
@@ -327,18 +328,21 @@ Reference latency results are tracked in
 in [docs/benchmark-comparison.md](docs/benchmark-comparison.md). The short
 version is:
 
-- RocheDB 3-node TCP with persistence enabled measured `45.9 us` per
-  single-key read and `47.7 us` per single-key write in the PostgreSQL
+- RocheDB 3-node TCP with persistence enabled measured `46.8 us` per
+  single-key read and `48.8 us` per single-key write in the PostgreSQL
   comparison helper run.
-- PostgreSQL 14.23 on the same machine measured `67 us` for primary-key read
-  and `79 us` for `synchronous_commit=off` single-row write over local TCP.
+- PostgreSQL 14.23 on the same machine measured `68 us` for primary-key read
+  and `80 us` for `synchronous_commit=off` single-row write over local TCP.
 - The PostgreSQL comparison also has a Docker-Docker reproduction helper; in
-  the included run RocheDB measured `53.5 us` read / `56.4 us` write, while
-  PostgreSQL measured `92 us` primary-key read / `130 us`
+  the included run RocheDB measured `61.3 us` read / `103.6 us` write, while
+  PostgreSQL measured `103 us` primary-key read / `149 us`
   `synchronous_commit=off` write.
-- Local Redis 6.0.16 measured `41.23 us/op` for single GET and `3.68 us/op`
-  for pipeline GET. RocheDB TCP GET measured `44.87 us/op`; RocheDB TCP BGET
-  measured `1.47 us/op` in the same local single-client benchmark shape.
+- Local Redis 6.0.16 measured `42.85 us/op` for single GET and `3.53 us/op`
+  for pipeline GET. RocheDB TCP GET measured `45.26 us/op`; RocheDB TCP BGET
+  measured `1.48 us/op` in the same local single-client benchmark shape.
+- In the Docker-Docker Redis comparison, Redis 7 measured `48.74 us/op` for
+  single GET and `2.06 us/op` for pipeline GET. RocheDB TCP GET measured
+  `55.78 us/op`; RocheDB TCP BGET measured `1.71 us/op`.
 
 These are not universal performance claims. They show that the local read path
 is already competitive enough for the working-set reduction story to matter.

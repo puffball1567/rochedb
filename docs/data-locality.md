@@ -20,6 +20,70 @@ structure of the corpus part of the retrieval model. For web workloads, it means
 user-, tenant-, topic-, region-, or time-oriented records can be grouped in a
 way that matches common reads.
 
+## Stellar Neighborhood Reads
+
+RocheDB treats nearby rings as a natural read neighborhood. The mental model is
+closer to a telescope than to a late join: when the read is centered on a ring,
+nearby child, parent, and sibling rings can be in the same field of view. Distant
+rings are not forced into the read path.
+
+For example, an application can store a user profile at `users/123` and then
+place orders and billing records nearby:
+
+```bash
+roche put --ring=users/123 \
+  --payload='{"kind":"user","name":"Alice"}' --codec=json
+
+roche put --ring=orders --near=users/123 \
+  --payload='{"kind":"order","orderNo":"A-001"}' --codec=json
+
+roche put --ring=billing --near=users/123 \
+  --payload='{"kind":"billing","plan":"pro"}' --codec=json
+```
+
+The `--near=users/123 --ring=orders` write resolves to the concrete coordinate
+`users/123/orders`. The `near` hint is not stored as a separate relationship.
+After the write, the coordinate is the relationship.
+
+Reading the user ring can naturally return the nearby user, order, and billing
+records:
+
+```bash
+roche get --ring=users/123
+roche get --stellar=users/123 --filter='{"kind":"order"}' --subring=orders
+```
+
+Reading from the order side also sees the nearby user because the order is in
+the same stellar neighborhood:
+
+```bash
+roche get --ring=users/123/orders
+```
+
+To narrow the field of view, use `--subring`:
+
+```bash
+roche get --ring=users/123 --subring=orders,billing
+```
+
+Existing coordinates can also be attached to or detached from a stellar
+coordinate's lens:
+
+```bash
+roche stellar attach --stellar=commerce/order/A-001 --ring=users/123
+roche stellar attach --stellar=commerce/order/A-001 --ring=shops/1123
+roche stellar attach --stellar=commerce/order/A-001 --ring=orders/A-001
+roche stellar detach --stellar=commerce/order/A-001 --ring=shops/1123
+```
+
+Attach/detach changes visibility metadata only. It does not copy payloads,
+delete payloads, or create a strict relational constraint.
+
+This is not a hidden global join. RocheDB only walks the configured nearby
+coordinate neighborhood, controlled by depth and branch budget. If a record is
+far away, such as `users/999/orders`, it is not read when the telescope is
+pointed at `users/123`.
+
 ## Physical Locality
 
 Persistent embedded stores use an append-only WAL. Before compaction, physical
@@ -106,6 +170,17 @@ Secondary access paths should avoid fighting this primary layout. In the current
 design, secondary mechanisms should remain hints, projections, or lookup maps
 that point back into ring-local reads instead of becoming a competing primary
 layout.
+
+Stellar attach/detach is part of that rule. It changes which coordinates are
+visible through a lens. The current compact implementation still groups live
+records by ring. A future compaction pass can use stellar lens metadata to place
+small nearby coordinates immediately when cheap, or defer large/crowded rings to
+scheduled compaction.
+
+Another future option is shadow compaction through a parallel universe: keep the
+active universe serving reads/writes, compact a synced universe in the
+background, verify it, then promote it. That is roadmap work; the current
+implementation keeps compaction simple and local.
 
 ## What Still Needs Work
 
