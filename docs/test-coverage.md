@@ -12,7 +12,7 @@ matrix used before releases.
 | Field / halo movement | `tests/tfield.nim` | Unit-covered: field state and ring movement behavior |
 | Selection parser | `tests/tselect.nim` | Unit-covered: GraphQL-like selection parsing and projection basics |
 | Store / WAL | `tests/tstore.nim` | Unit-covered: codec persistence, torn-tail repair, transaction replay, compact, locality report, backup/restore |
-| Public embedded API | `tests/tapi.nim` | Unit-covered: put/get, codec-aware projection, ring profiles, readRing filtering, pagination, sorting, stellar neighborhood reads from either side, stellar attach/detach persistence, atomic batch rollback, cooperative ring/stellar locks, warp, universe sync |
+| Public embedded API | `tests/tapi.nim` | Unit-covered: put/get, codec-aware projection, ring profiles, readRing filtering, typed filter builders, pagination, sorting, stellar neighborhood reads from either side, stellar attach/detach persistence, atomic batch rollback, cooperative ring/stellar locks, warp, universe sync |
 | CLI embedded usage | `scripts/cli_crud_smoke.sh` | Smoke-covered: help, put/get/query/list/count, readRing options, `--near` placement, `--stellar`, stellar attach/detach, `--subring` neighborhood narrowing, codec display, ring profile auto codec, shell, auth error text |
 | C ABI | `examples/cabi_contract.c`, `scripts/driver_compat.sh` | Contract-covered: ABI version, put/get, codec metadata, read ring page shape, validation errors, atlas |
 | Wire protocol | `tests/twire_driver.nim`, `scripts/cluster_wire_fuzz_smoke.sh` | Smoke-covered: driver-facing PUTR/GETID/QRYID, codec metadata negotiation, malformed frame behavior |
