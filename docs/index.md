@@ -42,6 +42,7 @@ downstream AI/RAG or application logic.
 - [Driver / FFI Roadmap](rochedb-driver-roadmap.md)
 - [Protocol Compatibility](protocol-compatibility.md)
 - [TLS Transport](tls-transport.md)
+- [Query Safety](query-safety.md)
 - [Payload Codecs](payload-codecs.md)
 - [Vector Backend Selection](vector-backends.md)
 - [FAISS Versioning Policy](faiss-versioning.md)
