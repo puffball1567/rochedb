@@ -53,6 +53,7 @@ corpus size toward semantic working-set size.
 - CLI reference: [docs/cli-reference.md](docs/cli-reference.md)
 - How RocheDB differs from typical NoSQL: [docs/nosql-positioning.md](docs/nosql-positioning.md)
 - Unique data model and operating patterns: [docs/unique-data-model.md](docs/unique-data-model.md)
+- Technical FAQ for database reviewers: [docs/technical-faq.md](docs/technical-faq.md)
 - Concept: [docs/rochedb-concept.md](docs/rochedb-concept.md)
 - Detailed design: [docs/rochedb-design.md](docs/rochedb-design.md)
 - Feature status / roadmap: [docs/rochedb-status.md](docs/rochedb-status.md)
