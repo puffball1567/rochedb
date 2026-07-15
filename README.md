@@ -1,6 +1,6 @@
 # RocheDB
 
-**v0.5.0 Technical Preview / research OSS.** RocheDB is not yet presented as a
+**v0.5.1 Technical Preview / research OSS.** RocheDB is not yet presented as a
 production replacement for Redis, PostgreSQL, MongoDB, Apache Arrow, or a
 dedicated vector database. The current release target is a measurable prototype
 of ring/galaxy-oriented storage, retrieval, persistence, drivers, and cluster
@@ -53,11 +53,12 @@ corpus size toward semantic working-set size.
 - CLI reference: [docs/cli-reference.md](docs/cli-reference.md)
 - How RocheDB differs from typical NoSQL: [docs/nosql-positioning.md](docs/nosql-positioning.md)
 - Unique data model and operating patterns: [docs/unique-data-model.md](docs/unique-data-model.md)
+- Technical FAQ for database reviewers: [docs/technical-faq.md](docs/technical-faq.md)
 - Concept: [docs/rochedb-concept.md](docs/rochedb-concept.md)
 - Detailed design: [docs/rochedb-design.md](docs/rochedb-design.md)
 - Feature status / roadmap: [docs/rochedb-status.md](docs/rochedb-status.md)
 - Release checklist: [docs/release-checklist.md](docs/release-checklist.md)
-- GitHub release draft: [docs/github-release-v0.5.0.md](docs/github-release-v0.5.0.md)
+- GitHub release draft: [docs/github-release-v0.5.1.md](docs/github-release-v0.5.1.md)
 - Driver / FFI roadmap: [docs/rochedb-driver-roadmap.md](docs/rochedb-driver-roadmap.md)
 - Driver installation guide: [docs/driver-installation.md](docs/driver-installation.md)
 - FAISS versioning policy: [docs/faiss-versioning.md](docs/faiss-versioning.md)
