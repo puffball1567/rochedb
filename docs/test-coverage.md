@@ -8,7 +8,7 @@ matrix used before releases.
 
 | Area | Primary checks | Current status |
 | --- | --- | --- |
-| Orbital placement core | `tests/tcore.nim` | Unit-covered: angle wrapping, ownership, future arrival, conjunctions |
+| Orbital placement core | `tests/tcore.nim` | Unit-covered: angle wrapping, ownership, weighted arcs, virtual arc remap reduction, future arrival, conjunctions |
 | Field / halo movement | `tests/tfield.nim` | Unit-covered: field state and ring movement behavior |
 | Selection parser | `tests/tselect.nim` | Unit-covered: GraphQL-like selection parsing and projection basics |
 | Store / WAL | `tests/tstore.nim` | Unit-covered: codec persistence, torn-tail repair, transaction replay, compact, locality report, delete/backfill locality matrix, backup/restore |
