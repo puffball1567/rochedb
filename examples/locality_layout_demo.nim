@@ -1,6 +1,6 @@
 ## Physical locality demo for RocheDB's WAL layout.
 
-import std/[json, os, strformat, strutils, tempfiles, times]
+import std/[algorithm, json, os, strformat, strutils, tempfiles, times]
 import ../src/rochedb
 
 proc argValue(name, defaultValue: string): string =
@@ -40,6 +40,20 @@ proc measureReadUs(db: RocheDb, ring: string, iters: int): float =
   if consumed < 0:
     echo "" # keep the loop observable to the optimizer
   elapsed * 1_000_000.0 / float(iters)
+
+proc logicalSignature(db: RocheDb, ring: string): seq[string] =
+  ## Stable signature for invariant checks: compaction may rewrite physical
+  ## layout, but the logical ring query must return the same records.
+  let n = max(1, db.countByRing(ring))
+  let page = db.readRing(ring, RocheReadOptions(
+    filter: newJObject(),
+    limit: n,
+    sortField: "id",
+    sortDirection: rsAsc))
+  for item in page.items:
+    let raw = item.id.toRaw()
+    result.add &"{raw.parent}:{raw.epoch}:{raw.seq}:{raw.tWrite:.9f}:{item.codec}:{item.payload}"
+  result.sort()
 
 when isMainModule:
   let rings = max(1, argInt("rings", 8))
@@ -110,14 +124,23 @@ when isMainModule:
       }, ring = ringName(r))
 
     let readRing = ringName(0)
+    let beforeSignature = logicalSignature(db, readRing)
     let beforeReadUs = measureReadUs(db, readRing, readIters)
-    printReport("before_compact", db.localityReport())
+    let beforeReport = db.localityReport()
+    printReport("before_compact", beforeReport)
     echo &"read_before ring={readRing} iters={readIters} usPerRead={beforeReadUs:.3f}"
     let stats = db.compact()
     echo &"compact beforeBytes={stats.beforeBytes} afterBytes={stats.afterBytes} items={stats.items}"
+    let afterSignature = logicalSignature(db, readRing)
     let afterReadUs = measureReadUs(db, readRing, readIters)
-    printReport("after_compact", db.localityReport())
+    let afterReport = db.localityReport()
+    printReport("after_compact", afterReport)
     echo &"read_after ring={readRing} iters={readIters} usPerRead={afterReadUs:.3f}"
+    let sameSet = beforeSignature == afterSignature
+    echo &"invariant ring={readRing} sameSet={sameSet} beforeCandidates={beforeSignature.len} afterCandidates={afterSignature.len} beforeDiskSpanRuns={beforeReport.ringRuns} afterDiskSpanRuns={afterReport.ringRuns} beforeFragmentedRings={beforeReport.fragmentedRings} afterFragmentedRings={afterReport.fragmentedRings} beforeLatencyUs={beforeReadUs:.3f} afterLatencyUs={afterReadUs:.3f}"
+    if not sameSet:
+      raise newException(AssertionDefect,
+        "logical ring query changed across compaction")
   finally:
     db.close()
     if cleanup:

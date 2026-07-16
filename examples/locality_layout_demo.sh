@@ -10,11 +10,18 @@ READ_ITERS="${READ_ITERS:-100}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-mkdir -p bin
-nim c -d:release --nimcache:/tmp/nimcache_roche_locality_layout_demo \
-  -o:bin/locality_layout_demo examples/locality_layout_demo.nim
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/roche-locality-layout-demo.XXXXXX")"
+BIN="$WORK/locality_layout_demo"
+NIMCACHE="$WORK/nimcache"
+cleanup() {
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
 
-bin/locality_layout_demo \
+nim c -d:release --nimcache:"$NIMCACHE" \
+  -o:"$BIN" examples/locality_layout_demo.nim
+
+"$BIN" \
   --workload="$WORKLOAD" \
   --rings="$RINGS" \
   --per-ring="$PER_RING" \
