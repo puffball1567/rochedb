@@ -222,10 +222,15 @@ cat >"$WORK/cluster-config.json" <<CONFIG
 CONFIG
 bin/roche health --config="$WORK/cluster-config.json" |
   grep -q "node=0"
+ROCHE_CONFIG="$WORK/cluster-config.json" bin/roche health |
+  grep -q "node=0"
 config_put="$(bin/roche put --config="$WORK/cluster-config.json" \
   --ring=cluster/config-demo --payload='{"kind":"config"}' --codec=json)"
 config_raw_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$config_put")"
 bin/roche get --config="$WORK/cluster-config.json" \
+  --ring=cluster/config-demo --filter="{\"id\":\"$config_raw_id\"}" |
+  grep -q '"kind": "config"'
+ROCHE_CONFIG="$WORK/cluster-config.json" bin/roche get \
   --ring=cluster/config-demo --filter="{\"id\":\"$config_raw_id\"}" |
   grep -q '"kind": "config"'
 
