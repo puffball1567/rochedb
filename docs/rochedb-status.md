@@ -69,7 +69,7 @@ Translations:
 | TLS | Done | Standard TLS transport for `roched` and CLI/client connections when built with `-d:ssl`; `scripts/cluster_tls_smoke.sh` covers authenticated TLS, secret-key transport, JSON put/get, and plain-client rejection |
 | Authz / RBAC | PoC | `roched --allow-ring=prefix[,prefix...]` and `--role=user:password:reader|writer|admin[:prefixes]`; `scripts/cluster_authz_smoke.sh` and `scripts/cluster_rbac_smoke.sh` cover prefix and role matrix behavior |
 | Wire fuzz smoke | Done | `scripts/cluster_wire_fuzz_smoke.sh` runs deterministic malformed-frame cases, including oversized headers, and verifies the cluster stays healthy |
-| Dynamic membership / epoch migration | Planned | Current peer list is static |
+| Dynamic membership / epoch migration | Foundation | Current peer list is still static at runtime, but v0.6 adds explicit arc tables, weighted arcs, deterministic virtual arcs, topology validation, and `remapFraction` so membership changes can be modeled with less unnecessary remapping than naive `mod nNodes`. Online rebalance workflow is still planned |
 | Cluster transaction coordinator redundancy | Planned | Remove node0 as a single point of failure |
 | Read-your-writes for cluster tx | PoC | `get/query/batchGet` fallback to node0 landing intent before owner apply; cluster smoke covers update/delete |
 | Fault-tolerance improvements | Planned | Post-v0.1 work; universe sync outbox is now the first durable eventual-convergence primitive |
