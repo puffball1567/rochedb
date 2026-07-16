@@ -378,6 +378,45 @@ suite "store persistence":
     st.close()
     removeDir(dir)
 
+  test "locality report matrix covers delete and backfill fragmentation":
+    let dir = createTempDir("roche-store", "locality-matrix")
+    var st = openStore(dir)
+
+    for i in 0'u32 ..< 24'u32:
+      let ring = uint64((i mod 4) + 1)
+      st.upsert Particle(parent: ring, seq: i div 4, period: 60.0,
+                         head: float(ring), tWrite: float(i),
+                         payload: "p" & $i, codec: pcRaw)
+
+    for i in countup(0'u32, 20'u32, 4):
+      st.remove(1'u64, i div 4)
+
+    for i in 0'u32 ..< 8'u32:
+      let ring = uint64(((i * 3) mod 4) + 1)
+      st.upsert Particle(parent: ring, seq: 100'u32 + i, period: 60.0,
+                         head: float(ring), tWrite: 100.0 + float(i),
+                         payload: "b" & $i, codec: pcRaw)
+
+    let before = st.localityReport()
+    check before.totalParticleRecords == 32
+    check before.liveParticleRecords == 26
+    check before.deadParticleRecords == 6
+    check before.ringCount == 4
+    check before.fragmentedRings > 0
+    check before.localityScore < 1.0
+
+    discard st.compact()
+    let after = st.localityReport()
+    check after.totalParticleRecords == 26
+    check after.liveParticleRecords == 26
+    check after.deadParticleRecords == 0
+    check after.ringCount == 4
+    check after.ringRuns == 4
+    check after.fragmentedRings == 0
+    check after.localityScore == 1.0
+    st.close()
+    removeDir(dir)
+
   test "strong durability の compact 後も WAL は復元できる":
     let dir = createTempDir("roche-store", "strong-compact")
     var st = openStore(dir, durability = durStrong)
