@@ -41,6 +41,20 @@
   delete/backfill/compact workloads.
 - Bumped package metadata to `0.6.0`.
 
+## v0.5.1
+
+### Added
+
+- Added `docs/technical-faq.md` for first-time database reviewers.
+- Linked the Technical FAQ from the README and documentation index.
+
+### Changed
+
+- Documented RocheDB's boundaries around partitioning, joins, secondary access
+  paths, consistent-hashing-like owner mapping, physical locality, production
+  readiness, and current best-fit workloads.
+- Bumped package metadata to `0.5.1`.
+
 ## v0.5.0
 
 ### Added
