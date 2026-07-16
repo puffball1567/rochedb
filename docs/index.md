@@ -19,6 +19,7 @@ downstream AI/RAG or application logic.
 - [CLI Reference](cli-reference.md)
 - [How RocheDB Differs From Typical NoSQL](nosql-positioning.md)
 - [Unique Data Model And Operating Patterns](unique-data-model.md)
+- [Use Case Recipes](use-case-recipes.md)
 - [Technical FAQ](technical-faq.md)
 - [Feature Status / Roadmap](rochedb-status.md)
 - [Benchmark Notes](rochedb-bench.md)
@@ -29,6 +30,7 @@ downstream AI/RAG or application logic.
 - [Detailed Design](rochedb-design.md)
 - [Topology Configuration](topology-config.md)
 - [Topology Pattern Catalog](topology-examples.md)
+- [Topology Remapping](topology-remapping.md)
 - [Universe Sync](universe-sync.md)
 - [Data Locality](data-locality.md)
 - [Cloud Operations Metrics](cloud-operations.md)
@@ -42,6 +44,7 @@ downstream AI/RAG or application logic.
 - [Driver / FFI Roadmap](rochedb-driver-roadmap.md)
 - [Protocol Compatibility](protocol-compatibility.md)
 - [TLS Transport](tls-transport.md)
+- [Query Safety](query-safety.md)
 - [Payload Codecs](payload-codecs.md)
 - [Vector Backend Selection](vector-backends.md)
 - [FAISS Versioning Policy](faiss-versioning.md)
@@ -49,4 +52,4 @@ downstream AI/RAG or application logic.
 ## Release
 
 - [Release Checklist](release-checklist.md)
-- [GitHub Release Draft](github-release-v0.5.1.md)
+- [GitHub Release Draft](github-release-v0.6.0.md)

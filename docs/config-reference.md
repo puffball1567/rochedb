@@ -31,6 +31,30 @@ full reference in [Topology Configuration](topology-config.md).
 | `tlsServerName` | string | `""` | Optional hostname override for TLS verification and SNI. |
 | `tlsInsecureSkipVerify` | bool | `false` | Skip certificate verification for local smoke tests only. |
 
+The CLI can load these connection defaults from JSON with `--config=FILE` or
+`ROCHE_CONFIG=FILE`. Command-line flags override the file.
+
+```json
+{
+  "peers": ["127.0.0.1:7301", "127.0.0.1:7302"],
+  "user": "alice",
+  "password": "change-me",
+  "secretKey": "change-me-too",
+  "galaxy": "default",
+  "tls": true,
+  "tlsCaFile": "/etc/rochedb/ca.crt",
+  "tlsServerName": "rochedb.internal",
+  "tlsInsecureSkipVerify": false
+}
+```
+
+`peers` may be either a comma-separated string or an array of `host:port`
+strings. The CLI accepts the documented camelCase fields and their flag-style
+aliases such as `secret-key`, `auth-token`, `tls-ca`, and `tls-server-name`.
+Keep production config files outside the repository, lock down file
+permissions, and prefer external secret injection when the deployment platform
+provides it.
+
 ## `roched` Server Flags
 
 | Flag | Meaning |

@@ -226,6 +226,34 @@ suite "public api":
         selection: "{ title }",
         limit: 1))
 
+    let baseFilter = rocheFilter().eq("name", "a")
+    let extendedFilter = baseFilter.eq("meta", %*{"n": 1})
+    check baseFilter.toJson() == %*{"name": "a"}
+    check extendedFilter.toJson() == %*{"name": "a", "meta": {"n": 1}}
+
+    let builtRead = db.readRing("users", defaultReadOptions().withFilter(
+      rocheFilter().eq("name", "b").eq("meta", %*{"n": 2})))
+    check builtRead.count == 1
+    check parseJson(builtRead.items[0].payload)["name"].getStr() == "b"
+
+    let typedBool = db.put(%*{"name": "flagged", "active": true, "age": 7},
+                           ring = "typed")
+    let typedRead = db.readRing("typed", RocheReadOptions(
+      filter: rocheFilter().eq("active", true).eq("age", 7).toJson(),
+      limit: 10,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check typedRead.count == 1
+    check typedRead.items[0].id == typedBool
+
+    let byBuilderId = db.readRing("users", defaultReadOptions().withFilter(
+      rocheFilter().id(ids[1])))
+    check byBuilderId.count == 1
+    check byBuilderId.items[0].id == ids[1]
+
+    expect ValueError:
+      discard rocheFilter().eq("", "bad")
+
     db.update(ids[0], %*{"name": "a2", "meta": {"n": 10}})
     check db.query(ids[0], "{ name }") == %*{"name": "a2"}
     let patched = db.patch(ids[0], %*{"meta": {"ok": true}, "name": nil})
@@ -330,13 +358,8 @@ suite "public api":
       sortDirection: rsAsc))
     check fromStellar.count == 3
 
-    let fromShop = db.readStellar("shops/1123", RocheStellarOptions(
-      filter: %*{"kind": "user"},
-      limitPerRing: 10,
-      maxDepth: 1,
-      includeRoot: true,
-      sortField: "id",
-      sortDirection: rsAsc))
+    let fromShop = db.readStellar("shops/1123", defaultStellarOptions().withFilter(
+      rocheFilter().eq("kind", "user")))
     check fromShop.count == 1
     check fromShop.rings[0].ring == "users/123"
 

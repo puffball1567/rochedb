@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.6.0 - 2026-07-16
+
+### Added
+
+- Added typed `RocheFilterBuilder` helpers for safer read filters without
+  string-concatenated JSON.
+- Added locality validation workloads for interleaved, random, delete-heavy,
+  backfill-heavy, and hot/cold write patterns, including compact-before/after
+  read micro-samples.
+- Added locality invariant checks so the same logical ring query must return
+  the same ID/payload set before and after compaction while disk-span metrics
+  are reported.
+- Added topology remapping primitives: explicit arc tables, weighted arcs,
+  deterministic virtual arcs, topology validation, and `remapFraction`.
+- Added `docs/topology-remapping.md` to explain the boundary between remapping
+  primitives and future online rebalance.
+- Added `docs/use-case-recipes.md` with application recipes for list/detail,
+  membership, inventory locks, webhook idempotency, SaaS tenant isolation,
+  stellar neighborhoods, and RAG corpus layout.
+- Added CLI connection config loading with `--config=FILE` and `ROCHE_CONFIG`.
+  Config can provide peers, auth, galaxy, and TLS defaults while command-line
+  flags remain the override.
+
+### Changed
+
+- Updated technical FAQ and status documents to reflect that arc-table based
+  remapping has a foundation, while live dynamic membership remains future
+  work.
+- Expanded CLI and configuration documentation for cluster/TLS connection
+  defaults.
+
+### Fixed / Hardened
+
+- Expanded CLI smoke coverage to verify config-driven cluster health, put, and
+  get workflows.
+- Expanded core tests for explicit arc ownership, weighted arcs, virtual arc
+  remap reduction, and malformed topology rejection.
+- Expanded store locality tests to assert logical result preservation across
+  delete/backfill/compact workloads.
+- Bumped package metadata to `0.6.0`.
+
 ## v0.5.1
 
 ### Added
