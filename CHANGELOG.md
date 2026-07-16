@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.6.0 - Unreleased
+## v0.6.0 - 2026-07-16
 
 ### Added
 
@@ -39,6 +39,7 @@
   remap reduction, and malformed topology rejection.
 - Expanded store locality tests to assert logical result preservation across
   delete/backfill/compact workloads.
+- Bumped package metadata to `0.6.0`.
 
 ## v0.5.0
 
