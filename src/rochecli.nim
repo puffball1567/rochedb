@@ -267,6 +267,33 @@ proc resolveDataDir(dataDir, peers: string): string =
   else:
     defaultDataDir()
 
+proc jsonStringOpt(node: JsonNode, key, default: string): string =
+  if node.kind == JObject and node.hasKey(key):
+    node[key].getStr()
+  else:
+    default
+
+proc jsonBoolOpt(node: JsonNode, key: string, default: bool): bool =
+  if node.kind == JObject and node.hasKey(key):
+    node[key].getBool()
+  else:
+    default
+
+proc jsonPeersOpt(node: JsonNode, default: string): string =
+  if node.kind != JObject or not node.hasKey("peers"):
+    return default
+  let peersNode = node["peers"]
+  case peersNode.kind
+  of JString:
+    peersNode.getStr()
+  of JArray:
+    var parts: seq[string] = @[]
+    for item in peersNode:
+      parts.add item.getStr()
+    parts.join(",")
+  else:
+    raise newException(ValueError, "config peers must be a string or array")
+
 proc requireCliTarget(dataDir, peers: string): string =
   resolveDataDir(dataDir, peers)
 
@@ -2240,7 +2267,8 @@ proc printHelp() =
   echo "  parent:epoch:seq:tWrite"
   echo ""
   echo "Local commands use --data=DIR, ROCHE_DATA, or ./data by default."
-  echo "Cluster commands use --peers=host:port,..."
+  echo "Cluster commands use --peers=host:port,... or --config=FILE."
+  echo "ROCHE_CONFIG can point to the same JSON config file."
   echo "Get uses --view=auto by default; payload codec is inferred from stored metadata."
   echo "--where is accepted as an alias for --filter. --id is a low-level shortcut for scripts."
   echo "Cluster get/query requires --ring=RING so the CLI can reconstruct ring placement metadata."
@@ -2297,6 +2325,7 @@ proc main() =
   var failureDomain = ""
   var authRef = ""
   var redisEndpoint = "127.0.0.1:6379"
+  var configPath = getEnv("ROCHE_CONFIG")
   var universeConfig = ""
   var driverManifestPath = ""
   var driverProjectDir = ""
@@ -2318,6 +2347,36 @@ proc main() =
   var depth = 1
   var branchBudget = 0
   var positionals: seq[string] = @[]
+
+  for kind, key, val in getopt():
+    if kind == cmdLongOption and key == "config":
+      configPath = val
+
+  if configPath.len > 0:
+    let cfg = parseFile(configPath)
+    if cfg.kind != JObject:
+      raise newException(ValueError, "config file must contain a JSON object")
+    peers = jsonPeersOpt(cfg, peers)
+    dataDir = jsonStringOpt(cfg, "data", dataDir)
+    dataDir = jsonStringOpt(cfg, "dataDir", dataDir)
+    username = jsonStringOpt(cfg, "user", username)
+    username = jsonStringOpt(cfg, "username", username)
+    password = jsonStringOpt(cfg, "password", password)
+    authToken = jsonStringOpt(cfg, "authToken", authToken)
+    authToken = jsonStringOpt(cfg, "auth-token", authToken)
+    secretKey = jsonStringOpt(cfg, "secretKey", secretKey)
+    secretKey = jsonStringOpt(cfg, "secret-key", secretKey)
+    galaxy = jsonStringOpt(cfg, "galaxy", galaxy)
+    tls = jsonBoolOpt(cfg, "tls", tls)
+    tlsCaFile = jsonStringOpt(cfg, "tlsCaFile", tlsCaFile)
+    tlsCaFile = jsonStringOpt(cfg, "tls-ca", tlsCaFile)
+    tlsServerName = jsonStringOpt(cfg, "tlsServerName", tlsServerName)
+    tlsServerName = jsonStringOpt(cfg, "tls-server-name", tlsServerName)
+    tlsInsecureSkipVerify = jsonBoolOpt(cfg, "tlsInsecureSkipVerify",
+                                        tlsInsecureSkipVerify)
+    tlsInsecureSkipVerify = jsonBoolOpt(cfg, "tls-insecure-skip-verify",
+                                        tlsInsecureSkipVerify)
+
   for kind, key, val in getopt():
     case kind
     of cmdArgument:
@@ -2330,6 +2389,7 @@ proc main() =
     of cmdLongOption:
       case key
       of "help": help = true
+      of "config": configPath = val
       of "peers": peers = val
       of "data": dataDir = val
       of "target-data": targetDataDir = val

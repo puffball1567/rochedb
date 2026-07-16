@@ -21,6 +21,60 @@ suite "theta / owner (fast 層)":
     check tbl.owner(TAU - 1e-9) == 7
     check tbl.owner(PI) == 4
     check tbl.owner(PI - 1e-9) == 3
+  test "明示 ArcTable でも弧境界と wrap が安定する":
+    let tbl = ArcTable(
+      epoch: 1,
+      nNodes: 2,
+      arcs: @[ArcOwner(start: 0.0, node: 0'u16),
+              ArcOwner(start: PI, node: 1'u16)])
+    tbl.validateArcTable()
+    check tbl.owner(0.0) == 0
+    check tbl.owner(PI - 1e-9) == 0
+    check tbl.owner(PI) == 1
+    check tbl.owner(TAU - 1e-9) == 1
+    check tbl.owner(-0.1) == 1
+  test "weightedArcTable は重みに応じた連続弧を作る":
+    let tbl = weightedArcTable(1, [1, 3])
+    check tbl.nNodes == 2
+    check tbl.arcs.len == 2
+    check abs(tbl.arcs[0].start - 0.0) < 1e-12
+    check abs(tbl.arcs[1].start - TAU * 0.25) < 1e-12
+    check tbl.owner(TAU * 0.24) == 0
+    check tbl.owner(TAU * 0.26) == 1
+    expect ValueError:
+      discard weightedArcTable(1, [0, 0])
+    expect ValueError:
+      discard weightedArcTable(1, [1, -1])
+  test "virtualArcTable はノード追加時の再配置率を等分割より下げる":
+    let equal8 = equalArcTable(1, 8)
+    let equal9 = equalArcTable(2, 9)
+    let virt8 = virtualArcTable(1, 8, 64)
+    let virt9 = virtualArcTable(2, 9, 64)
+    check virt8.arcs.len == 8 * 64
+    check virt9.arcs.len == 9 * 64
+    virt8.validateArcTable()
+    virt9.validateArcTable()
+    let equalMoved = remapFraction(equal8, equal9, samples = 8192)
+    let virtualMoved = remapFraction(virt8, virt9, samples = 8192)
+    check equalMoved > 0.4
+    check virtualMoved < 0.25
+    check virtualMoved < equalMoved
+  test "ArcTable validators reject malformed topology":
+    expect ValueError:
+      discard equalArcTable(1, 0)
+    expect ValueError:
+      discard virtualArcTable(1, 0)
+    expect ValueError:
+      discard virtualArcTable(1, 2, 0)
+    expect ValueError:
+      ArcTable(epoch: 1, nNodes: 2,
+               arcs: @[ArcOwner(start: 0.2, node: 0'u16),
+                       ArcOwner(start: 0.1, node: 1'u16)]).validateArcTable()
+    expect ValueError:
+      ArcTable(epoch: 1, nNodes: 2,
+               arcs: @[ArcOwner(start: 0.0, node: 2'u16)]).validateArcTable()
+    expect ValueError:
+      discard remapFraction(equalArcTable(1, 1), equalArcTable(2, 1), samples = 0)
   test "e>0 でも単調（EMax の根拠）":
     let o = Orbit(a: 1.0, phi: 0.0, period: 10.0, e: EMax, pomega: 1.0)
     var prev = -1.0

@@ -8,11 +8,11 @@ matrix used before releases.
 
 | Area | Primary checks | Current status |
 | --- | --- | --- |
-| Orbital placement core | `tests/tcore.nim` | Unit-covered: angle wrapping, ownership, future arrival, conjunctions |
+| Orbital placement core | `tests/tcore.nim` | Unit-covered: angle wrapping, ownership, weighted arcs, virtual arc remap reduction, future arrival, conjunctions |
 | Field / halo movement | `tests/tfield.nim` | Unit-covered: field state and ring movement behavior |
 | Selection parser | `tests/tselect.nim` | Unit-covered: GraphQL-like selection parsing and projection basics |
-| Store / WAL | `tests/tstore.nim` | Unit-covered: codec persistence, torn-tail repair, transaction replay, compact, locality report, backup/restore |
-| Public embedded API | `tests/tapi.nim` | Unit-covered: put/get, codec-aware projection, ring profiles, readRing filtering, pagination, sorting, stellar neighborhood reads from either side, stellar attach/detach persistence, atomic batch rollback, cooperative ring/stellar locks, warp, universe sync |
+| Store / WAL | `tests/tstore.nim` | Unit-covered: codec persistence, torn-tail repair, transaction replay, compact, locality report, delete/backfill locality matrix, compact-before/after logical query invariants, backup/restore |
+| Public embedded API | `tests/tapi.nim` | Unit-covered: put/get, codec-aware projection, ring profiles, readRing filtering, typed filter builders, pagination, sorting, stellar neighborhood reads from either side, stellar attach/detach persistence, atomic batch rollback, cooperative ring/stellar locks, warp, universe sync |
 | CLI embedded usage | `scripts/cli_crud_smoke.sh` | Smoke-covered: help, put/get/query/list/count, readRing options, `--near` placement, `--stellar`, stellar attach/detach, `--subring` neighborhood narrowing, codec display, ring profile auto codec, shell, auth error text |
 | C ABI | `examples/cabi_contract.c`, `scripts/driver_compat.sh` | Contract-covered: ABI version, put/get, codec metadata, read ring page shape, validation errors, atlas |
 | Wire protocol | `tests/twire_driver.nim`, `scripts/cluster_wire_fuzz_smoke.sh` | Smoke-covered: driver-facing PUTR/GETID/QRYID, codec metadata negotiation, malformed frame behavior |
@@ -23,7 +23,7 @@ matrix used before releases.
 | Universe sync | `examples/universe_sync_demo.nim`, `scripts/universe_sync_*_smoke.sh` | Smoke-covered: local export/apply, remote apply, idempotency, malformed JSONL handling |
 | Recovery | `scripts/recovery_smoke.sh` | Smoke-covered: backup/restore and recovery status paths |
 | Driver compatibility | `scripts/driver_compat.sh` | Optional smoke: C, C++, and published driver-facing C ABI paths when enabled |
-| Data model demos | `examples/stellar_data_model_demo.sh`, `examples/locality_layout_demo.sh` | Demo-covered: non-copy stellar visibility, narrowed stellar reads, original ring preservation after detach, and compaction locality reporting |
+| Data model demos | `examples/stellar_data_model_demo.sh`, `examples/locality_layout_demo.sh` | Demo-covered: non-copy stellar visibility, narrowed stellar reads, original ring preservation after detach, compaction locality reporting, messy locality workloads, compact-before/after logical result invariants, and read micro-samples |
 
 ## Release Gate
 

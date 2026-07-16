@@ -1,7 +1,16 @@
 ## roche/store の永続化テスト
 
-import std/[os, strutils, tables, tempfiles, unittest]
+import std/[algorithm, os, strutils, tables, tempfiles, unittest]
 import ../src/roche/store
+
+proc ringSignature(st: Store, ring: uint64): seq[string] =
+  if ring notin st.itemsByRing:
+    return @[]
+  for k in st.itemsByRing[ring]:
+    if k in st.items:
+      let p = st.items[k]
+      result.add p.payload & "|" & $p.codec & "|" & $p.seq & "|" & $p.tWrite
+  result.sort()
 
 suite "store persistence":
   test "Particle vec は E レコードで復元される":
@@ -375,6 +384,53 @@ suite "store persistence":
     check report.totalParticleRecords == 2
     check report.liveParticleRecords == 1
     check report.deadParticleRecords == 1
+    st.close()
+    removeDir(dir)
+
+  test "locality report matrix covers delete and backfill fragmentation":
+    let dir = createTempDir("roche-store", "locality-matrix")
+    var st = openStore(dir)
+
+    for i in 0'u32 ..< 24'u32:
+      let ring = uint64((i mod 4) + 1)
+      st.upsert Particle(parent: ring, seq: i div 4, period: 60.0,
+                         head: float(ring), tWrite: float(i),
+                         payload: "p" & $i, codec: pcRaw)
+
+    for i in countup(0'u32, 20'u32, 4):
+      st.remove(1'u64, i div 4)
+
+    for i in 0'u32 ..< 8'u32:
+      let ring = uint64(((i * 3) mod 4) + 1)
+      st.upsert Particle(parent: ring, seq: 100'u32 + i, period: 60.0,
+                         head: float(ring), tWrite: 100.0 + float(i),
+                         payload: "b" & $i, codec: pcRaw)
+
+    let before = st.localityReport()
+    let ring1Before = st.ringSignature(1'u64)
+    let ring2Before = st.ringSignature(2'u64)
+    let ring3Before = st.ringSignature(3'u64)
+    let ring4Before = st.ringSignature(4'u64)
+    check before.totalParticleRecords == 32
+    check before.liveParticleRecords == 26
+    check before.deadParticleRecords == 6
+    check before.ringCount == 4
+    check before.fragmentedRings > 0
+    check before.localityScore < 1.0
+
+    discard st.compact()
+    let after = st.localityReport()
+    check st.ringSignature(1'u64) == ring1Before
+    check st.ringSignature(2'u64) == ring2Before
+    check st.ringSignature(3'u64) == ring3Before
+    check st.ringSignature(4'u64) == ring4Before
+    check after.totalParticleRecords == 26
+    check after.liveParticleRecords == 26
+    check after.deadParticleRecords == 0
+    check after.ringCount == 4
+    check after.ringRuns == 4
+    check after.fragmentedRings == 0
+    check after.localityScore == 1.0
     st.close()
     removeDir(dir)
 

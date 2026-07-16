@@ -24,10 +24,18 @@ type
     e*: float        ## 滞在偏り（0=均等, ≤ EMax）
     pomega*: float   ## 近点角 ϖ。滞在が最長になる遠点は ϖ + π
 
+  ArcOwner* = object
+    ## Arc start and owner node. The arc owns `[start, nextStart)`.
+    start*: float
+    node*: NodeId
+
   ArcTable* = object
-    ## epoch ごとのリング弧所有表（§9）。PoC は等分割弧。
+    ## epoch ごとのリング弧所有表（§9）。
+    ## `arcs` が空の場合は従来互換の等分割弧。`arcs` がある場合は
+    ## start angle -> owner node の persisted/virtual arc table として使う。
     epoch*: uint32
     nNodes*: uint16
+    arcs*: seq[ArcOwner]
 
   OrbitalId* = object
     ## 自己記述ID（§2.2）: elements は id から計算する。粒子ごとの所在表は存在しない。
@@ -60,16 +68,119 @@ proc theta*(o: Orbit, t: float): float {.inline.} =
   let m = o.meanLongitude(t)
   wrap(m + 2.0 * o.e * sin(m - o.pomega))
 
-proc arcWidth*(tbl: ArcTable): float {.inline.} = TAU / float(tbl.nNodes)
+proc arcWidth*(tbl: ArcTable): float {.inline.} =
+  ## Average arc width. Equal tables use this as the exact width.
+  if tbl.arcs.len > 0: TAU / float(tbl.arcs.len)
+  else: TAU / float(tbl.nNodes)
 
-proc arcStart*(tbl: ArcTable, n: NodeId): float = float(n) * tbl.arcWidth
+proc arcStart*(tbl: ArcTable, n: NodeId): float =
+  ## Representative boundary for a node. Equal tables return the exact node
+  ## boundary; custom arc tables return the first persisted arc for the node.
+  if tbl.arcs.len == 0:
+    return float(n) * tbl.arcWidth
+  result = Inf
+  for arc in tbl.arcs:
+    if arc.node == n:
+      result = min(result, arc.start)
+  if result == Inf:
+    result = float(n) * TAU / float(max(1'u16, tbl.nNodes))
 
-proc owner*(tbl: ArcTable, th: float): NodeId {.inline.} =
-  NodeId(int(wrap(th) / TAU * float(tbl.nNodes)) mod int(tbl.nNodes))
+proc owner*(tbl: ArcTable, th: float): NodeId =
+  let angle = wrap(th)
+  if tbl.arcs.len == 0:
+    return NodeId(int(angle / TAU * float(tbl.nNodes)) mod int(tbl.nNodes))
+
+  var lo = 0
+  var hi = tbl.arcs.len
+  while lo < hi:
+    let mid = (lo + hi) div 2
+    if tbl.arcs[mid].start <= angle:
+      lo = mid + 1
+    else:
+      hi = mid
+  if lo == 0: tbl.arcs[^1].node else: tbl.arcs[lo - 1].node
 
 proc node*(tbl: ArcTable, o: Orbit, t: float): NodeId {.inline.} =
   ## node(id, t) = arc_owner(θ(t)) — 誰にも問い合わせない所在解決（概念書 2章）
   tbl.owner(o.theta(t))
+
+proc validateArcTable*(tbl: ArcTable) =
+  if tbl.nNodes == 0:
+    raise newException(ValueError, "ArcTable requires at least one node")
+  if tbl.arcs.len == 0:
+    return
+  var prev = -1.0
+  for arc in tbl.arcs:
+    if arc.start < 0.0 or arc.start >= TAU:
+      raise newException(ValueError, "arc start must be in [0, TAU)")
+    if arc.start <= prev:
+      raise newException(ValueError, "arc starts must be strictly increasing")
+    if arc.node >= tbl.nNodes:
+      raise newException(ValueError, "arc owner is outside nNodes")
+    prev = arc.start
+
+proc equalArcTable*(epoch: uint32, nNodes: uint16): ArcTable =
+  result = ArcTable(epoch: epoch, nNodes: nNodes)
+  result.validateArcTable()
+
+proc weightedArcTable*(epoch: uint32; weights: openArray[int]): ArcTable =
+  ## Build a persisted arc table from node weights. Each positive weight
+  ## receives one contiguous arc sized by weight / totalWeight.
+  if weights.len == 0:
+    raise newException(ValueError, "weightedArcTable requires at least one weight")
+  var total = 0
+  for w in weights:
+    if w < 0:
+      raise newException(ValueError, "node weights must be non-negative")
+    total += w
+  if total <= 0:
+    raise newException(ValueError, "at least one node weight must be positive")
+
+  result = ArcTable(epoch: epoch, nNodes: uint16(weights.len))
+  var at = 0.0
+  for node, w in weights:
+    if w <= 0:
+      continue
+    result.arcs.add ArcOwner(start: at, node: NodeId(node))
+    at += TAU * float(w) / float(total)
+  result.validateArcTable()
+
+proc mix64(x: uint64): uint64 =
+  var z = x + 0x9e3779b97f4a7c15'u64
+  z = (z xor (z shr 30)) * 0xbf58476d1ce4e5b9'u64
+  z = (z xor (z shr 27)) * 0x94d049bb133111eb'u64
+  z xor (z shr 31)
+
+proc virtualArcTable*(epoch: uint32, nNodes: uint16,
+                      virtualArcsPerNode = 64): ArcTable =
+  ## Build a deterministic virtual-arc table. Existing node/slot arc positions
+  ## stay stable when a new node is added, so membership changes move only the
+  ## ranges captured by the new node's virtual arcs instead of remapping the
+  ## whole equal-division table.
+  if nNodes == 0:
+    raise newException(ValueError, "virtualArcTable requires at least one node")
+  if virtualArcsPerNode <= 0:
+    raise newException(ValueError, "virtualArcsPerNode must be positive")
+  result = ArcTable(epoch: epoch, nNodes: nNodes)
+  for node in 0 ..< int(nNodes):
+    for slot in 0 ..< virtualArcsPerNode:
+      let h = mix64((uint64(node) shl 32) xor uint64(slot))
+      let unit = float(h shr 11) / float(1'u64 shl 53)
+      result.arcs.add ArcOwner(start: unit * TAU, node: NodeId(node))
+  result.arcs.sort(proc(a, b: ArcOwner): int = cmp(a.start, b.start))
+  result.validateArcTable()
+
+proc remapFraction*(oldTable, newTable: ArcTable; samples = 4096): float =
+  ## Estimate how much of the angle space changes owner between two tables.
+  ## This is a topology-planning metric, not a runtime routing primitive.
+  if samples <= 0:
+    raise newException(ValueError, "samples must be positive")
+  var changed = 0
+  for i in 0 ..< samples:
+    let th = (float(i) + 0.5) * TAU / float(samples)
+    if oldTable.owner(th) != newTable.owner(th):
+      inc changed
+  float(changed) / float(samples)
 
 # ---------------------------------------------------------------- slow パス（予測・逆算）
 

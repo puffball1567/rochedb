@@ -1,6 +1,6 @@
 # RocheDB
 
-**v0.5.1 Technical Preview / research OSS.** RocheDB is not yet presented as a
+**v0.6.0 Technical Preview / research OSS.** RocheDB is not yet presented as a
 production replacement for Redis, PostgreSQL, MongoDB, Apache Arrow, or a
 dedicated vector database. The current release target is a measurable prototype
 of ring/galaxy-oriented storage, retrieval, persistence, drivers, and cluster
@@ -58,20 +58,23 @@ corpus size toward semantic working-set size.
 - Detailed design: [docs/rochedb-design.md](docs/rochedb-design.md)
 - Feature status / roadmap: [docs/rochedb-status.md](docs/rochedb-status.md)
 - Release checklist: [docs/release-checklist.md](docs/release-checklist.md)
-- GitHub release draft: [docs/github-release-v0.5.1.md](docs/github-release-v0.5.1.md)
+- GitHub release draft: [docs/github-release-v0.6.0.md](docs/github-release-v0.6.0.md)
 - Driver / FFI roadmap: [docs/rochedb-driver-roadmap.md](docs/rochedb-driver-roadmap.md)
 - Driver installation guide: [docs/driver-installation.md](docs/driver-installation.md)
 - FAISS versioning policy: [docs/faiss-versioning.md](docs/faiss-versioning.md)
 - Vector backend selection: [docs/vector-backends.md](docs/vector-backends.md)
 - Protocol compatibility: [docs/protocol-compatibility.md](docs/protocol-compatibility.md)
 - TLS transport: [docs/tls-transport.md](docs/tls-transport.md)
+- Query safety: [docs/query-safety.md](docs/query-safety.md)
 - Payload codecs and prepared selections: [docs/payload-codecs.md](docs/payload-codecs.md)
+- Use case recipes: [docs/use-case-recipes.md](docs/use-case-recipes.md)
 - Universe sync: [docs/universe-sync.md](docs/universe-sync.md)
 - Threat model: [docs/threat-model.md](docs/threat-model.md)
 - Benchmark notes: [docs/rochedb-bench.md](docs/rochedb-bench.md)
 - Cloud operations metrics: [docs/cloud-operations.md](docs/cloud-operations.md)
 - Topology configuration reference: [docs/topology-config.md](docs/topology-config.md)
 - Topology pattern catalog: [docs/topology-examples.md](docs/topology-examples.md)
+- Topology remapping: [docs/topology-remapping.md](docs/topology-remapping.md)
 - Shelfer integration boundary: [docs/rochedb-shelfer-integration.md](docs/rochedb-shelfer-integration.md)
 - Halo capture design: [docs/rochedb-halo-capture.md](docs/rochedb-halo-capture.md)
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
@@ -80,7 +83,7 @@ corpus size toward semantic working-set size.
 
 ## Installation
 
-RocheDB v0.5.x is a technical preview. The Nim package is available through
+RocheDB v0.6.x is a technical preview. The Nim package is available through
 Nimble. Rust, JavaScript / TypeScript, PHP, and Python drivers are published as
 language packages, while the remaining non-Nim language drivers are still
 repository-local foundations.

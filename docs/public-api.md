@@ -94,6 +94,7 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 | `getEncoded(id)` | Fetch payload bytes together with their `PayloadCodec`. |
 | `query(id, selection)` | Fetch a JSON projection using GraphQL-style selection syntax. |
 | `prepareSelection(selection)` / `query(id, prepared)` | Validate and compile a reusable projection before execution. |
+| `rocheFilter().eq(key, value)` / `rocheFilter().id(id)` | Build JSON read filters without string-concatenated query text. |
 | `exists(id)` / `contains(id)` | Check whether an ID exists. |
 | `update(id, payload)` / `update(id, doc)` | Replace an existing document. |
 | `patch(id, patchDoc)` | Apply a JSON merge patch. |
@@ -115,6 +116,8 @@ The C ABI exposes matching additive functions: `roche_put_codec`,
 | `listByRing(ring, limit = 100, cursor = "")` | List records in one ring with cursor pagination. |
 | `readRing(ring, options = defaultReadOptions())` | Read one ring with filter, selection, cursor/page limit, and page-local sort. |
 | `readStellar(root, options = defaultStellarOptions())` | Read the root ring and nearby coordinate rings. Parent, child, and sibling rings can be in the same field of view; distant rings are not forced into the read path. |
+| `defaultReadOptions().withFilter(rocheFilter().eq(...))` | Apply a typed filter builder to ring reads. |
+| `defaultStellarOptions().withFilter(rocheFilter().eq(...))` | Apply a typed filter builder to stellar reads. |
 | `nearRing(baseRing, ring)` | Resolve a write-time nearby coordinate, for example `nearRing("users/123", "orders") == "users/123/orders"`. |
 | `countByRing(ring)` | Count records in one ring. |
 | `retrieve(queryVec, ring = "", budget = 8, ...)` | Vector/RAG-style retrieval with ring-aware planning. |

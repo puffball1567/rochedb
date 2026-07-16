@@ -94,16 +94,20 @@ coordinate metadata and can compute ownership and future placement locally. The
 model is inspired by orbital mechanics because time, position, proximity, and
 movement are useful concepts for cluster routing, scheduling, and recovery.
 
-Current limitation:
+Current implementation status:
 
-- simple owner segmentation can remap too much data when the number of nodes
-  changes;
-- this must be improved before making stronger distributed-database claims.
+- the original equal-division owner calculation is still supported for simple
+  static clusters;
+- weighted arc tables can give nodes different portions of the angle space;
+- virtual arc tables provide a deterministic topology primitive that reduces
+  unnecessary movement when nodes are added;
+- `remapFraction` measures how much angle space would change owner between two
+  topology epochs.
 
-The planned direction is to keep the deterministic coordinate model, but replace
-the naive node-count mapping with persisted arcs, node weights, virtual arcs, or
-a topology epoch. That would preserve the coordinate idea while reducing
-unnecessary remapping during membership changes.
+This is not yet an automatic online rebalance protocol. It is the core
+topology/remapping foundation: RocheDB can now represent the safer layout, test
+its expected movement, and keep the deterministic coordinate idea without tying
+all placement to `mod nNodes`.
 
 ## Where do the benchmark improvements come from?
 

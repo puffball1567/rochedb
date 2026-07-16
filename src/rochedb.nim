@@ -261,6 +261,12 @@ type
     sortField*: string
     sortDirection*: RocheReadSortDirection
 
+  RocheFilterBuilder* = object
+    ## Typed helper for constructing read filters without string-concatenated
+    ## JSON. The stored representation remains a JSON object so existing CLI,
+    ## wire, C ABI, and driver paths stay compatible.
+    node: JsonNode
+
   RocheReadPage* = object
     ring*: string
     count*: int
@@ -1796,6 +1802,68 @@ proc defaultStellarOptions*(): RocheStellarOptions =
     sortField: "time",
     sortDirection: rsDesc)
 
+proc rocheFilter*(): RocheFilterBuilder =
+  ## Start a safe read-filter builder.
+  RocheFilterBuilder(node: newJObject())
+
+proc toJson*(builder: RocheFilterBuilder): JsonNode =
+  ## Return a defensive JSON object copy suitable for RocheReadOptions.filter.
+  if builder.node.isNil:
+    return newJObject()
+  if builder.node.kind != JObject:
+    raise newException(ValueError, "Roche filter builder must contain a JSON object")
+  builder.node.copy()
+
+proc withFilterValue(builder: RocheFilterBuilder; key: string;
+                     value: JsonNode): RocheFilterBuilder =
+  if key.len == 0:
+    raise newException(ValueError, "filter key must not be empty")
+  if value.isNil:
+    raise newException(ValueError, "filter value must not be nil")
+  result.node = builder.toJson()
+  result.node[key] = value.copy()
+
+proc eq*(builder: RocheFilterBuilder; key: string;
+         value: JsonNode): RocheFilterBuilder =
+  ## Add an equality match for a JSON value.
+  builder.withFilterValue(key, value)
+
+proc eq*(builder: RocheFilterBuilder; key, value: string): RocheFilterBuilder =
+  ## Add an equality match for a string value.
+  builder.withFilterValue(key, %value)
+
+proc eq*(builder: RocheFilterBuilder; key: string;
+         value: SomeInteger): RocheFilterBuilder =
+  ## Add an equality match for an integer value.
+  builder.withFilterValue(key, %value)
+
+proc eq*(builder: RocheFilterBuilder; key: string;
+         value: SomeFloat): RocheFilterBuilder =
+  ## Add an equality match for a floating-point value.
+  builder.withFilterValue(key, %value)
+
+proc eq*(builder: RocheFilterBuilder; key: string;
+         value: bool): RocheFilterBuilder =
+  ## Add an equality match for a boolean value.
+  builder.withFilterValue(key, %value)
+
+proc id*(builder: RocheFilterBuilder; rawId: string): RocheFilterBuilder =
+  ## Match a RocheDB raw/string ID using the same `id` filter field accepted by
+  ## readRing and CLI `--filter='{"id":"..."}'`.
+  builder.eq("id", rawId)
+
+proc withFilter*(options: RocheReadOptions;
+                 builder: RocheFilterBuilder): RocheReadOptions =
+  ## Return read options with a builder-produced filter.
+  result = options
+  result.filter = builder.toJson()
+
+proc withFilter*(options: RocheStellarOptions;
+                 builder: RocheFilterBuilder): RocheStellarOptions =
+  ## Return stellar read options with a builder-produced filter.
+  result = options
+  result.filter = builder.toJson()
+
 proc normalizedReadOptions(options: RocheReadOptions): RocheReadOptions =
   result = options
   if result.filter.isNil:
@@ -2508,6 +2576,11 @@ proc ringSummaries*(db: RocheDb, queryVec: seq[float32] = @[]): seq[RocheRingSum
 
 proc `$`*(id: RocheId): string =
   $id.parent & ":" & $id.seq
+
+proc id*(builder: RocheFilterBuilder; rocheId: RocheId): RocheFilterBuilder =
+  ## Match a RocheDB ID without asking callers to manually stringify it.
+  builder.id($rocheId.parent & ":" & $rocheId.epoch & ":" &
+             $rocheId.seq & ":" & $rocheId.tWrite)
 
 proc focusToTopRings*(focus: int): int =
   ## ユーザー向けの探索幅 1..100 を、内部 topRings 2..500 に写像する。
