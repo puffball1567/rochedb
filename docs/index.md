@@ -29,6 +29,7 @@ downstream AI/RAG or application logic.
 - [Detailed Design](rochedb-design.md)
 - [Topology Configuration](topology-config.md)
 - [Topology Pattern Catalog](topology-examples.md)
+- [Topology Remapping](topology-remapping.md)
 - [Universe Sync](universe-sync.md)
 - [Data Locality](data-locality.md)
 - [Cloud Operations Metrics](cloud-operations.md)
