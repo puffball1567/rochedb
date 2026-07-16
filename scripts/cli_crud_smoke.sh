@@ -208,6 +208,27 @@ for _ in $(seq 1 50); do
   fi
   sleep 0.1
 done
+
+echo "[cli-crud] cluster connection config"
+cat >"$WORK/cluster-config.json" <<CONFIG
+{
+  "peers": ["127.0.0.1:${BASE_PORT}"],
+  "user": "app",
+  "password": "right",
+  "secret-key": "secret",
+  "galaxy": "",
+  "tls": false
+}
+CONFIG
+bin/roche health --config="$WORK/cluster-config.json" |
+  grep -q "node=0"
+config_put="$(bin/roche put --config="$WORK/cluster-config.json" \
+  --ring=cluster/config-demo --payload='{"kind":"config"}' --codec=json)"
+config_raw_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$config_put")"
+bin/roche get --config="$WORK/cluster-config.json" \
+  --ring=cluster/config-demo --filter="{\"id\":\"$config_raw_id\"}" |
+  grep -q '"kind": "config"'
+
 auth_out="$(bin/roche health --peers="127.0.0.1:${BASE_PORT}" \
   --user=app --password=wrong --secret-key=secret 2>&1 >/dev/null || true)"
 grep -q '^error: AUTHRESP failed: ERR auth-required$' <<<"$auth_out"
