@@ -156,6 +156,30 @@ The demo intentionally writes records in an interleaved pattern, then runs
 compaction. The important result is not the exact byte count; it is that the
 same live records become physically grouped by ring after compaction.
 
+The demo can also run less clean write patterns:
+
+```bash
+WORKLOAD=random examples/locality_layout_demo.sh
+WORKLOAD=delete-heavy examples/locality_layout_demo.sh
+WORKLOAD=backfill-heavy examples/locality_layout_demo.sh
+WORKLOAD=hot-cold examples/locality_layout_demo.sh
+```
+
+Useful knobs:
+
+| Environment variable | Meaning |
+| --- | --- |
+| `RINGS` | Number of rings to write |
+| `PER_RING` | Baseline records per ring |
+| `BACKFILL` | Additional backfill records |
+| `WORKLOAD` | `interleaved`, `random`, `delete-heavy`, `backfill-heavy`, or `hot-cold` |
+| `READ_ITERS` | Number of repeated ring reads used for before/after latency sampling |
+
+The output includes `read_before` and `read_after` lines. These are local
+micro-samples, not universal latency claims. They exist to catch large
+regressions and to make compact-before/compact-after behavior observable next
+to the physical locality metrics.
+
 ## Current Scope
 
 This is not a full LSM-tree, B+ tree, or columnar layout. RocheDB's current
@@ -193,5 +217,7 @@ The next locality work should add benchmark cases for:
 - read latency before and after locality-aware compaction;
 - larger datasets where OS page cache and SSD read behavior become visible.
 
-Those cases are deliberately separate from the first metric surface so the core
-behavior remains easy to audit.
+The v0.6 locality-validation branch starts adding these cases to the runnable
+demo and store test matrix. Larger OS page-cache and SSD-sensitive benchmarks
+still need separate benchmark runs because tiny local unit tests cannot prove
+hardware-level locality behavior.
