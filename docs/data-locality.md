@@ -156,6 +156,16 @@ The demo intentionally writes records in an interleaved pattern, then runs
 compaction. The important result is not the exact byte count; it is that the
 same live records become physically grouped by ring after compaction.
 
+The demo also prints an `invariant` line:
+
+```text
+invariant ring=locality/ring-0 sameSet=true beforeCandidates=22 afterCandidates=22 beforeDiskSpanRuns=88 afterDiskSpanRuns=4 beforeFragmentedRings=4 afterFragmentedRings=0 beforeLatencyUs=30.050 afterLatencyUs=29.894
+```
+
+This is the important safety check. The same logical ring query must return the
+same ID/payload set before and after compaction. Locality improvement is only
+useful if the logical result set is preserved.
+
 The demo can also run less clean write patterns:
 
 ```bash
@@ -179,6 +189,17 @@ The output includes `read_before` and `read_after` lines. These are local
 micro-samples, not universal latency claims. They exist to catch large
 regressions and to make compact-before/compact-after behavior observable next
 to the physical locality metrics.
+
+The output also reports candidate/result counts and physical span indicators in
+the invariant line:
+
+- `beforeCandidates` / `afterCandidates`: records returned by the logical ring
+  query;
+- `beforeDiskSpanRuns` / `afterDiskSpanRuns`: physical live ring runs in the
+  WAL;
+- `beforeFragmentedRings` / `afterFragmentedRings`: rings split across multiple
+  physical runs;
+- `beforeLatencyUs` / `afterLatencyUs`: repeated read micro-samples.
 
 ## Current Scope
 
@@ -210,14 +231,14 @@ implementation keeps compaction simple and local.
 
 The next locality work should add benchmark cases for:
 
-- random writes;
-- delete-heavy workloads;
-- backfill-heavy workloads;
-- hot/cold ring skew;
-- read latency before and after locality-aware compaction;
+- larger adversarial datasets for random writes;
+- larger adversarial datasets for delete-heavy workloads;
+- larger adversarial datasets for backfill-heavy workloads;
+- larger adversarial datasets for hot/cold ring skew;
 - larger datasets where OS page cache and SSD read behavior become visible.
 
 The v0.6 locality-validation branch starts adding these cases to the runnable
-demo and store test matrix. Larger OS page-cache and SSD-sensitive benchmarks
-still need separate benchmark runs because tiny local unit tests cannot prove
-hardware-level locality behavior.
+demo and store test matrix. The current invariant checks verify that compaction
+does not change the logical result set while locality metrics improve. Larger
+OS page-cache and SSD-sensitive benchmarks still need separate benchmark runs
+because tiny local unit tests cannot prove hardware-level locality behavior.

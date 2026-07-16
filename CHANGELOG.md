@@ -9,6 +9,9 @@
 - Added locality validation workloads for interleaved, random, delete-heavy,
   backfill-heavy, and hot/cold write patterns, including compact-before/after
   read micro-samples.
+- Added locality invariant checks so the same logical ring query must return
+  the same ID/payload set before and after compaction while disk-span metrics
+  are reported.
 - Added topology remapping primitives: explicit arc tables, weighted arcs,
   deterministic virtual arcs, topology validation, and `remapFraction`.
 - Added `docs/topology-remapping.md` to explain the boundary between remapping
@@ -34,6 +37,8 @@
   get workflows.
 - Expanded core tests for explicit arc ownership, weighted arcs, virtual arc
   remap reduction, and malformed topology rejection.
+- Expanded store locality tests to assert logical result preservation across
+  delete/backfill/compact workloads.
 
 ## v0.5.0
 

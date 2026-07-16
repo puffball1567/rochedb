@@ -1,7 +1,16 @@
 ## roche/store の永続化テスト
 
-import std/[os, strutils, tables, tempfiles, unittest]
+import std/[algorithm, os, strutils, tables, tempfiles, unittest]
 import ../src/roche/store
+
+proc ringSignature(st: Store, ring: uint64): seq[string] =
+  if ring notin st.itemsByRing:
+    return @[]
+  for k in st.itemsByRing[ring]:
+    if k in st.items:
+      let p = st.items[k]
+      result.add p.payload & "|" & $p.codec & "|" & $p.seq & "|" & $p.tWrite
+  result.sort()
 
 suite "store persistence":
   test "Particle vec は E レコードで復元される":
@@ -398,6 +407,10 @@ suite "store persistence":
                          payload: "b" & $i, codec: pcRaw)
 
     let before = st.localityReport()
+    let ring1Before = st.ringSignature(1'u64)
+    let ring2Before = st.ringSignature(2'u64)
+    let ring3Before = st.ringSignature(3'u64)
+    let ring4Before = st.ringSignature(4'u64)
     check before.totalParticleRecords == 32
     check before.liveParticleRecords == 26
     check before.deadParticleRecords == 6
@@ -407,6 +420,10 @@ suite "store persistence":
 
     discard st.compact()
     let after = st.localityReport()
+    check st.ringSignature(1'u64) == ring1Before
+    check st.ringSignature(2'u64) == ring2Before
+    check st.ringSignature(3'u64) == ring3Before
+    check st.ringSignature(4'u64) == ring4Before
     check after.totalParticleRecords == 26
     check after.liveParticleRecords == 26
     check after.deadParticleRecords == 0
