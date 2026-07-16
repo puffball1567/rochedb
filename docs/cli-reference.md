@@ -53,6 +53,7 @@ bin/roche --help
 
 | Flag | Meaning |
 |---|---|
+| `--config=FILE` | Load cluster connection defaults from JSON. CLI flags override the file. `ROCHE_CONFIG` can point to the same file. |
 | `--peers=host:port,...` | Target cluster. |
 | `--user=NAME` / `--password=TEXT` | Username/password auth. |
 | `--auth-token=TEXT` | Token-style auth. |
@@ -63,6 +64,24 @@ bin/roche --help
 | `--tls-server-name=NAME` | Optional hostname override for TLS verification and SNI. |
 | `--tls-insecure-skip-verify` | Skip certificate verification for local smoke tests only. |
 | `--metrics` | Emit key/value metrics where supported. |
+
+Example:
+
+```json
+{
+  "peers": ["127.0.0.1:7301"],
+  "user": "alice",
+  "password": "change-me",
+  "secretKey": "change-me-too",
+  "tls": true,
+  "tlsCaFile": "/etc/rochedb/ca.crt"
+}
+```
+
+```sh
+roche health --config=/etc/rochedb/client.json
+roche get --config=/etc/rochedb/client.json --ring=docs/japan
+```
 
 ## Cluster Commands
 
