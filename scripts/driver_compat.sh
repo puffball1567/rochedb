@@ -56,10 +56,8 @@ if require_cmd go; then
 fi
 
 if [[ "$RUN_WIRE" == "1" ]]; then
-  if require_cmd python3; then
-    log "Python native wire driver"
-    python3 drivers/python/tests/test_driver.py
-  fi
+  log "Python native wire driver"
+  printf '[compat] skip: Python driver is split out of the core repository\n'
 
   if require_cmd node; then
     log "Node.js native wire driver"
