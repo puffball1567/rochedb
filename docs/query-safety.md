@@ -23,7 +23,9 @@ let second = db.query(secondId, fields)
 
 `prepareSelection` validates and parses the selection once. Embedded reads reuse
 the parsed tree directly. Cluster nodes also keep a bounded cache of validated
-selection trees.
+selection trees. The server cache is bounded by both entry count and the total
+source bytes retained, and very large selection strings are rejected before they
+can be cached.
 
 The selection grammar contains field names only. Payload values are not
 interpolated into it.
@@ -79,6 +81,18 @@ RocheDB's read model remains:
 
 This keeps query safety aligned with the main RocheDB idea: avoid unrelated
 working sets before downstream work begins.
+
+## Server-Side Cost Guards
+
+`roched` also enforces bounded network query work. `RETRIEVE` requests have a
+maximum result budget and a maximum vector scan count. If a request crosses
+those bounds, the server returns a stable `ERR bad-request` instead of keeping
+the single-threaded server busy indefinitely.
+
+The normal fix is not to raise the cap first. Prefer a `ring`, `stellar`, child
+scope, or narrower retrieval plan so RocheDB can reduce the candidate set before
+scoring. This turns unsafe broad scans into an observable tuning problem instead
+of hiding them behind a slow global query.
 
 ## Compatibility
 

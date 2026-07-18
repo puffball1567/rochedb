@@ -14,8 +14,10 @@ in a separate commercial Unreal plugin.
 Build the native library from the repository root:
 
 ```sh
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
+scripts/build_capi.sh
 ```
+
+The script builds `lib/librochedb.so` with TLS support enabled for the C ABI.
 
 Build and run the smoke test:
 
@@ -41,4 +43,3 @@ Planned:
 - native TCP driver
 - package publishing workflow
 - expanded compatibility suite shared with the other language drivers
-

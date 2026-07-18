@@ -17,9 +17,15 @@ int main(void) {
   const char *err;
 
   roche_init();
+  roche_init();
 
   if (roche_abi_version() != ROCHE_ABI_VERSION) return fail("ABI version mismatch");
   if (sizeof(roche_id) != 24) return fail("roche_id must stay 24 bytes");
+
+  void *bad_db = roche_open(0);
+  if (bad_db != NULL) return fail("open should reject zero nodes");
+  err = roche_last_error();
+  if (!err || strstr(err, "nodes") == NULL) return fail("last_error should mention nodes");
 
   void *db = roche_open(8);
   if (!db) return fail("open failed");
@@ -179,7 +185,19 @@ int main(void) {
   err = roche_last_error();
   if (!err || strstr(err, "ring") == NULL) return fail("last_error should mention ring");
 
+  if (roche_put(db, "docs/api", payload, (size_t)-1, &dummy) != ROCHE_ERR)
+    return fail("oversized payload length should fail");
+  err = roche_last_error();
+  if (!err || strstr(err, "length") == NULL) return fail("last_error should mention length");
+
   roche_close(db);
+  if (roche_get(db, id, &read_len) != NULL)
+    return fail("closed handle should not read");
+  err = roche_last_error();
+  if (!err || strstr(err, "closed") == NULL) return fail("last_error should mention closed handle");
+  roche_close(db);
+  err = roche_last_error();
+  if (!err || strstr(err, "closed") == NULL) return fail("double close should stay fail-closed");
   printf("C ABI contract OK\n");
   return 0;
 }

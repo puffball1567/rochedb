@@ -20,6 +20,14 @@ type
     charset*: string
     formatVersion*: string
 
+  TimeOrbitProfile* = object
+    ## Ring-scoped time-series placement declaration. The target coordinate is
+    ## calculated from timestamp_ms, bucketMs, bits, and phase.
+    bits*: int
+    bucketMs*: int64
+    phase*: uint64
+    salt*: string
+
 proc payloadCodecName*(codec: PayloadCodec): string =
   case codec
   of pcRaw: "raw"
@@ -41,6 +49,9 @@ proc encodedPayload*(data: string, codec = pcRaw): EncodedPayload =
 
 proc defaultRingPayloadProfile*(): RingPayloadProfile =
   RingPayloadProfile(defaultCodec: pcRaw, charset: "", formatVersion: "")
+
+proc defaultTimeOrbitProfile*(): TimeOrbitProfile =
+  TimeOrbitProfile(bits: 60, bucketMs: 60_000'i64, phase: 0'u64, salt: "")
 
 proc supportsJsonProjection*(codec: PayloadCodec): bool =
   ## Raw remains projection-compatible for records written before codec metadata

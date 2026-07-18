@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.7.0 - 2026-07-19
+
+### Added
+
+- Added C ABI release-build hardening with `scripts/build_capi.sh`, using
+  `--app:lib -d:ssl -d:release` as the canonical shared-library build path.
+- Added C ABI TLS smoke coverage and C ABI contract coverage for TLS-capable
+  driver builds.
+- Added `tests/tauth.nim` for authentication helper coverage.
+- Added data migration documentation for JSONL dump/import as the primary
+  pre-v1 compatibility boundary.
+- Added time-orbit design documentation for calculated time-bucket placement.
+- Added full-demo smoke coverage through `scripts/demo_smoke.sh`, including
+  stellar modeling, codec workflows, and locality workloads.
+- Added cluster wire driver smoke coverage so the public driver protocol path
+  is exercised as part of the all-smoke suite.
+
+### Changed
+
+- Centralized driver C ABI build instructions around `scripts/build_capi.sh`
+  across README, driver docs, and compatibility scripts.
+- Expanded GitHub Actions to build and check the C ABI path on Linux and macOS.
+- Clarified benchmark wording so PostgreSQL, Redis, durability, persistence,
+  and BGET comparisons do not imply stronger claims than the measured setup.
+- Updated protocol, TLS, threat-model, query-safety, public API, status, and
+  release-checklist documentation for the v0.7 hardening track.
+
+### Fixed / Hardened
+
+- Enabled `--panics:on` through `config.nims` so internal Defects do not become
+  false success values across C ABI boundaries.
+- Added persistent data-directory locking to fail closed when multiple
+  processes try to open the same store.
+- Hardened universe sync ack handling so source events are only pruned after
+  accepted target statuses.
+- Added universe sync retry/dead-letter behavior and remote sync recovery
+  smoke coverage.
+- Added bounded applied-event dedup replay for universe sync idempotency.
+- Added server-side retrieve budget / scan guards so broad scans can be
+  bounded and diagnosed instead of silently growing without limits.
+- Added lock fencing-token persistence for opt-in ring and stellar locks.
+- Expanded WAL, backup/restore, compact, transaction, atomic batch, locality,
+  wire fuzz, authz, RBAC, TLS, recovery, and universe sync coverage.
+- Bumped package metadata to `0.7.0`.
+
 ## v0.6.0 - 2026-07-16
 
 ### Added

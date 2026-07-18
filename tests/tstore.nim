@@ -1,7 +1,15 @@
 ## roche/store の永続化テスト
 
-import std/[algorithm, os, strutils, tables, tempfiles, unittest]
+import std/[algorithm, os, osproc, strutils, tables, tempfiles, unittest]
 import ../src/roche/store
+
+if paramCount() == 2 and paramStr(1) == "--lock-child":
+  let dir = paramStr(2)
+  var st = openStore(dir)
+  writeFile(dir / "locked.ready", "1")
+  sleep(5_000)
+  st.close()
+  quit 0
 
 proc ringSignature(st: Store, ring: uint64): seq[string] =
   if ring notin st.itemsByRing:
@@ -13,6 +21,26 @@ proc ringSignature(st: Store, ring: uint64): seq[string] =
   result.sort()
 
 suite "store persistence":
+  test "persistent data dirs are locked across processes":
+    let dir = createTempDir("roche-store", "lock")
+    let child = startProcess(getAppFilename(), args = ["--lock-child", dir])
+    try:
+      for _ in 0 ..< 50:
+        if fileExists(dir / "locked.ready"):
+          break
+        sleep(100)
+      check fileExists(dir / "locked.ready")
+      expect IOError:
+        discard openStore(dir)
+    finally:
+      try:
+        child.terminate()
+        discard child.waitForExit(timeout = 2_000)
+      except CatchableError:
+        discard
+      child.close()
+      removeDir(dir)
+
   test "Particle vec は E レコードで復元される":
     let dir = createTempDir("roche-store", "vec")
     var st = openStore(dir)
@@ -47,6 +75,118 @@ suite "store persistence":
     check legacy.items[(13'u64, 0'u32)].codec == pcRaw
     legacy.close()
     removeDir(legacyDir)
+
+  test "stellar map blobs are validated before write and replay":
+    let dir = createTempDir("roche-store", "stellar-map-validate")
+    var st = openStore(dir)
+    st.putStellarMap("commerce/order/A-001",
+                     """{"stellar":"commerce/order/A-001","members":["users/123","shops/1123"]}""")
+    expect ValueError:
+      st.putStellarMap("commerce/order/A-001", """{"members":["users/123"]}""")
+    expect ValueError:
+      st.putStellarMap("commerce/order/A-001",
+                       """{"stellar":"other","members":["users/123"]}""")
+    expect ValueError:
+      st.putStellarMap("commerce/order/A-001",
+                       """{"stellar":"commerce/order/A-001","members":[123]}""")
+    st.close()
+
+    var restored = openStore(dir)
+    check restored.stellarMaps["commerce/order/A-001"].contains("users/123")
+    restored.close()
+    removeDir(dir)
+
+    let legacyDir = createTempDir("roche-store", "stellar-map-bad-replay")
+    let malformed = """{"stellar":"commerce/order/A-001","members":[123]}"""
+    writeFile(legacyDir / "roche.log", "SM " & $malformed.len & "\n" & malformed & "\n")
+    expect IOError:
+      discard openStore(legacyDir)
+    removeDir(legacyDir)
+
+  test "time orbit profile survives WAL replay and compact":
+    let dir = createTempDir("roche-store", "time-orbit")
+    var st = openStore(dir)
+    let profile = TimeOrbitProfile(bits: 60, bucketMs: 1000'i64,
+                                   phase: 1234'u64, salt: "logs-api")
+    st.putTimeOrbitProfile(77'u64, profile)
+    st.close()
+
+    var restored = openStore(dir)
+    check restored.ringTimeOrbitProfiles[77'u64] == profile
+    discard restored.compact()
+    restored.close()
+
+    var compacted = openStore(dir)
+    check compacted.ringTimeOrbitProfiles[77'u64] == profile
+    compacted.close()
+    removeDir(dir)
+
+  when declared(poisonWritesForTest):
+    test "poisoned write path rejects later persistent mutations":
+      let dir = createTempDir("roche-store", "poison")
+      var st = openStore(dir, durability = durStrong)
+      st.upsert Particle(parent: 20'u64, seq: 0'u32, period: 60.0,
+                         head: 0.0, tWrite: 1.0, payload: "before")
+      st.poisonWritesForTest("simulated fsync failure")
+      check st.writeFailed
+      expect IOError:
+        st.upsert Particle(parent: 20'u64, seq: 1'u32, period: 60.0,
+                           head: 0.0, tWrite: 2.0, payload: "after")
+      st.close()
+      removeDir(dir)
+
+  test "new WAL records have magic header and checksums":
+    let dir = createTempDir("roche-store", "wal-v2")
+    var st = openStore(dir)
+    st.upsert Particle(parent: 14'u64, seq: 0'u32, period: 60.0, head: 0.0,
+                       tWrite: 1.0, payload: "checksummed",
+                       codec: pcJson)
+    st.close()
+
+    let raw = readFile(dir / "roche.log")
+    check raw.startsWith("!ROCHEDB-WAL 2\n@ ")
+    check raw.contains("\nP 14 0 ")
+
+    var restored = openStore(dir)
+    check restored.items[(14'u64, 0'u32)].payload == "checksummed"
+    check restored.items[(14'u64, 0'u32)].codec == pcJson
+    restored.close()
+    removeDir(dir)
+
+  test "versioned WAL checksum mismatch refuses open without repair":
+    let dir = createTempDir("roche-store", "wal-v2-corrupt")
+    var st = openStore(dir)
+    st.upsert Particle(parent: 15'u64, seq: 0'u32, period: 60.0, head: 0.0,
+                       tWrite: 1.0, payload: "checksum")
+    st.close()
+
+    let path = dir / "roche.log"
+    let raw = readFile(path)
+    writeFile(path, raw.replace("checksum", "checksux"))
+
+    expect IOError:
+      discard openStore(dir)
+    check readFile(path).contains("checksux")
+    removeDir(dir)
+
+  test "versioned WAL torn tail repairs to last checked record":
+    let dir = createTempDir("roche-store", "wal-v2-tail")
+    var st = openStore(dir)
+    st.upsert Particle(parent: 16'u64, seq: 0'u32, period: 60.0, head: 0.0,
+                       tWrite: 1.0, payload: "stable")
+    st.close()
+
+    let path = dir / "roche.log"
+    let good = readFile(path)
+    writeFile(path, good & "@ 80 0\nP 16 1 60.0 0.0 2.0 7 0 raw\npartial")
+
+    var restored = openStore(dir)
+    check restored.count() == 1
+    check restored.items[(16'u64, 0'u32)].payload == "stable"
+    check not restored.contains(16'u64, 1'u32)
+    restored.close()
+    check readFile(path) == good
+    removeDir(dir)
 
   test "Forwarder は F レコードで復元される":
     let dir = createTempDir("roche-store", "fwd")
@@ -115,6 +255,66 @@ suite "store persistence":
     check 7'u64 notin st4.universeSyncEvents
     check st4.isUniverseSyncEventApplied("tokyo|social|posts|p1")
     st4.close()
+    removeDir(dir)
+
+  test "Universe sync sequence は prune 後も UQ レコードで巻き戻らない":
+    let dir = createTempDir("roche-store", "universe-seq")
+    var st = openStore(dir)
+    st.putUniverseSyncEvent(1'u64, """{"id":1,"eventKey":"e1","ring":"r"}""")
+    st.setNextUniverseSyncId(9'u64)
+    st.deleteUniverseSyncEvent(1'u64)
+    st.close()
+
+    var st2 = openStore(dir)
+    check st2.universeSyncEvents.len == 0
+    check st2.nextUniverseSyncId == 9'u64
+    discard st2.compact()
+    st2.close()
+
+    var st3 = openStore(dir)
+    check st3.universeSyncEvents.len == 0
+    check st3.nextUniverseSyncId == 9'u64
+    st3.close()
+    removeDir(dir)
+
+  test "Universe sync applied dedup set can be pruned with WAL replay":
+    let dir = createTempDir("roche-store", "universe-applied-prune")
+    var st = openStore(dir)
+    st.markUniverseSyncEventApplied("event-1")
+    st.markUniverseSyncEventApplied("event-2")
+    st.markUniverseSyncEventApplied("event-3")
+    check st.pruneAppliedUniverseSyncEvents(2) == 1
+    check not st.isUniverseSyncEventApplied("event-1")
+    check st.isUniverseSyncEventApplied("event-2")
+    check st.isUniverseSyncEventApplied("event-3")
+    st.close()
+
+    var reopened = openStore(dir)
+    check not reopened.isUniverseSyncEventApplied("event-1")
+    check reopened.isUniverseSyncEventApplied("event-2")
+    check reopened.isUniverseSyncEventApplied("event-3")
+    reopened.close()
+    removeDir(dir)
+
+  test "Universe sync event は store transaction commit まで可視化されない":
+    let dir = createTempDir("roche-store", "universe-tx")
+    var st = openStore(dir)
+    var tx = st.beginTxn()
+    tx.putUniverseSyncEvent(3'u64, """{"id":3,"eventKey":"e3","ring":"r"}""")
+    tx.rollback()
+    st.close()
+
+    var st2 = openStore(dir)
+    check 3'u64 notin st2.universeSyncEvents
+    tx = st2.beginTxn()
+    tx.putUniverseSyncEvent(3'u64, """{"id":3,"eventKey":"e3","ring":"r"}""")
+    tx.commit()
+    st2.close()
+
+    var st3 = openStore(dir)
+    check st3.universeSyncEvents[3'u64].contains("\"eventKey\":\"e3\"")
+    check st3.nextUniverseSyncId == 3'u64
+    st3.close()
     removeDir(dir)
 
   test "transaction commit は atomic に復元される":
@@ -217,6 +417,18 @@ suite "store persistence":
     check st.items[(2'u64, 0'u32)].vec.len == 0
     check readFile(dir / "roche.log") == good
     st.close()
+    removeDir(dir)
+
+  test "WAL 中間破損は tail repair せず起動を拒否する":
+    let dir = createTempDir("roche-store", "mid-corrupt")
+    let wal = "P 2 0 60.0 0.0 1.0 5\nhello\n" &
+              "P 2 1 60.0 0.0 2.0 -1 0\n" &
+              "P 2 2 60.0 0.0 3.0 5 0\nlater\n"
+    writeFile(dir / "roche.log", wal)
+
+    expect IOError:
+      discard openStore(dir)
+    check readFile(dir / "roche.log") == wal
     removeDir(dir)
 
   test "commit marker が torn tail の transaction は repair 後も適用されない":
@@ -340,7 +552,28 @@ suite "store persistence":
     check st2.contains(1'u64, 39'u32)
     check st2.items[(1'u64, 39'u32)].payload == repeat("x", 128)
     check st2.items[(1'u64, 39'u32)].vec == @[1.0'f32, 0.0'f32]
+    let nextSeq = st2.nextSeq(1'u64)
+    check nextSeq == 40'u32
+    check st2.maxTWrite == 39.0
     st2.close()
+    removeDir(dir)
+
+  test "bare delete replay keeps itemsByRing consistent":
+    let dir = createTempDir("roche-store", "delete-replay-index")
+    var st = openStore(dir)
+    st.upsert Particle(parent: 30'u64, seq: 0'u32, period: 60.0, head: 0.0,
+                       tWrite: 1.0, payload: "deleted")
+    st.upsert Particle(parent: 30'u64, seq: 1'u32, period: 60.0, head: 0.0,
+                       tWrite: 2.0, payload: "live")
+    st.remove(30'u64, 0'u32)
+    st.close()
+
+    var reopened = openStore(dir)
+    check reopened.count() == 1
+    check not reopened.contains(30'u64, 0'u32)
+    check reopened.contains(30'u64, 1'u32)
+    check reopened.itemsByRing[30'u64] == @[(30'u64, 1'u32)]
+    reopened.close()
     removeDir(dir)
 
   test "locality report は interleaved WAL と compact 後の ring grouping を測る":
@@ -470,24 +703,34 @@ suite "store persistence":
     st.remove(3'u64, 0'u32)
     let backupStats = st.backup(backupDir)
     check backupStats.items == 1
+    st.upsert Particle(parent: 3'u64, seq: 2'u32, period: 90.0, head: 0.75,
+                       tWrite: 3.0, payload: "second-live")
+    let backupStats2 = st.backup(backupDir)
+    check backupStats2.items == 2
+    check not fileExists(backupDir / "roche.log.tmp")
     let verifyStats = verifyBackup(backupDir)
-    check verifyStats.items == 1
+    check verifyStats.items == 2
     st.close()
 
     removeDir(restoredDir)
-    let restoreStats = restoreBackup(backupDir, restoredDir)
-    check restoreStats.items == 1
-    var restored = openStore(restoredDir)
+    let restoreStats = restoreBackup(backupDir, restoredDir,
+                                     durability = durStrong)
+    check restoreStats.items == 2
+    check not fileExists(restoredDir / "roche.log.restore")
+    var restored = openStore(restoredDir, durability = durStrong)
     check restored.galaxy == "backup-galaxy"
     check restored.ringNames[3'u64] == "docs/ai"
     check restored.ringMeta[3'u64].period == 90.0
     check not restored.contains(3'u64, 0'u32)
     check restored.items[(3'u64, 1'u32)].payload == "live"
     check restored.items[(3'u64, 1'u32)].vec == @[1.0'f32, 0.0'f32]
+    check restored.items[(3'u64, 2'u32)].payload == "second-live"
     restored.close()
     expect IOError:
       discard restoreBackup(backupDir, restoredDir)
-    discard restoreBackup(backupDir, restoredDir, overwrite = true)
+    discard restoreBackup(backupDir, restoredDir, overwrite = true,
+                          durability = durStrong)
+    check not fileExists(restoredDir / "roche.log.restore")
     removeDir(dir)
     removeDir(backupDir)
     removeDir(restoredDir)
@@ -539,6 +782,8 @@ suite "store persistence":
     let verifyStats = verifyEncryptedBackup(backupDir, "correct-passphrase")
     check verifyStats.items == 1
     check fileExists(backupDir / "roche.backup")
+    check not fileExists(backupDir / "roche.verify.tmp")
+    check not fileExists(backupDir / "roche.log.tmp")
     check not readFile(backupDir / "roche.backup").contains("secret")
     st.close()
 
@@ -546,9 +791,11 @@ suite "store persistence":
     expect CatchableError:
       discard restoreEncryptedBackup(backupDir, restoredDir, "wrong-passphrase")
     let restoreStats = restoreEncryptedBackup(backupDir, restoredDir,
-                                              "correct-passphrase")
+                                              "correct-passphrase",
+                                              durability = durStrong)
     check restoreStats.items == 1
-    var restored = openStore(restoredDir)
+    check not fileExists(restoredDir / "roche.log.restore")
+    var restored = openStore(restoredDir, durability = durStrong)
     check restored.galaxy == "encrypted-galaxy"
     check restored.items[(4'u64, 0'u32)].payload == "secret"
     check restored.items[(4'u64, 0'u32)].vec == @[1.0'f32, 0.0'f32]
@@ -588,7 +835,7 @@ suite "store persistence":
 
     var st2 = openStore(dir)
     st2.setGalaxy("andromeda")
-    expect AssertionDefect:
+    expect ValueError:
       st2.setGalaxy("milky-way")
     st2.close()
     removeDir(dir)

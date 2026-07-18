@@ -22,7 +22,7 @@ technical preview. The canonical Nim definitions live in `src/rochedb.nim`.
 | `RocheReadPage` | `ring`, `count`, `items`, `nextCursor`, `pagination`, `page`, `pageLimit`, `sortField`, `sortDirection` | Ring read result. `count` is the number of returned items; use `countByRing` for the total ring size. |
 | `RocheStellarOptions` | `filter`, `selection`, `limitPerRing`, `maxDepth`, `branchBudget`, `subrings`, `includeRoot`, `sortField`, `sortDirection` | Coordinate-near read options. A root ring behaves like a telescope target; nearby rings are visible unless narrowed by `subrings`. |
 | `RocheStellarPage` | `root`, `ringsVisited`, `count`, `rings` | Grouped result for a stellar neighborhood read. |
-| `RocheLockToken` | `scope`, `coordinate`, `token`, `expiresAt`, `keys` | Cooperative opt-in lock token for high-integrity embedded workflows. |
+| `RocheLockToken` | `scope`, `coordinate`, `token`, `fence`, `expiresAt`, `keys` | Cooperative opt-in lock token for high-integrity embedded workflows. `fence` is a monotonically increasing handle-local fencing value. |
 | `RocheHit` | `id`, `score`, `payload` | Retrieval hit. `score` is cosine similarity, higher is closer. |
 
 `RocheId` should normally be treated as opaque. `toRaw` and `fromRaw` exist for
@@ -116,6 +116,10 @@ The C ABI exposes matching additive functions: `roche_put_codec`,
 | `listByRing(ring, limit = 100, cursor = "")` | List records in one ring with cursor pagination. |
 | `readRing(ring, options = defaultReadOptions())` | Read one ring with filter, selection, cursor/page limit, and page-local sort. |
 | `readStellar(root, options = defaultStellarOptions())` | Read the root ring and nearby coordinate rings. Parent, child, and sibling rings can be in the same field of view; distant rings are not forced into the read path. |
+| `configureTimeOrbitProfile(ring, profile)` | Configure an embedded ring-local time orbit for log/event placement. The profile is persisted as ring metadata. |
+| `timeOrbitProfile(ring)` | Read the effective time-orbit profile for a ring. |
+| `putTime(payload/doc, ring, timestampMs)` | Store a log/event payload into the calculated time-bucket ring. JSON object payloads receive `eventTimeMs` and `ingestTimeMs` when missing. |
+| `readTime(ring, fromMs, toMs, options)` | Calculate the affected time-bucket rings and read only those buckets, using normal read filters/projection inside each bucket. |
 | `defaultReadOptions().withFilter(rocheFilter().eq(...))` | Apply a typed filter builder to ring reads. |
 | `defaultStellarOptions().withFilter(rocheFilter().eq(...))` | Apply a typed filter builder to stellar reads. |
 | `nearRing(baseRing, ring)` | Resolve a write-time nearby coordinate, for example `nearRing("users/123", "orders") == "users/123/orders"`. |
@@ -168,6 +172,10 @@ coordination, idempotency, or rollback behavior.
 | `withRingLock(ring, proc())` | Acquire/release a ring lock around a body. |
 | `withStellarLock(stellar, proc())` | Acquire/release a stellar lock around a body. |
 
+Each acquired lock gets a distinct token and an increasing `fence` value. A
+later reacquire after TTL expiry cannot be accidentally released by an older
+token.
+
 These locks are not presented as a payment-ledger or financial-core mechanism.
 They are intended for application workflows such as order state updates,
 webhook processing, retry-safe maintenance, and coordinated edits around a ring
@@ -191,9 +199,10 @@ or stellar lens.
 | `backup(dstDir)` | Create a compact backup. |
 | `backupEncrypted(dstDir, passphrase)` | Create an encrypted backup. |
 | `verifyBackup(backupDir)` | Verify a backup. |
-| `restoreBackup(backupDir, dataDir, overwrite = false)` | Restore into a data directory. |
-| `dump(path = "", includeVectors = true)` | Export JSONL. |
-| `importJsonl(path, defaultRing = "imported", ...)` | Import JSONL with ring routing. |
+| `restoreBackup(backupDir, dataDir, overwrite = false, durability = durBuffered)` | Restore into a data directory. |
+| `restoreEncryptedBackup(backupDir, dataDir, passphrase, overwrite = false, durability = durBuffered)` | Restore an encrypted backup into a data directory. |
+| `dump(path = "", includeVectors = true)` | Export `rochedb.dump.v1` JSONL with ring, payload, vector, and codec metadata. |
+| `importJsonl(path, defaultRing = "imported", ...)` | Import RocheDB dump JSONL or external JSONL with ring routing. |
 
 ## Universe Sync And Warp
 

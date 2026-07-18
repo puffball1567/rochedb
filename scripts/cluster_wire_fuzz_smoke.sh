@@ -19,7 +19,7 @@ cd "$ROOT"
 mkdir -p "$DATA"
 
 echo "[cluster-wire-fuzz] build roched"
-nim c -d:release --nimcache:/tmp/nimcache_roched_wire_fuzz -o:src/roched src/roched.nim
+nim c -d:release -d:rocheTestSmallLimits --nimcache:/tmp/nimcache_roched_wire_fuzz -o:src/roched src/roched.nim
 
 echo "[cluster-wire-fuzz] build rochecli"
 nim c -d:release --nimcache:/tmp/nimcache_rochecli_wire_fuzz -o:src/rochecli src/rochecli.nim
