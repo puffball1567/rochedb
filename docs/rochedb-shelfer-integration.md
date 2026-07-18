@@ -190,7 +190,9 @@ Current implementation:
   `roche compact --data=DIR`, keeping only live records and metadata.
 - Persistent embedded stores can create and restore compact WAL backups with
   `backup` / `restoreBackup` or `roche backup --data=DIR --backup=DIR` and
-  `roche restore --backup=DIR --data=DIR`.
+  `roche restore --backup=DIR --data=DIR`. Restore can use
+  `--durability=strong` when the recovered store should be validated with
+  strong WAL durability immediately.
 - Persistent embedded stores can export readable JSON Lines dumps with `dump`
   or `roche dump --data=DIR --out=FILE`; this is for inspection and
   migration, not crash recovery.

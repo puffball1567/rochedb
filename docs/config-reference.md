@@ -63,10 +63,13 @@ provides it.
 | `--peers=host:port,...` | Static cluster peer list. |
 | `--data=DIR` | Persistent data directory. |
 | `--slow-tick=SECONDS` | Background handoff / maintenance tick interval. |
-| `--durability=buffered|strong` | WAL durability policy. |
-| `--user=NAME` / `--password=TEXT` | Basic username/password gate. |
-| `--secret-key=TEXT` | Secret-key gate and secure auth transport. |
-| `--auth-token=TEXT` | Token-style auth convenience path. |
+| `--durability=buffered|strong` | WAL durability policy. Applies to server writes and local management commands such as `compact`, `backup`, and `restore`. |
+| `--user=NAME` / `--password=TEXT` | Basic username/password gate. Prefer `--password-file` or `ROCHE_PASSWORD` outside local smoke tests. |
+| `--password-file=FILE` | Read the server password from a file. Trailing whitespace is stripped. |
+| `--secret-key=TEXT` | Secret-key gate and secure auth transport. Prefer `--secret-key-file` or `ROCHE_SECRET_KEY` outside local smoke tests. |
+| `--secret-key-file=FILE` | Read the secret-key gate value from a file. |
+| `--auth-token=TEXT` | Token-style auth convenience path. Prefer `--auth-token-file` or `ROCHE_AUTH_TOKEN` outside local smoke tests. |
+| `--auth-token-file=FILE` | Read token-style auth value from a file. |
 | `--tls-cert=FILE` / `--tls-key=FILE` | Enable standard TLS for the TCP listener. Requires `-d:ssl`. |
 | `--tls-ca=FILE` | CA/self-signed PEM file used by the server's peer client. |
 | `--tls-server-name=NAME` | Optional hostname override for peer TLS verification and SNI. |

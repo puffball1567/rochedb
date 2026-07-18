@@ -22,6 +22,10 @@ suite "cluster rbac":
     let gotByReader = reader.getIdReq(0, id)
     check gotByReader.found
     check gotByReader.value == "writer-value"
+    let readerHealth = reader.healthReq(0)
+    check readerHealth.contains("node=0")
+    check not readerHealth.contains("items=")
+    check not readerHealth.contains("pendingTx=")
 
     expect IOError:
       discard reader.putRingReq(0, "allowed/docs", "reader-write", @[])
@@ -33,6 +37,9 @@ suite "cluster rbac":
     writer.close()
 
     var admin = newClusterClient(ps, username = "admin", password = "admin")
+    let adminHealth = admin.healthReq(0)
+    check adminHealth.contains("items=")
+    check adminHealth.contains("pendingTx=")
     let metrics = admin.metricsReq(0)
     check metrics.contains("items")
     check metrics.contains("uptimeSec")

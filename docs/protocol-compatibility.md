@@ -31,6 +31,9 @@ Rules:
   `QRYID`, `BGET`, `UAPPLY`, and `USTATUS` instead of constructing internal
   placement metadata themselves.
 - `CODECS` reports the payload format identifiers accepted by the node.
+- Oversized `RETRIEVE` work is rejected with the existing stable error path
+  (`ERR bad-request`). The response shape of successful `RHIT` frames is not
+  changed by the query-cost guard.
 
 ## Payload Codec Metadata
 
@@ -57,6 +60,19 @@ drivers must follow the same byte order.
 The C ABI is different: C ABI calls accept normal host-native `float` arrays
 inside the same process. The ABI boundary does not serialize those floats onto
 the network directly.
+
+## WAL / Snapshot Compatibility
+
+The internal WAL is not the long-term external migration format before v1.0.
+New WAL files start with `!ROCHEDB-WAL 2` and store each logical record behind
+a length + CRC32 wrapper. This lets RocheDB reject corrupted versioned records
+instead of silently treating shifted payload bytes as later headers.
+
+Legacy pre-v1.0 WAL records remain readable for migration and tests, but new
+writes and compacted snapshots use the versioned format. For portable,
+human-readable migration across releases, use `roche dump` and
+`roche import-jsonl` rather than copying or editing WAL internals directly.
+See [Data Migration](data-migration.md) for the supported JSONL boundary.
 
 ## Production Readiness Boundaries
 

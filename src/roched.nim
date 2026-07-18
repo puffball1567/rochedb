@@ -9,6 +9,8 @@
 ##     ないものはハンドオフが自然に掃き出す（自己修復）
 
 import std/[algorithm, selectors, net, os, strutils, times, monotimes, json, tables, parseopt, hashes]
+when not defined(windows):
+  import std/posix
 import roche/[core, store, select, wire, field, auth]
 
 const
@@ -18,9 +20,20 @@ const
   DefaultSlowTickSec = 10.0
   MaxTransfersPerTick = 256   # 一括移動時も select ループを塞がない上限
   MaxPreparedSelections = 1024
+  MaxPreparedSelectionSourceBytes = 64 * 1024
+  MaxPreparedSelectionCacheBytes = 1024 * 1024
   DefaultPeriod = 60.0
   MaxWireBodyBytes = 64 * 1024 * 1024
   MaxWireVectorDim = MaxWireBodyBytes div sizeof(float32)
+  MaxWireJsonDepth = 128
+  SocketReadTimeoutMs = 10_000
+  MaxActiveConnections = 1024
+  MaxRetrieveBudget =
+    when defined(rocheTestSmallLimits): 4
+    else: 1024
+  MaxRetrieveScan =
+    when defined(rocheTestSmallLimits): 3
+    else: 1_000_000
 
 type
   UserRole = enum
@@ -71,6 +84,8 @@ type
     universeApplyLastOk: float
     universeApplyLastError: float
     preparedSelections: Table[string, Selection]
+    preparedSelectionLru: seq[string]
+    preparedSelectionBytes: int
     codecMetadata: Table[int, bool]
 
 type LocalHit = object
@@ -81,12 +96,66 @@ type LocalHit = object
   payload: string
   codec: PayloadCodec
 
+proc stableErrorCode(e: ref Exception): string =
+  ## Remote clients get stable protocol categories, not internal exception text.
+  if e of ValueError or e of JsonParsingError or e of KeyError:
+    "bad-request"
+  elif e of IOError or e of OSError:
+    "io-error"
+  else:
+    "internal"
+
+proc sendStableError(sock: Socket, e: ref Exception) =
+  sock.sendFrame("ERR " & stableErrorCode(e))
+
+proc readSecretFile(path, label: string): string =
+  if path.len == 0:
+    return ""
+  result = readFile(path).strip()
+  if result.len == 0:
+    raise newException(ValueError, label & " file is empty")
+
+proc addTopHit(hits: var seq[LocalHit], hit: LocalHit, budget: int) =
+  if budget <= 0:
+    return
+  if hits.len < budget:
+    hits.add hit
+    return
+  var worst = 0
+  for i in 1 ..< hits.len:
+    if hits[i].score < hits[worst].score:
+      worst = i
+  if hit.score > hits[worst].score:
+    hits[worst] = hit
+
 proc compiledSelection(sv: Server, source: string): Selection =
   if source in sv.preparedSelections:
+    for i in countdown(sv.preparedSelectionLru.len - 1, 0):
+      if sv.preparedSelectionLru[i] == source:
+        sv.preparedSelectionLru.delete(i)
+        break
+    sv.preparedSelectionLru.add source
     return sv.preparedSelections[source]
+  if source.len > MaxPreparedSelectionSourceBytes:
+    raise newException(ValueError,
+      "selection exceeds max source bytes " & $MaxPreparedSelectionSourceBytes)
   result = parseSelection(source)
-  if sv.preparedSelections.len < MaxPreparedSelections:
+  if source.len > MaxPreparedSelectionCacheBytes:
+    return
+  while sv.preparedSelections.len >= MaxPreparedSelections or
+      sv.preparedSelectionBytes + source.len > MaxPreparedSelectionCacheBytes:
+    if sv.preparedSelectionLru.len == 0:
+      break
+    let victim = sv.preparedSelectionLru[0]
+    sv.preparedSelectionLru.delete(0)
+    if victim in sv.preparedSelections:
+      sv.preparedSelections.del victim
+      sv.preparedSelectionBytes = max(0, sv.preparedSelectionBytes - victim.len)
+  if sv.preparedSelections.len < MaxPreparedSelections and
+      sv.preparedSelectionBytes + source.len <= MaxPreparedSelectionCacheBytes:
     sv.preparedSelections[source] = result
+    sv.preparedSelectionLru.add source
+    inc sv.preparedSelectionBytes, source.len
 
 proc projectPayload(sv: Server, payload: string, codec: PayloadCodec,
                     selection: string): string =
@@ -236,6 +305,47 @@ proc checkedFrameBytes(payloadLen, vecDim: int, extra = 0): int =
     raise newException(ValueError, "frame body exceeds max wire body bytes")
   payloadBytes + vectorBytes + extra
 
+proc requireParts(parts: seq[string], op: string, minLen: int) =
+  if parts.len < minLen:
+    raise newException(ValueError,
+      op & " requires at least " & $minLen & " header fields")
+
+proc validateJsonDepth(raw: string, maxDepth: int) =
+  var depth = 0
+  var inString = false
+  var escaped = false
+  for ch in raw:
+    if inString:
+      if escaped:
+        escaped = false
+      elif ch == '\\':
+        escaped = true
+      elif ch == '"':
+        inString = false
+    else:
+      case ch
+      of '"':
+        inString = true
+      of '{', '[':
+        inc depth
+        if depth > maxDepth:
+          raise newException(ValueError,
+            "JSON maximum depth " & $maxDepth & " exceeded")
+      of '}', ']':
+        if depth > 0:
+          dec depth
+      else:
+        discard
+
+proc setSocketReadTimeout(sock: Socket, timeoutMs: int) =
+  when defined(windows):
+    discard
+  else:
+    var tv = posix.Timeval(tv_sec: posix.Time(timeoutMs div 1000),
+                           tv_usec: posix.Suseconds((timeoutMs mod 1000) * 1000))
+    discard posix.setsockopt(sock.getFd, SOL_SOCKET, SO_RCVTIMEO,
+                             addr tv, SockLen(sizeof(tv)))
+
 proc denyRingName(sock: Socket, name: string) =
   sock.sendFrame("ERR authz-denied ring=" & name)
 
@@ -246,6 +356,7 @@ proc drainTxCommitOps(sock: Socket, nOps: int) =
   for _ in 0 ..< nOps:
     let h = sock.readHeader()
     let data = if h[0] == "P" or h[0] == "D": 1 else: 0
+    requireParts(h, "TXCOMMIT op", data + 7)
     let payloadLen = parseInt(h[data + 5])
     let vecDim = parseInt(h[data + 6])
     sock.drainBytes(checkedFrameBytes(payloadLen, vecDim, extra = 1))
@@ -262,7 +373,7 @@ proc jsonFloat32Seq(node: JsonNode): seq[float32] =
     else:
       discard
 
-proc applyUniverseEvent(sv: Server, event: JsonNode, now: float): bool =
+proc applyUniverseEvent(sv: Server, event: JsonNode, now: float): string =
   if event.kind != JObject:
     raise newException(ValueError, "universe event must be an object")
   let eventKey = event{"eventKey"}.getStr()
@@ -275,7 +386,10 @@ proc applyUniverseEvent(sv: Server, event: JsonNode, now: float): bool =
   if op != "put":
     raise newException(ValueError, "only put universe events are supported")
   if sv.st.isUniverseSyncEventApplied(eventKey):
-    return false
+    return "SKIPPED"
+  let applyAfter = event{"applyAfter"}.getFloat()
+  if applyAfter > now:
+    return "DELAYED"
   let payload = event{"payload"}.getStr()
   let codec = parsePayloadCodec(event{"codec"}.getStr("raw"))
   let vec = jsonFloat32Seq(event{"vec"}).normalize()
@@ -288,7 +402,7 @@ proc applyUniverseEvent(sv: Server, event: JsonNode, now: float): bool =
   if ri.key != HaloKey:
     sv.fs.observeRingPut(ri.key, vec)
   sv.st.markUniverseSyncEventApplied(eventKey)
-  true
+  "APPLIED"
 
 proc ownerOf(sv: Server, parent: uint64, seq: uint32, period, head, tWrite: float): int =
   let o = OrbitalId(parent: parent, epoch: 1, tWrite: tWrite, seq: seq)
@@ -349,11 +463,15 @@ proc slowTick(sv: Server) =
   discard sv.fs.captureTick(sv.st, epochTime())
 
 proc handleRetrieve(sv: Server, sock: Socket, parts: seq[string]) =
+  requireParts(parts, "RETRIEVE", 5)
   let hasRing = parts[1] == "1"
   let ringKey = parseBiggestUInt(parts[2]).uint64
   let budget = parseInt(parts[3])
   let vecDim = parseInt(parts[4])
   let q = sock.readExact(checkedVecBytes(vecDim)).bytesVec(vecDim).normalize()
+  if budget < 0 or budget > MaxRetrieveBudget:
+    raise newException(ValueError,
+      "RETRIEVE budget exceeds max " & $MaxRetrieveBudget)
 
   var hits: seq[LocalHit] = @[]
   var totalVectors = 0
@@ -369,13 +487,16 @@ proc handleRetrieve(sv: Server, sock: Socket, parts: seq[string]) =
       if hasRing and p.parent != ringKey:
         continue
       inc scanned
+      if scanned > MaxRetrieveScan:
+        raise newException(ValueError,
+          "RETRIEVE scan exceeds max " & $MaxRetrieveScan &
+          "; use a ring-scoped query or narrower retrieval plan")
       rings[p.parent] = true
-      hits.add LocalHit(parent: p.parent, seq: p.seq, tWrite: p.tWrite,
-                        score: 1.0 - cosineDistance(q, p.vec),
-                        payload: p.payload, codec: p.codec)
+      hits.addTopHit(LocalHit(parent: p.parent, seq: p.seq, tWrite: p.tWrite,
+                              score: 1.0 - cosineDistance(q, p.vec),
+                              payload: p.payload, codec: p.codec),
+                     budget)
     hits.sort(proc(a, b: LocalHit): int = cmp(b.score, a.score))
-    if hits.len > budget:
-      hits.setLen(budget)
 
   var payloadBytes = 0
   for h in hits:
@@ -424,11 +545,11 @@ proc handleFrame(sv: Server, sock: Socket): bool =
   inc sv.requestCount
   let now = epochTime()
   let fd = sock.getFd.int
-  if (sv.authUser.len > 0 or sv.users.len > 0) and
+  if (sv.authUser.len > 0 or sv.users.len > 0 or sv.authSecretKey.len > 0) and
       not sv.authed.getOrDefault(fd, false):
     if sv.users.len > 0:
       if parts[0] == "AUTH" and parts.len >= 3 and parts[1] in sv.users and
-          sv.users[parts[1]].password == parts[2]:
+          secureEqual(sv.users[parts[1]].password, parts[2]):
         sv.authed[fd] = true
         sv.authedUsers[fd] = parts[1]
         sock.sendFrame("OK auth")
@@ -451,7 +572,8 @@ proc handleFrame(sv: Server, sock: Socket): bool =
           return true
     else:
       if parts[0] == "AUTH" and parts.len >= 3 and
-          parts[1] == sv.authUser and parts[2] == sv.authPassword:
+          secureEqual(parts[1], sv.authUser) and
+          secureEqual(parts[2], sv.authPassword):
         sv.authed[fd] = true
         sv.authedUsers[fd] = sv.authUser
         sock.sendFrame("OK auth")
@@ -482,6 +604,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     if not sv.requireRole(sock, roleWriter):
       return true
     doAssert sv.myId == 0, "TXRESERVE は node0 の landing zone で処理する"
+    requireParts(parts, "TXRESERVE", 5)
     let ringKey = parseBiggestUInt(parts[2]).uint64
     if not sv.requireRingKey(sock, ringKey):
       return true
@@ -495,6 +618,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     if not sv.requireRole(sock, roleWriter):
       return false
     doAssert sv.myId == 0, "TXCOMMIT は node0 の landing zone で処理する"
+    requireParts(parts, "TXCOMMIT", 3)
     let txid = parseBiggestUInt(parts[1]).uint64
     let nOps = parseInt(parts[2])
     var ops: seq[ClusterTxOp] = @[]
@@ -502,6 +626,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       let h = sock.readHeader()
       let isDelete = h[0] == "D"
       let data = if h[0] == "P" or h[0] == "D": 1 else: 0
+      requireParts(h, "TXCOMMIT op", data + 7)
       var op = ClusterTxOp(kind: if isDelete: ctxDelete else: ctxPut,
                            parent: parseBiggestUInt(h[data]).uint64,
                            seq: parseUInt(h[data + 1]).uint32,
@@ -527,6 +652,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     if not sv.requireRole(sock, roleWriter):
       return true
     doAssert sv.myId == 0, "TXSTATUS は node0 の landing zone で処理する"
+    requireParts(parts, "TXSTATUS", 2)
     let txid = parseBiggestUInt(parts[1]).uint64
     if sv.st.isClusterTxApplied(txid):
       sock.sendFrame("OK APPLIED")
@@ -538,9 +664,11 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     if not sv.requireRole(sock, roleWriter):
       return false
     try:
+      requireParts(parts, "UAPPLY", 2)
       let bodyLen = parseInt(parts[1])
       discard checkedWireLen(bodyLen, "bodyLen")
       let body = sock.readExact(bodyLen)
+      validateJsonDepth(body, MaxWireJsonDepth)
       let event = parseJson(body)
       let ringName = event{"ring"}.getStr()
       if not sv.ringNameAllowed(sock, ringName):
@@ -554,13 +682,15 @@ proc handleFrame(sv: Server, sock: Socket): bool =
         sv.universeApplyLastOk = now
         sock.sendFrame("UOK " & status)
         return true
-      let applied = sv.applyUniverseEvent(event, now)
-      if applied:
+      let status = sv.applyUniverseEvent(event, now)
+      if status == "APPLIED":
         inc sv.universeApplyApplied
+      elif status == "DELAYED":
+        discard
       else:
         inc sv.universeApplySkipped
       sv.universeApplyLastOk = now
-      sock.sendFrame("UOK " & (if applied: "APPLIED" else: "SKIPPED"))
+      sock.sendFrame("UOK " & status)
     except CatchableError:
       inc sv.universeApplyErrors
       sv.universeApplyLastError = now
@@ -589,9 +719,11 @@ proc handleFrame(sv: Server, sock: Socket): bool =
   of "APPLYTX":
     if not sv.requireRole(sock, roleWriter):
       return false
+    requireParts(parts, "APPLYTX", 9)
     let txid = parseBiggestUInt(parts[1]).uint64
     let isDelete = parts[2] == "D"
     let data = if parts[2] == "P" or parts[2] == "D": 3 else: 2
+    requireParts(parts, "APPLYTX", data + 7)
     let parent = parseBiggestUInt(parts[data]).uint64
     let seq = parseUInt(parts[data + 1]).uint32
     let payloadLen = parseInt(parts[data + 5])
@@ -631,6 +763,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     sock.sendFrame("OK")
   of "TXGETID", "TXQRYID":
     doAssert sv.myId == 0, "TXGETID/TXQRYID は node0 の landing zone で処理する"
+    requireParts(parts, parts[0], if parts[0] == "TXQRYID": 8 else: 7)
     let parent = parseBiggestUInt(parts[1]).uint64
     let seq = parseUInt(parts[3]).uint32
     var selection = ""
@@ -663,13 +796,14 @@ proc handleFrame(sv: Server, sock: Socket): bool =
         try:
           value = sv.projectPayload(value, best.codec, selection)
         except ValueError, JsonParsingError:
-          sock.sendFrame("ERR " & getCurrentExceptionMsg().replace("\n", " "))
+          sock.sendStableError(getCurrentException())
           return true
       let codec = if parts[0] == "TXQRYID": pcJson else: best.codec
       sock.sendFrame("VAL 0 " & $value.len & sv.codecSuffix(sock, codec), value)
       return true
     sock.sendFrame("MISS")
   of "RETRIEVE":
+    requireParts(parts, "RETRIEVE", 5)
     if parts[1] == "1":
       let ringKey = parseBiggestUInt(parts[2]).uint64
       if not sv.ringKeyAllowed(sock, ringKey):
@@ -691,6 +825,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
   of "PUTR":
     if not sv.requireRole(sock, roleWriter):
       return false
+    requireParts(parts, "PUTR", 3)
     let ringLen = parseInt(parts[1])
     let payloadLen = parseInt(parts[2])
     let vecDim = if parts.len >= 4: parseInt(parts[3]) else: 0
@@ -722,6 +857,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
   of "PUT":
     if not sv.requireRole(sock, roleWriter):
       return false
+    requireParts(parts, "PUT", 5)
     let ringKey = parseBiggestUInt(parts[1]).uint64
     let period = parseFloat(parts[2])
     let head = parseFloat(parts[3])
@@ -745,6 +881,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       sv.fs.observeRingPut(ringKey, vec)
     sock.sendFrame("OK " & $seq & " " & $now)
   of "COUNTR":
+    requireParts(parts, "COUNTR", 2)
     let ringKey = parseBiggestUInt(parts[1]).uint64
     if not sv.requireRingKey(sock, ringKey):
       return true
@@ -754,6 +891,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
         inc n
     sock.sendFrame("COUNT " & $n)
   of "LISTR":
+    requireParts(parts, "LISTR", 4)
     let ringKey = parseBiggestUInt(parts[1]).uint64
     let limit = parseInt(parts[2])
     let cursorLen = parseInt(parts[3])
@@ -779,6 +917,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       sock.sendFrame("ITEM " & $p.seq & " " & $p.tWrite & " " & $p.parent & " " &
                      $p.payload.len & sv.codecSuffix(sock, p.codec), p.payload)
   of "GETID", "QRYID":
+    requireParts(parts, parts[0], if parts[0] == "QRYID": 8 else: 7)
     let parent = parseBiggestUInt(parts[1]).uint64
     let epoch = parseUInt(parts[2]).uint32
     let seq = parseUInt(parts[3]).uint32
@@ -829,11 +968,12 @@ proc handleFrame(sv: Server, sock: Socket): bool =
           value = sv.projectPayload(value, codec, selection)
           codec = pcJson
         except ValueError, JsonParsingError:
-          sock.sendFrame("ERR " & getCurrentExceptionMsg().replace("\n", " "))
+          sock.sendStableError(getCurrentException())
           return true
       sock.sendFrame("VAL " & $sv.myId & " " & $value.len &
                      sv.codecSuffix(sock, codec), value)
   of "GET", "QRY":
+    requireParts(parts, parts[0], if parts[0] == "QRY": 7 else: 6)
     let parent = parseBiggestUInt(parts[1]).uint64
     let seq = parseUInt(parts[2]).uint32
     var selection = ""
@@ -864,11 +1004,12 @@ proc handleFrame(sv: Server, sock: Socket): bool =
           value = sv.projectPayload(value, codec, selection)
           codec = pcJson
         except ValueError, JsonParsingError:
-          sock.sendFrame("ERR " & getCurrentExceptionMsg().replace("\n", " "))
+          sock.sendStableError(getCurrentException())
           return true
       sock.sendFrame("VAL " & $sv.myId & " " & $value.len &
                      sv.codecSuffix(sock, codec), value)
   of "BGET":
+    requireParts(parts, "BGET", 3)
     let n = parseInt(parts[1])
     let bodyLen = parseInt(parts[2])
     discard checkedWireLen(bodyLen, "bodyLen")
@@ -900,6 +1041,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
   of "TRF":
     if not sv.requireRole(sock, roleWriter):
       return false
+    requireParts(parts, "TRF", 7)
     var p = Particle(parent: parseBiggestUInt(parts[1]).uint64,
                      seq: parseUInt(parts[2]).uint32,
                      period: parseFloat(parts[3]),
@@ -928,8 +1070,12 @@ proc handleFrame(sv: Server, sock: Socket): bool =
   of "STATS":
     sock.sendFrame("OK " & $sv.myId & " " & $sv.st.count)
   of "HEALTH":
-    sock.sendFrame("OK node=" & $sv.myId & " items=" & $sv.st.count &
-                   " pendingTx=" & $sv.st.clusterTxPending)
+    if sv.users.len > 0 and not roleAllowed(sv.userRule(sv.currentUser(sock)).role,
+                                            roleAdmin):
+      sock.sendFrame("OK node=" & $sv.myId)
+    else:
+      sock.sendFrame("OK node=" & $sv.myId & " items=" & $sv.st.count &
+                     " pendingTx=" & $sv.st.clusterTxPending)
   of "METRICS":
     if not sv.requireRole(sock, roleAdmin):
       return true
@@ -988,8 +1134,11 @@ proc printUsage() =
   echo "  --durability=buffered|strong  Buffered WAL or fsync-on-write durability"
   echo "  --user=NAME                   Username for cluster auth"
   echo "  --password=TEXT               Password for cluster auth"
+  echo "  --password-file=FILE          Read password from file"
   echo "  --auth-token=TEXT             Token-style auth shortcut"
+  echo "  --auth-token-file=FILE        Read token-style auth value from file"
   echo "  --secret-key=TEXT             Additional secret-key gate"
+  echo "  --secret-key-file=FILE        Read secret-key gate value from file"
   echo "  --tls-cert=FILE               Enable TLS with certificate PEM (requires -d:ssl)"
   echo "  --tls-key=FILE                TLS private key PEM (requires -d:ssl)"
   echo "  --tls-ca=FILE                 CA/self-signed PEM for peer TLS verification"
@@ -1016,7 +1165,10 @@ proc main() =
   var slowTickSec = DefaultSlowTickSec
   var authUser = ""
   var authPassword = ""
+  var authPasswordFile = ""
+  var authTokenFile = ""
   var authSecretKey = ""
+  var authSecretKeyFile = ""
   var tlsCertFile = ""
   var tlsKeyFile = ""
   var tlsCaFile = ""
@@ -1035,7 +1187,9 @@ proc main() =
       of "slow-tick": slowTickSec = parseFloat(val)
       of "user": authUser = val
       of "password": authPassword = val
+      of "password-file": authPasswordFile = val
       of "secret-key": authSecretKey = val
+      of "secret-key-file": authSecretKeyFile = val
       of "tls-cert": tlsCertFile = val
       of "tls-key": tlsKeyFile = val
       of "tls-ca": tlsCaFile = val
@@ -1063,6 +1217,31 @@ proc main() =
       of "auth-token":
         authUser = "token"
         authPassword = val
+      of "auth-token-file":
+        authTokenFile = val
+  if authPasswordFile.len > 0:
+    authPassword = readSecretFile(authPasswordFile, "password")
+  if authSecretKeyFile.len > 0:
+    authSecretKey = readSecretFile(authSecretKeyFile, "secret-key")
+  if authTokenFile.len > 0:
+    authUser = "token"
+    authPassword = readSecretFile(authTokenFile, "auth-token")
+  if authUser.len == 0:
+    authUser = getEnv("ROCHE_USER")
+  if authPassword.len == 0:
+    authPassword = getEnv("ROCHE_PASSWORD")
+  if authUser.len == 0 and authPassword.len == 0 and getEnv("ROCHE_AUTH_TOKEN").len > 0:
+    authUser = "token"
+    authPassword = getEnv("ROCHE_AUTH_TOKEN")
+  if authSecretKey.len == 0:
+    authSecretKey = getEnv("ROCHE_SECRET_KEY")
+  if authPassword.len > 0 and authUser.len == 0:
+    raise newException(ValueError, "--password requires --user")
+  if authUser.len > 0 and authPassword.len == 0:
+    raise newException(ValueError, "--user requires --password")
+  if authSecretKey.len > 0 and (authUser.len == 0 or authPassword.len == 0):
+    raise newException(ValueError,
+      "--secret-key requires --user and --password")
   if tlsCertFile.len > 0 or tlsKeyFile.len > 0:
     if tlsCertFile.len == 0 or tlsKeyFile.len == 0:
       raise newException(ValueError, "--tls-cert and --tls-key must be provided together")
@@ -1097,6 +1276,8 @@ proc main() =
                   galaxy: galaxy,
                   allowedRingPrefixes: allowedRingPrefixes,
                   preparedSelections: initTable[string, Selection](),
+                  preparedSelectionLru: @[],
+                  preparedSelectionBytes: 0,
                   codecMetadata: initTable[int, bool](),
                   startedAt: epochTime())
   when defined(ssl):
@@ -1142,7 +1323,12 @@ proc main() =
       if fd == listenerFdInt:
         var client: Socket
         listener.accept(client)
+        if conns.len >= MaxActiveConnections:
+          inc sv.errorResponses
+          client.close()
+          continue
         client.setSockOpt(OptNoDelay, true, level = IPPROTO_TCP.cint)
+        client.setSocketReadTimeout(SocketReadTimeoutMs)
         when defined(ssl):
           if sv.tlsEnabled:
             try:
@@ -1165,7 +1351,7 @@ proc main() =
         except Exception:
           inc sv.errorResponses
           try:
-            sock.sendFrame("ERR " & getCurrentExceptionMsg().replace("\n", " "))
+            sock.sendStableError(getCurrentException())
           except Exception:
             discard
           keep = false
@@ -1174,6 +1360,7 @@ proc main() =
           conns.del fd
           sv.activeConnections = conns.len
           sv.authed.del fd
+          sv.authedUsers.del fd
           sv.codecMetadata.del fd
           sv.authChallenges.del fd
           sock.disableSecure()

@@ -55,9 +55,12 @@ bin/roche --help
 |---|---|
 | `--config=FILE` | Load cluster connection defaults from JSON. CLI flags override the file. `ROCHE_CONFIG` can point to the same file. |
 | `--peers=host:port,...` | Target cluster. |
-| `--user=NAME` / `--password=TEXT` | Username/password auth. |
-| `--auth-token=TEXT` | Token-style auth. |
-| `--secret-key=TEXT` | Secret-key gate. |
+| `--user=NAME` / `--password=TEXT` | Username/password auth. Prefer `--password-file` or `ROCHE_PASSWORD` outside local smoke tests. |
+| `--password-file=FILE` | Read password from a file. Trailing whitespace is stripped. |
+| `--auth-token=TEXT` | Token-style auth. Prefer `--auth-token-file` or `ROCHE_AUTH_TOKEN` outside local smoke tests. |
+| `--auth-token-file=FILE` | Read token-style auth value from a file. |
+| `--secret-key=TEXT` | Secret-key gate. Prefer `--secret-key-file` or `ROCHE_SECRET_KEY` outside local smoke tests. |
+| `--secret-key-file=FILE` | Read the secret-key gate value from a file. |
 | `--galaxy=NAME` | Expected remote galaxy. |
 | `--tls` | Use standard TLS for the TCP transport. Requires TLS-enabled binaries built with `-d:ssl`. |
 | `--tls-ca=FILE` | CA/self-signed PEM file for server certificate verification. |
@@ -71,8 +74,8 @@ Example:
 {
   "peers": ["127.0.0.1:7301"],
   "user": "alice",
-  "password": "change-me",
-  "secretKey": "change-me-too",
+  "passwordFile": "/run/secrets/roche_password",
+  "secretKeyFile": "/run/secrets/roche_secret_key",
   "tls": true,
   "tlsCaFile": "/etc/rochedb/ca.crt"
 }
@@ -180,6 +183,9 @@ roche get --ring=logs/raw --limit=1
 | `stellar attach` | `--stellar=RING --ring=RING` | Add an existing ring coordinate to a stellar coordinate's visible lens. Payloads are not copied. |
 | `stellar detach` | `--stellar=RING --ring=RING` | Remove a ring coordinate from a stellar coordinate's visible lens. Payloads are not deleted. |
 | `stellar list` | `--stellar=RING` | List rings attached to a stellar coordinate. |
+| `time-orbit` | `--data=DIR --ring=RING`; optional `--bucket-ms=N`, `--bits=N`, `--phase=N`, `--salt=TEXT` | Read or update the embedded ring-local time-orbit profile used by `time-put` and `time-get`. Remote profile administration is not available yet. |
+| `time-put` | `--data=DIR --ring=RING --time-ms=N` plus `--payload=TEXT` or `--in=FILE` | Store a log/event payload into the ring's calculated time bucket. JSON object payloads receive `eventTimeMs` and `ingestTimeMs` metadata when missing. |
+| `time-get` | `--data=DIR --ring=RING --from-ms=N --to-ms=N`; optional `--filter=JSON`, `--selection=SEL`, `--limit=N`, `--sort=id|time`, `--rsort=id|time` | Calculate the affected time-bucket rings and read only those buckets. The response includes `bucketsVisited`, `rings`, and `items`. |
 | `query` | `--ring=RING --filter='{"id":"ID"}' --selection=SEL`; optional `--id=ID` | Compatibility command for JSON projection by ID. Prefer `get --selection=...` for new CLI use. |
 | `list-ring` | `--ring=RING` | Compatibility command for listing records in one ring. Prefer `get --ring=...` for new CLI use. |
 | `count-ring` | `--ring=RING` | Count records in one ring. |
@@ -195,6 +201,16 @@ roche put --ring=docs/nif --payload='(example)' # codec=nif via the profile
 The profile is advisory. Every record keeps its explicit codec, so a later
 profile change does not reinterpret existing bytes. Remote profile
 administration is not available in this release.
+
+Time orbit is an embedded PoC for log/event/time-series placement:
+
+```sh
+roche time-orbit --ring=logs/api --bucket-ms=1000 --bits=60 --phase=100 --salt=api
+roche time-put --ring=logs/api --time-ms=1784376000000 \
+  --payload='{"level":"error","message":"timeout"}'
+roche time-get --ring=logs/api --from-ms=1784376000000 --to-ms=1784376300000 \
+  --filter='{"level":"error"}' --selection='{ level message eventTimeMs }'
+```
 
 `--filter` is a JSON object. `{"id":"RAW_ID"}` performs an exact read, while
 other top-level fields filter JSON records in the selected ring. `--where` is
@@ -296,6 +312,12 @@ For scripts and reproducible examples, prefer the single-shot commands above.
 | `import-jsonl` | `--data=DIR --in=FILE` | Import JSONL. |
 | `describe-galaxy` | `--data=DIR --description=TEXT` | Set galaxy map description. |
 | `describe-ring` | `--data=DIR --ring=RING --description=TEXT` | Set ring map description. |
+
+`dump` / `import-jsonl` are the portable migration boundary while RocheDB's
+pre-v1.0 internal WAL format can still evolve. `import-jsonl` recognizes
+`rochedb.dump.v1` files produced by `dump`, and can also route external JSONL
+exports through `--ring-field`, `--payload-field`, and `--vec-field`. See
+[Data Migration](data-migration.md).
 
 ## Recovery Commands
 

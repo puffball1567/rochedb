@@ -41,6 +41,24 @@ suite "selection":
     expect ValueError: discard parseSelection("{ title")
     expect ValueError: discard parseSelection("{ a } b")
 
+  test "selection depth is bounded":
+    var deep = ""
+    for i in 0 ..< MaxSelectionDepth - 1:
+      deep.add "a" & $i & " { "
+    deep.add "leaf"
+    for _ in 0 ..< MaxSelectionDepth - 1:
+      deep.add " }"
+    check not parseSelection("{ " & deep & " }").isNil
+
+    var tooDeep = ""
+    for i in 0 .. MaxSelectionDepth:
+      tooDeep.add "a" & $i & " { "
+    tooDeep.add "leaf"
+    for _ in 0 .. MaxSelectionDepth:
+      tooDeep.add " }"
+    expect ValueError:
+      discard parseSelection("{ " & tooDeep & " }")
+
   test "prepared selection is validated once and reusable":
     let prepared = prepareSelection("{ title author { name } }")
     check prepared.source == "{ title author { name } }"

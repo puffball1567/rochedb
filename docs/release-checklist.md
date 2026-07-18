@@ -53,9 +53,11 @@ under the documented conditions.
 | Area | Required Item | Status |
 |---|---|---|
 | Core tests | `scripts/test_core.sh` passes | Done |
-| WAL recovery | Torn-tail, invalid length, invalid vector dim, partial transaction tests pass | Done |
+| WAL recovery | Versioned WAL magic/checksum, checksum mismatch refusal, torn-tail, invalid length, invalid vector dim, mid-file corruption refusal, partial transaction tests pass | Done |
+| Migration boundary | `roche dump` / `roche import-jsonl` round-trip RocheDB JSONL across data directories and preserve ring, payload, vector, and codec metadata | Done |
+| C ABI library | `scripts/build_capi.sh` is the canonical build and includes `-d:ssl`; CA-verified C ABI TLS smoke passes | Done |
 | Warp belt | WAL persistence, reopen recovery, ack cleanup, idempotent patch behavior | Done |
-| Cluster smoke | tx / failure retry / authz / RBAC / wire fuzz smoke scripts pass locally | Done |
+| Cluster smoke | tx / failure retry / authz fail-fast / RBAC / wire fuzz smoke scripts pass locally | Done |
 | FAISS bridge | `roche doctor` and FAISS bridge smoke are documented and reproducible | Done |
 | Drivers | Driver status table is accurate and does not overclaim package publication | Done |
 | Bench docs | Benchmark conditions, limitations, Redis/PostgreSQL wording, and environment are consistent | Done |
@@ -87,6 +89,7 @@ under the documented conditions.
 | Universe sync observability | Remote apply status and process-local apply/error counters are exposed through `universe-status --peers --metrics` | Done |
 | Universe sync authz/fuzz | `UAPPLY` authz, idempotency, malformed frame, oversized body, and invalid JSON cases pass | Done |
 | Universe sync restart | Remote target restart preserves applied keys, and duplicate delivery is skipped after restart | Done |
+| TLS transport | `scripts/cluster_tls_smoke.sh` passes for CA-verified TLS health, authenticated put/get, and plain-client rejection | Done |
 | Protocol compatibility | `WIREVER` exists and protocol compatibility notes document versioning and wire vector byte order | Done |
 | Driver byte order | C ABI versus TCP wire vector endian contract is documented | Done |
 | Documentation site | GitHub Pages workflow plus API / config / CLI entry pages exist under `docs/` | Done |
@@ -101,7 +104,7 @@ under the documented conditions.
 
 These are important, but should not block the first technical preview:
 
-- TLS for public-network deployments
+- certificate lifecycle automation for public-network deployments
 - dynamic cluster membership
 - cluster coordinator redundancy
 - multi-VM / multi-AZ benchmark
@@ -137,8 +140,10 @@ Before tagging:
 3. Run Docker Compose demo checks from `examples/compose/README.md`.
 4. Run selected Docker-backed driver smoke tests when Docker capacity allows.
 5. Run `nimble check`.
-6. Review benchmark wording.
-7. Review license and third-party notices.
-8. Remove generated binaries and temporary artifacts.
-9. Confirm README and status docs describe v0.2.0 as technical preview.
-10. Prepare the `nim-lang/packages` PR after the v0.2.0 tag exists.
+6. Run `scripts/cluster_wire_driver_smoke.sh`.
+7. Run `scripts/demo_smoke.sh`.
+8. Review benchmark wording.
+9. Review license and third-party notices.
+10. Remove generated binaries and temporary artifacts.
+11. Confirm README and status docs describe the release as a technical preview.
+12. Prepare the `nim-lang/packages` PR after the release tag exists.

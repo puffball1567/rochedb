@@ -10,20 +10,20 @@ matrix used before releases.
 | --- | --- | --- |
 | Orbital placement core | `tests/tcore.nim` | Unit-covered: angle wrapping, ownership, weighted arcs, virtual arc remap reduction, future arrival, conjunctions |
 | Field / halo movement | `tests/tfield.nim` | Unit-covered: field state and ring movement behavior |
-| Selection parser | `tests/tselect.nim` | Unit-covered: GraphQL-like selection parsing and projection basics |
-| Store / WAL | `tests/tstore.nim` | Unit-covered: codec persistence, torn-tail repair, transaction replay, compact, locality report, delete/backfill locality matrix, compact-before/after logical query invariants, backup/restore |
-| Public embedded API | `tests/tapi.nim` | Unit-covered: put/get, codec-aware projection, ring profiles, readRing filtering, typed filter builders, pagination, sorting, stellar neighborhood reads from either side, stellar attach/detach persistence, atomic batch rollback, cooperative ring/stellar locks, warp, universe sync |
-| CLI embedded usage | `scripts/cli_crud_smoke.sh` | Smoke-covered: help, put/get/query/list/count, readRing options, `--near` placement, `--stellar`, stellar attach/detach, `--subring` neighborhood narrowing, codec display, ring profile auto codec, shell, auth error text |
-| C ABI | `examples/cabi_contract.c`, `scripts/driver_compat.sh` | Contract-covered: ABI version, put/get, codec metadata, read ring page shape, validation errors, atlas |
-| Wire protocol | `tests/twire_driver.nim`, `scripts/cluster_wire_fuzz_smoke.sh` | Smoke-covered: driver-facing PUTR/GETID/QRYID, codec metadata negotiation, malformed frame behavior |
-| TLS transport | `scripts/cluster_tls_smoke.sh` | Smoke-covered: TLS-enabled `roched`/CLI build, authenticated TLS health, secret-key auth transport, JSON put/get, and plain-client rejection |
+| Selection parser | `tests/tselect.nim` | Unit-covered: GraphQL-like selection parsing, bounded selection depth, and projection basics |
+| Store / WAL | `tests/tstore.nim` | Unit-covered: codec persistence, time-orbit profile persistence, versioned WAL magic/checksum, checksum mismatch refusal, torn-tail repair, mid-file WAL corruption refusal, transaction replay, data-dir locking, compact, locality report, delete/backfill locality matrix, compact-before/after logical query invariants, backup/restore, encrypted backup verification temp isolation, universe sync applied-key retention replay; `-d:rocheTestFailpoints` covers poisoned write-path rejection after simulated durability failure |
+| Public embedded API | `tests/tapi.nim` | Unit-covered: put/get, codec-aware projection, ring profiles, time-orbit put/read, readRing filtering, typed filter builders, pagination, sorting, stellar neighborhood reads from either side, stellar attach/detach persistence, atomic batch rollback, cooperative ring/stellar locks with fencing values, warp, universe sync retry/dead-letter state |
+| CLI embedded usage | `scripts/cli_crud_smoke.sh` | Smoke-covered: help, put/get/query/list/count, readRing options, `--near` placement, `--stellar`, stellar attach/detach, `--subring` neighborhood narrowing, codec display, ring profile auto codec, time-orbit put/get, dump/import JSONL round-trip, shell, auth error text |
+| C ABI | `examples/cabi_contract.c`, `examples/cabi_tls_contract.c`, `scripts/cabi_tls_smoke.sh`, `scripts/driver_compat.sh` | Contract-covered: ABI version, put/get, codec metadata, read ring page shape, validation errors, handle close/reuse safety, atlas, CA-verified TLS-enabled connect path |
+| Wire protocol | `tests/twire_driver.nim`, `scripts/cluster_wire_driver_smoke.sh`, `scripts/cluster_wire_fuzz_smoke.sh` | Smoke-covered: driver-facing PUTR/GETID/QRYID, codec metadata negotiation, malformed frame behavior, oversized/deep JSON rejection, and `RETRIEVE` query-cost rejection |
+| TLS transport | `scripts/cluster_tls_smoke.sh` | Smoke-covered: TLS-enabled `roched`/CLI build, CA-verified authenticated TLS health, secret-key auth transport, JSON put/get, and plain-client rejection |
 | Cluster transactions | `tests/tcluster_tx.nim`, `scripts/cluster_tx_smoke.sh` | Smoke-covered: landing intent, apply retry, basic owner failure path |
-| Cluster auth / RBAC | `tests/tcluster_authz.nim`, `tests/tcluster_rbac.nim`, related scripts | Smoke-covered: username/password/secret key and role/ring-prefix authorization |
+| Cluster auth / RBAC | `tests/tcluster_authz.nim`, `tests/tcluster_rbac.nim`, related scripts | Smoke-covered: username/password/secret key, unusable auth config fail-fast, role/ring-prefix authorization, admin-only metrics, and minimal non-admin health |
 | Cluster failure | `tests/tcluster_failure.nim`, `scripts/cluster_failure_smoke.sh` | Smoke-covered: owner restart and retry boundaries |
-| Universe sync | `examples/universe_sync_demo.nim`, `scripts/universe_sync_*_smoke.sh` | Smoke-covered: local export/apply, remote apply, idempotency, malformed JSONL handling |
+| Universe sync | `examples/universe_sync_demo.nim`, `scripts/universe_sync_*_smoke.sh` | Smoke-covered: local export/apply, remote apply, idempotency, retry/dead-letter handling, applied-key retention, malformed JSONL handling |
 | Recovery | `scripts/recovery_smoke.sh` | Smoke-covered: backup/restore and recovery status paths |
 | Driver compatibility | `scripts/driver_compat.sh` | Optional smoke: C, C++, and published driver-facing C ABI paths when enabled |
-| Data model demos | `examples/stellar_data_model_demo.sh`, `examples/locality_layout_demo.sh` | Demo-covered: non-copy stellar visibility, narrowed stellar reads, original ring preservation after detach, compaction locality reporting, messy locality workloads, compact-before/after logical result invariants, and read micro-samples |
+| Data model demos | `scripts/demo_smoke.sh`, `examples/stellar_data_model_demo.sh`, `examples/locality_layout_demo.sh`, `examples/payload_codecs_demo.sh` | Demo-covered: non-copy stellar visibility, narrowed stellar reads, original ring preservation after detach, payload codec persistence, compaction locality reporting, messy locality workloads, compact-before/after logical result invariants, and read micro-samples |
 
 ## Release Gate
 
@@ -53,7 +53,7 @@ than hidden assumptions:
 
 - long-running cluster soak tests with node restarts during active traffic;
 - mixed-version wire protocol compatibility tests;
-- TLS deployment tests once transport TLS is added;
+- TLS certificate lifecycle, rotation, expiry, and deployment policy tests beyond the local CA smoke;
 - larger universe sync replay and backlog-pressure tests;
 - driver matrix CI across all published language repositories.
 
@@ -66,7 +66,7 @@ than hidden assumptions:
 | Atomic put | multi-record commit, staged write rollback on exception, persistence replay |
 | Atomic update | length mismatch rejection, missing ID rollback, previous payload preservation |
 | Atomic delete | successful multi-delete, missing ID rollback, previous payload preservation |
-| Ring lock | same-ring conflict, disjoint-ring coexistence, release, TTL expiry |
+| Ring lock | same-ring conflict, disjoint-ring coexistence, release, TTL expiry, token/fence change on reacquire |
 | Stellar lock | member-ring conflict, ring-to-stellar conflict, unrelated stellar coexistence |
 | Lock helper | `withRingLock` transaction body, `withStellarLock` release on exception |
 

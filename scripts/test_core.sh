@@ -13,6 +13,7 @@ run_nim_test() {
 }
 
 run_nim_test tests/tcore.nim
+run_nim_test tests/tauth.nim
 run_nim_test tests/tselect.nim
 run_nim_test tests/tfield.nim
 run_nim_test tests/tstore.nim

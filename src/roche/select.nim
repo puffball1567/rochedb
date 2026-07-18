@@ -7,6 +7,8 @@
 
 import std/[json, tables]
 
+const MaxSelectionDepth* = 64
+
 type Selection* = ref object
   ## 選択木。fields が空 = leaf（その部分木を丸ごと取る）。
   ## 木構造で循環はない（ARC 制約, 設計書 §13.3）。
@@ -21,7 +23,10 @@ type PreparedSelection* = object
 proc isIdentChar(c: char): bool =
   c in {'a'..'z', 'A'..'Z', '0'..'9', '_', '-', '.'}
 
-proc parseSel(src: string, pos: var int): Selection =
+proc parseSel(src: string, pos: var int, depth: int): Selection =
+  if depth > MaxSelectionDepth:
+    raise newException(ValueError, "selection: maximum depth " &
+      $MaxSelectionDepth & " exceeded")
   result = Selection()
   # 呼び出し時点で src[pos] == '{'
   inc pos
@@ -45,7 +50,7 @@ proc parseSel(src: string, pos: var int): Selection =
       while look < src.len and src[look] in {' ', '\t', '\n', '\r'}: inc look
       if look < src.len and src[look] == '{':
         pos = look
-        result.fields[name] = parseSel(src, pos)
+        result.fields[name] = parseSel(src, pos, depth + 1)
       else:
         result.fields[name] = nil   # leaf
   raise newException(ValueError, "selection: '}' で閉じていない")
@@ -56,7 +61,7 @@ proc parseSelection*(src: string): Selection =
   while pos < src.len and src[pos] in {' ', '\t', '\n', '\r'}: inc pos
   if pos >= src.len or src[pos] != '{':
     raise newException(ValueError, "selection: '{' で始まっていない")
-  result = parseSel(src, pos)
+  result = parseSel(src, pos, 1)
   while pos < src.len:
     if src[pos] notin {' ', '\t', '\n', '\r'}:
       raise newException(ValueError, "selection: '}' の後に余分な入力")

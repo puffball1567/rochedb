@@ -1,6 +1,6 @@
 # RocheDB
 
-**v0.6.0 Technical Preview / research OSS.** RocheDB is not yet presented as a
+**v0.7.0 Technical Preview / research OSS.** RocheDB is not yet presented as a
 production replacement for Redis, PostgreSQL, MongoDB, Apache Arrow, or a
 dedicated vector database. The current release target is a measurable prototype
 of ring/galaxy-oriented storage, retrieval, persistence, drivers, and cluster
@@ -58,7 +58,7 @@ corpus size toward semantic working-set size.
 - Detailed design: [docs/rochedb-design.md](docs/rochedb-design.md)
 - Feature status / roadmap: [docs/rochedb-status.md](docs/rochedb-status.md)
 - Release checklist: [docs/release-checklist.md](docs/release-checklist.md)
-- GitHub release draft: [docs/github-release-v0.6.0.md](docs/github-release-v0.6.0.md)
+- GitHub release draft: [docs/github-release-v0.7.0.md](docs/github-release-v0.7.0.md)
 - Driver / FFI roadmap: [docs/rochedb-driver-roadmap.md](docs/rochedb-driver-roadmap.md)
 - Driver installation guide: [docs/driver-installation.md](docs/driver-installation.md)
 - FAISS versioning policy: [docs/faiss-versioning.md](docs/faiss-versioning.md)
@@ -83,7 +83,7 @@ corpus size toward semantic working-set size.
 
 ## Installation
 
-RocheDB v0.6.x is a technical preview. The Nim package is available through
+RocheDB v0.7.x is a technical preview. The Nim package is available through
 Nimble. Rust, JavaScript / TypeScript, PHP, and Python drivers are published as
 language packages, while the remaining non-Nim language drivers are still
 repository-local foundations.
@@ -229,6 +229,9 @@ locality boundaries.
   boundary on every read.
 - Import routing: JSONL exports from MongoDB-like stores can be imported and
   routed by fields such as `tenant`, `category`, `region`, or `date`.
+- Migration boundary: `roche dump` / `roche import-jsonl` provide a
+  human-readable data path while the pre-v1.0 internal WAL format continues to
+  harden.
 - Galaxy isolation: separate services can use separate galaxies, data
   directories, credentials, and clusters while using the same implementation.
 - Explainable location: `locate(id)` and `locate(id, at=...)` make placement
@@ -334,7 +337,8 @@ version is:
 
 - RocheDB 3-node TCP with persistence enabled measured `46.8 us` per
   single-key read and `48.8 us` per single-key write in the PostgreSQL
-  comparison helper run.
+  comparison helper run. RocheDB strong durability was not part of that
+  PostgreSQL reference comparison.
 - PostgreSQL 14.23 on the same machine measured `68 us` for primary-key read
   and `80 us` for `synchronous_commit=off` single-row write over local TCP.
 - The PostgreSQL comparison also has a Docker-Docker reproduction helper; in
@@ -344,6 +348,8 @@ version is:
 - Local Redis 6.0.16 measured `42.85 us/op` for single GET and `3.53 us/op`
   for pipeline GET. RocheDB TCP GET measured `45.26 us/op`; RocheDB TCP BGET
   measured `1.48 us/op` in the same local single-client benchmark shape.
+  This Redis comparison uses RocheDB persistence disabled and measures simple
+  GET/BGET latency, not the working-set reduction benchmarks.
 - In the Docker-Docker Redis comparison, Redis 7 measured `48.74 us/op` for
   single GET and `2.06 us/op` for pipeline GET. RocheDB TCP GET measured
   `55.78 us/op`; RocheDB TCP BGET measured `1.71 us/op`.
@@ -451,7 +457,10 @@ bin/roched --id=0 --peers=127.0.0.1:7301 --data=/var/lib/roche --durability=stro
 Ring-prefix authorization:
 
 ```sh
-bin/roched --id=0 --peers=127.0.0.1:7301 --user=alice --password=secret --allow-ring=allowed
+bin/roched --id=0 --peers=127.0.0.1:7301 \
+  --user=alice \
+  --password-file=/run/secrets/roche_password \
+  --allow-ring=allowed
 ```
 
 Minimal RBAC plus ring-prefix authorization:
@@ -467,8 +476,12 @@ Encrypted backup / restore:
 
 ```sh
 roche backup-encrypted --data=data --backup=backup.enc --passphrase=change-me
-roche restore-encrypted --backup=backup.enc --data=restored --passphrase=change-me
+roche restore-encrypted --backup=backup.enc --data=restored --passphrase=change-me --durability=strong
 ```
+
+`backup`, `backup-encrypted`, `restore`, and `restore-encrypted` use
+temporary files plus atomic replacement. Snapshot files are fsynced before they
+are made visible.
 
 ### Driver Checks
 
@@ -515,10 +528,13 @@ that default.
 ### C ABI
 
 ```sh
-nim c --app:lib -d:release -o:lib/librochedb.so src/rochedb_capi.nim
+scripts/build_capi.sh
 gcc examples/demo.c -Iinclude -Llib -lrochedb -Wl,-rpath,'$ORIGIN/../lib' -o bin/demo
 bin/demo
 ```
+
+`scripts/build_capi.sh` is the canonical C ABI build and includes `-d:ssl`.
+Drivers that call `roche_connect_auth_tls` should use this library.
 
 ### FAISS Vector Backend
 

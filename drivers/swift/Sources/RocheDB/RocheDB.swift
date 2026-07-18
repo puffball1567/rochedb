@@ -59,7 +59,7 @@ public struct RetrieveResult: Equatable, Sendable {
 }
 
 public final class RocheDB {
-    public static let abiVersion: Int32 = 1
+    public static let abiVersion: Int32 = 2
     private static let runtimeInit: Void = {
         roche_init()
     }()

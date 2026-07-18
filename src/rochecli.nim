@@ -750,6 +750,36 @@ proc readPageNode(page: RocheReadPage, view: string): JsonNode =
     "nextCursor": page.nextCursor
   }
 
+proc timePageNode(page: RocheTimeReadPage, view, sortField: string,
+                  sortDirection: RocheReadSortDirection): JsonNode =
+  var items = newJArray()
+  for item in page.items:
+    let display = recordPayloadDisplay(item, view)
+    var node = %*{
+      "id": $item.id,
+      "rawId": item.id.cliIdString(),
+      "codec": item.codec.payloadCodecName,
+      "encoding": display["encoding"].getStr(),
+      "payload": display["payload"]
+    }
+    if display.hasKey("adapter"):
+      node["adapter"] = display["adapter"]
+    items.add node
+  var rings = newJArray()
+  for ring in page.rings:
+    rings.add %ring
+  %*{
+    "ring": page.ring,
+    "fromMs": page.fromMs,
+    "toMs": page.toMs,
+    "bucketsVisited": page.bucketsVisited,
+    "count": page.count,
+    "sort": sortField,
+    "sortDirection": sortDirection.sortDirectionName,
+    "rings": rings,
+    "items": items
+  }
+
 proc stellarPageNode(page: RocheStellarPage, view, sortField: string,
                      sortDirection: RocheReadSortDirection): JsonNode =
   var rings = newJArray()
@@ -933,6 +963,94 @@ proc runRingProfile(dataDir, peers, username, password, authToken, secretKey,
       "charset": profile.charset,
       "formatVersion": profile.formatVersion
     }).pretty
+  finally:
+    db.close()
+
+proc runTimeOrbit(dataDir, peers, username, password, authToken, secretKey,
+                  galaxy, ring: string, bits: int, bitsSet: bool,
+                  bucketMs: int64, bucketMsSet: bool,
+                  phase: uint64, phaseSet: bool, salt: string, saltSet: bool,
+                  tls: bool, tlsCaFile, tlsServerName: string,
+                  tlsInsecureSkipVerify: bool) =
+  let actualDataDir = requireCliTarget(dataDir, peers)
+  if ring.len == 0:
+    raise newException(ValueError, "time-orbit requires --ring=RING")
+  if peers.len > 0:
+    raise newException(ValueError,
+      "time-orbit is currently configured through the embedded store; remote profile administration is not available yet")
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
+                     galaxy, tls = tls, tlsCaFile = tlsCaFile,
+                     tlsServerName = tlsServerName,
+                     tlsInsecureSkipVerify = tlsInsecureSkipVerify)
+  try:
+    if bitsSet or bucketMsSet or phaseSet or saltSet:
+      let old = db.timeOrbitProfile(ring)
+      db.configureTimeOrbitProfile(ring, TimeOrbitProfile(
+        bits: if bitsSet: bits else: old.bits,
+        bucketMs: if bucketMsSet: bucketMs else: old.bucketMs,
+        phase: if phaseSet: phase else: old.phase,
+        salt: if saltSet: salt else: old.salt))
+    let profile = db.timeOrbitProfile(ring)
+    echo (%*{
+      "ring": ring,
+      "bits": profile.bits,
+      "bucketMs": profile.bucketMs,
+      "phase": $profile.phase,
+      "salt": profile.salt
+    }).pretty
+  finally:
+    db.close()
+
+proc runTimePut(dataDir, peers, username, password, authToken, secretKey,
+                galaxy, ring, payload, inPath: string, timestampMs: int64,
+                tls: bool, tlsCaFile, tlsServerName: string,
+                tlsInsecureSkipVerify: bool) =
+  let actualDataDir = requireCliTarget(dataDir, peers)
+  if peers.len > 0:
+    raise newException(ValueError,
+      "time-put is currently embedded-only because time-orbit profiles are local metadata")
+  if ring.len == 0:
+    raise newException(ValueError, "time-put requires --ring=RING")
+  if timestampMs < 0:
+    raise newException(ValueError, "time-put requires --time-ms=N")
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
+                     galaxy, tls = tls, tlsCaFile = tlsCaFile,
+                     tlsServerName = tlsServerName,
+                     tlsInsecureSkipVerify = tlsInsecureSkipVerify)
+  try:
+    let id = db.putTime(cliPayload(payload, inPath), ring, timestampMs)
+    let profile = db.timeOrbitProfile(ring)
+    let targetRing = timeOrbitRing(ring, profile, timestampMs)
+    echo &"time-put OK id={id} rawId={cliIdString(id)} ring={targetRing} baseRing={ring} timeMs={timestampMs}"
+  finally:
+    db.close()
+
+proc runTimeGet(dataDir, peers, username, password, authToken, secretKey,
+                galaxy, ring, filterArg, view, selection: string,
+                fromMs, toMs: int64, limit: int, sortArg, rsortArg: string,
+                tls: bool, tlsCaFile, tlsServerName: string,
+                tlsInsecureSkipVerify: bool) =
+  let actualDataDir = requireCliTarget(dataDir, peers)
+  if peers.len > 0:
+    raise newException(ValueError,
+      "time-get is currently embedded-only because time-orbit profiles are local metadata")
+  if ring.len == 0:
+    raise newException(ValueError, "time-get requires --ring=RING")
+  if fromMs < 0 or toMs < 0:
+    raise newException(ValueError, "time-get requires --from-ms=N --to-ms=N")
+  let sortOptions = readSortOptions(sortArg, rsortArg)
+  var db = openCliDb(actualDataDir, peers, username, password, authToken, secretKey,
+                     galaxy, tls = tls, tlsCaFile = tlsCaFile,
+                     tlsServerName = tlsServerName,
+                     tlsInsecureSkipVerify = tlsInsecureSkipVerify)
+  try:
+    let page = db.readTime(ring, fromMs, toMs, RocheReadOptions(
+      filter: parseFilter(filterArg),
+      selection: selection,
+      limit: limit,
+      sortField: sortOptions.field,
+      sortDirection: sortOptions.direction))
+    echo page.timePageNode(view, sortOptions.field, sortOptions.direction).pretty
   finally:
     db.close()
 
@@ -1492,10 +1610,10 @@ proc runMemoryPressureBench(n, ringCount, queries, budget, payloadBytes: int) =
   echo "  note      candidate_memory is estimated scanned working-set bytes, not whole-process RSS"
   db.close()
 
-proc runCompact(dataDir: string) =
+proc runCompact(dataDir: string, durability: RocheDurability) =
   if dataDir.len == 0:
     raise newException(ValueError, "compact requires --data=DIR")
-  var db = open(dataDir = dataDir)
+  var db = open(dataDir = dataDir, durability = durability)
   let stats = db.compact()
   db.close()
   echo &"compact OK before={stats.beforeBytes} after={stats.afterBytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames} clusterTx={stats.clusterTx}"
@@ -1521,36 +1639,40 @@ proc runLocality(dataDir: string, metricsFormat: bool) =
   else:
     echo &"locality OK persistent={report.persistent} walBytes={report.walBytes} totalParticleRecords={report.totalParticleRecords} liveParticleRecords={report.liveParticleRecords} deadParticleRecords={report.deadParticleRecords} ringCount={report.ringCount} ringRuns={report.ringRuns} fragmentedRings={report.fragmentedRings} avgRunRecords={report.avgRunRecords:.3f} maxRunRecords={report.maxRunRecords} localityScore={report.localityScore:.6f}"
 
-proc runBackup(dataDir, backupDir: string) =
+proc runBackup(dataDir, backupDir: string, durability: RocheDurability) =
   if dataDir.len == 0 or backupDir.len == 0:
     raise newException(ValueError, "backup requires --data=DIR --backup=DIR")
-  var db = open(dataDir = dataDir)
+  var db = open(dataDir = dataDir, durability = durability)
   let stats = db.backup(backupDir)
   db.close()
   echo &"backup OK bytes={stats.bytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames} from={stats.source} to={stats.destination}"
 
-proc runRestore(backupDir, dataDir: string, overwrite: bool) =
+proc runRestore(backupDir, dataDir: string, overwrite: bool,
+                durability: RocheDurability) =
   if dataDir.len == 0 or backupDir.len == 0:
     raise newException(ValueError, "restore requires --backup=DIR --data=DIR")
-  let stats = restoreBackup(backupDir, dataDir, overwrite = overwrite)
+  let stats = restoreBackup(backupDir, dataDir, overwrite = overwrite,
+                            durability = durability)
   echo &"restore OK bytes={stats.bytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames} from={stats.source} to={stats.destination}"
 
-proc runBackupEncrypted(dataDir, backupDir, passphrase: string) =
+proc runBackupEncrypted(dataDir, backupDir, passphrase: string,
+                        durability: RocheDurability) =
   if dataDir.len == 0 or backupDir.len == 0 or passphrase.len == 0:
     raise newException(ValueError,
       "backup-encrypted requires --data=DIR --backup=DIR --passphrase=TEXT")
-  var db = open(dataDir = dataDir)
+  var db = open(dataDir = dataDir, durability = durability)
   let stats = db.backupEncrypted(backupDir, passphrase)
   db.close()
   echo &"backup-encrypted OK bytes={stats.bytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames} from={stats.source} to={stats.destination}"
 
 proc runRestoreEncrypted(backupDir, dataDir, passphrase: string,
-                         overwrite: bool) =
+                         overwrite: bool, durability: RocheDurability) =
   if dataDir.len == 0 or backupDir.len == 0 or passphrase.len == 0:
     raise newException(ValueError,
       "restore-encrypted requires --backup=DIR --data=DIR --passphrase=TEXT")
   let stats = restoreEncryptedBackup(backupDir, dataDir, passphrase,
-                                     overwrite = overwrite)
+                                     overwrite = overwrite,
+                                     durability = durability)
   echo &"restore-encrypted OK bytes={stats.bytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames} from={stats.source} to={stats.destination}"
 
 type
@@ -1968,7 +2090,7 @@ proc replaceRecoveryLog(stageDir, dataDir: string) =
     raise
 
 proc runRecoveryRestore(archives: seq[string], dataDir, passphrase: string,
-                        overwrite: bool) =
+                        overwrite: bool, durability: RocheDurability) =
   if dataDir.len == 0 or archives.len == 0:
     raise newException(ValueError,
       "recovery-restore requires --mirror=DIR [--mirror=DIR...] --data=DIR")
@@ -1996,9 +2118,11 @@ proc runRecoveryRestore(archives: seq[string], dataDir, passphrase: string,
   try:
     if chosen.encrypted:
       discard restoreEncryptedBackup(chosen.archive, stageDir, passphrase,
-                                     overwrite = true)
+                                     overwrite = true,
+                                     durability = durability)
     else:
-      discard restoreBackup(chosen.archive, stageDir, overwrite = true)
+      discard restoreBackup(chosen.archive, stageDir, overwrite = true,
+                            durability = durability)
     replaceRecoveryLog(stageDir, dataDir)
   finally:
     if dirExists(stageDir):
@@ -2036,9 +2160,17 @@ proc universeSyncEventNode(event: UniverseSyncEvent): JsonNode =
     "op": event.op,
     "logicalKey": event.logicalKey,
     "payload": event.payload,
+    "codec": event.codec.payloadCodecName,
     "vec": event.vec,
     "timestamp": event.timestamp,
-    "originSeq": event.originSeq
+    "applyAfter": event.applyAfter,
+    "originSeq": event.originSeq,
+    "attempts": event.attempts,
+    "maxAttempts": event.maxAttempts,
+    "retryAt": event.retryAt,
+    "deadLetter": event.deadLetter,
+    "acknowledged": event.acknowledged,
+    "error": event.error
   }
 
 proc parseUniverseSyncEvent(node: JsonNode): UniverseSyncEvent =
@@ -2063,9 +2195,17 @@ proc parseUniverseSyncEvent(node: JsonNode): UniverseSyncEvent =
     op: node{"op"}.getStr("put"),
     logicalKey: node{"logicalKey"}.getStr(),
     payload: node{"payload"}.getStr(),
+    codec: parsePayloadCodec(node{"codec"}.getStr("raw")),
     vec: vec,
     timestamp: node{"timestamp"}.getFloat(),
-    originSeq: node{"originSeq"}.getBiggestInt().uint64)
+    applyAfter: node{"applyAfter"}.getFloat(),
+    originSeq: node{"originSeq"}.getBiggestInt().uint64,
+    attempts: node{"attempts"}.getInt(),
+    maxAttempts: node{"maxAttempts"}.getInt(8),
+    retryAt: node{"retryAt"}.getFloat(),
+    deadLetter: node{"deadLetter"}.getBool(),
+    acknowledged: node{"acknowledged"}.getBool(),
+    error: node{"error"}.getStr())
 
 proc runUniverseExport(dataDir, outPath: string) =
   if dataDir.len == 0:
@@ -2127,7 +2267,7 @@ proc runUniverseSync(dataDir, targetDataDir: string, pruneAcked: bool) =
   var target = open(dataDir = targetDataDir)
   try:
     let stats = syncUniverseOnce(source, target, pruneAcked = pruneAcked)
-    echo &"universe-sync OK read={stats.read} applied={stats.applied} skipped={stats.skipped} acked={stats.acked} pruned={stats.pruned} errors={stats.errors} source={dataDir} target={targetDataDir}"
+    echo &"universe-sync OK read={stats.read} applied={stats.applied} skipped={stats.skipped} acked={stats.acked} pruned={stats.pruned} errors={stats.errors} deadLetter={stats.deadLetter} source={dataDir} target={targetDataDir}"
   finally:
     target.close()
     source.close()
@@ -2147,24 +2287,35 @@ proc runUniverseSyncRemote(dataDir, peers, username, password, authToken,
                                 tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   var stats = UniverseSyncStats()
   try:
-    for event in source.universeSyncEvents():
+    for event in source.universeSyncEvents(includeDeadLetter = false):
       inc stats.read
+      if not universeSyncDispatchable(event):
+        inc stats.skipped
+        continue
       try:
         let status = client.universeApplyReq(0, $event.universeSyncEventNode())
         if status == "APPLIED":
           inc stats.applied
-        else:
+        elif status == "SKIPPED":
           inc stats.skipped
+        elif status == "DELAYED":
+          inc stats.skipped
+          continue
+        else:
+          raise newException(IOError, "invalid universe apply status: " & status)
         discard source.ackUniverseSyncEvent(event.id)
         inc stats.acked
       except CatchableError:
         inc stats.errors
+        let updated = source.markUniverseSyncFailure(event.id, getCurrentExceptionMsg())
+        if updated.deadLetter:
+          inc stats.deadLetter
     if pruneAcked:
       stats.pruned = source.pruneAckedUniverseSyncEvents()
   finally:
     client.close()
     source.close()
-  echo &"universe-sync OK read={stats.read} applied={stats.applied} skipped={stats.skipped} acked={stats.acked} pruned={stats.pruned} errors={stats.errors} source={dataDir} targetPeers={peers}"
+  echo &"universe-sync OK read={stats.read} applied={stats.applied} skipped={stats.skipped} acked={stats.acked} pruned={stats.pruned} errors={stats.errors} deadLetter={stats.deadLetter} source={dataDir} targetPeers={peers}"
 
 proc runUniverseStatus(dataDir, peers, username, password, authToken,
                        secretKey, galaxy: string, metricsFormat: bool,
@@ -2175,12 +2326,18 @@ proc runUniverseStatus(dataDir, peers, username, password, authToken,
     var pending = 0
     var acked = 0
     var errors = 0
+    var retrying = 0
+    var dead = 0
     try:
       for event in db.universeSyncEvents(includeAcknowledged = true):
         if event.acknowledged:
           inc acked
+        elif event.deadLetter:
+          inc dead
         else:
           inc pending
+          if event.retryAt > epochTime():
+            inc retrying
         if event.error.len > 0:
           inc errors
     finally:
@@ -2188,9 +2345,11 @@ proc runUniverseStatus(dataDir, peers, username, password, authToken,
     if metricsFormat:
       echo &"universeSyncPending {pending}"
       echo &"universeSyncAcked {acked}"
+      echo &"universeSyncRetrying {retrying}"
+      echo &"universeSyncDeadLetter {dead}"
       echo &"universeSyncErrors {errors}"
     else:
-      echo &"universe-status OK source=local pending={pending} acked={acked} errors={errors} data={dataDir}"
+      echo &"universe-status OK source=local pending={pending} acked={acked} retrying={retrying} deadLetter={dead} errors={errors} data={dataDir}"
   elif peers.len > 0:
     let parsedPeers = parsePeers(peers)
     let client = newClusterClient(parsedPeers, username, password,
@@ -2236,6 +2395,21 @@ proc runUniverseStatus(dataDir, peers, username, password, authToken,
     raise newException(ValueError,
       "universe-status requires --data=DIR or --peers=host:port,...")
 
+proc parseDurability(value: string): RocheDurability =
+  case value
+  of "buffered": durBuffered
+  of "strong": durStrong
+  else:
+    raise newException(ValueError,
+      "--durability must be 'buffered' or 'strong'")
+
+proc readSecretFile(path, label: string): string =
+  if path.len == 0:
+    return ""
+  result = readFile(path).strip()
+  if result.len == 0:
+    raise newException(ValueError, label & " file is empty")
+
 proc printHelp() =
   echo "RocheDB command-line client"
   echo ""
@@ -2243,6 +2417,9 @@ proc printHelp() =
   echo "  roche put [--data=DIR | --peers=host:port,...] --ring=RING [--near=BASE_RING] [--payload=TEXT | --in=FILE] [--codec=auto|raw|json|nif|bif]"
   echo "  roche get [--data=DIR | --peers=host:port,...] [--ring=RING | --stellar=RING] [--subring=orders,billing] [--filter='{\"id\":\"RAW_ID\"}'] [--selection=SEL] [--limit=N] [--cursor=CURSOR] [--sort=id|time] [--rsort=id|time] [--pagination=on|off] [--page=N] [--pagelimit=N]"
   echo "  roche stellar attach|detach|list --stellar=RING [--ring=RING]"
+  echo "  roche time-orbit --data=DIR --ring=RING [--bucket-ms=N] [--bits=60] [--phase=N] [--salt=TEXT]"
+  echo "  roche time-put --data=DIR --ring=RING --time-ms=N [--payload=TEXT | --in=FILE]"
+  echo "  roche time-get --data=DIR --ring=RING --from-ms=N --to-ms=N [--filter=JSON] [--selection=SEL] [--limit=N]"
   echo "  roche query [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{\"id\":\"RAW_ID\"}' | --id=RAW_ID] --selection=SEL"
   echo "  roche list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]"
   echo "  roche count-ring [--data=DIR | --peers=host:port,...] --ring=RING"
@@ -2253,8 +2430,8 @@ proc printHelp() =
   echo "  roche driver list|info|install [LANG] [--manifest-path=FILE] [--execute]"
   echo "  roche compact --data=DIR"
   echo "  roche locality --data=DIR [--metrics]"
-  echo "  roche backup --data=DIR --backup=DIR"
-  echo "  roche restore --backup=DIR --data=DIR [--overwrite]"
+  echo "  roche backup --data=DIR --backup=DIR [--durability=buffered|strong]"
+  echo "  roche restore --backup=DIR --data=DIR [--overwrite] [--durability=buffered|strong]"
   echo "  roche dump --data=DIR [--out=FILE] [--no-vectors]"
   echo "  roche import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING]"
   echo "  roche universe-sync --data=SOURCE_DIR [--target-data=TARGET_DIR | --peers=host:port,...] [--prune-acked]"
@@ -2269,6 +2446,7 @@ proc printHelp() =
   echo "Local commands use --data=DIR, ROCHE_DATA, or ./data by default."
   echo "Cluster commands use --peers=host:port,... or --config=FILE."
   echo "ROCHE_CONFIG can point to the same JSON config file."
+  echo "Auth can use --user/--password-file/--secret-key-file or ROCHE_USER, ROCHE_PASSWORD, ROCHE_SECRET_KEY, ROCHE_AUTH_TOKEN."
   echo "Get uses --view=auto by default; payload codec is inferred from stored metadata."
   echo "--where is accepted as an alias for --filter. --id is a low-level shortcut for scripts."
   echo "Cluster get/query requires --ring=RING so the CLI can reconstruct ring placement metadata."
@@ -2312,8 +2490,11 @@ proc main() =
   var readonly = false
   var username = ""
   var password = ""
+  var passwordFile = ""
   var authToken = ""
+  var authTokenFile = ""
   var secretKey = ""
+  var secretKeyFile = ""
   var tls = false
   var tlsCaFile = ""
   var tlsServerName = ""
@@ -2346,6 +2527,18 @@ proc main() =
   var pageLimit = 20
   var depth = 1
   var branchBudget = 0
+  var durability = durBuffered
+  var timeMs: int64 = -1
+  var fromMs: int64 = -1
+  var toMs: int64 = -1
+  var timeOrbitBits = 60
+  var timeOrbitBitsSet = false
+  var timeOrbitBucketMs: int64 = 60_000
+  var timeOrbitBucketMsSet = false
+  var timeOrbitPhase = 0'u64
+  var timeOrbitPhaseSet = false
+  var timeOrbitSalt = ""
+  var timeOrbitSaltSet = false
   var positionals: seq[string] = @[]
 
   for kind, key, val in getopt():
@@ -2362,10 +2555,16 @@ proc main() =
     username = jsonStringOpt(cfg, "user", username)
     username = jsonStringOpt(cfg, "username", username)
     password = jsonStringOpt(cfg, "password", password)
+    passwordFile = jsonStringOpt(cfg, "passwordFile", passwordFile)
+    passwordFile = jsonStringOpt(cfg, "password-file", passwordFile)
     authToken = jsonStringOpt(cfg, "authToken", authToken)
     authToken = jsonStringOpt(cfg, "auth-token", authToken)
+    authTokenFile = jsonStringOpt(cfg, "authTokenFile", authTokenFile)
+    authTokenFile = jsonStringOpt(cfg, "auth-token-file", authTokenFile)
     secretKey = jsonStringOpt(cfg, "secretKey", secretKey)
     secretKey = jsonStringOpt(cfg, "secret-key", secretKey)
+    secretKeyFile = jsonStringOpt(cfg, "secretKeyFile", secretKeyFile)
+    secretKeyFile = jsonStringOpt(cfg, "secret-key-file", secretKeyFile)
     galaxy = jsonStringOpt(cfg, "galaxy", galaxy)
     tls = jsonBoolOpt(cfg, "tls", tls)
     tlsCaFile = jsonStringOpt(cfg, "tlsCaFile", tlsCaFile)
@@ -2376,6 +2575,8 @@ proc main() =
                                         tlsInsecureSkipVerify)
     tlsInsecureSkipVerify = jsonBoolOpt(cfg, "tls-insecure-skip-verify",
                                         tlsInsecureSkipVerify)
+    if cfg.hasKey("durability") and cfg["durability"].kind == JString:
+      durability = parseDurability(cfg["durability"].getStr())
 
   for kind, key, val in getopt():
     case kind
@@ -2428,6 +2629,24 @@ proc main() =
       of "pagelimit", "page-limit": pageLimit = parseInt(val)
       of "depth": depth = parseInt(val)
       of "branch-budget": branchBudget = parseInt(val)
+      of "time-ms":
+        timeMs = parseBiggestInt(val).int64
+      of "from-ms":
+        fromMs = parseBiggestInt(val).int64
+      of "to-ms":
+        toMs = parseBiggestInt(val).int64
+      of "bits":
+        timeOrbitBits = parseInt(val)
+        timeOrbitBitsSet = true
+      of "bucket-ms":
+        timeOrbitBucketMs = parseBiggestInt(val).int64
+        timeOrbitBucketMsSet = true
+      of "phase":
+        timeOrbitPhase = parseBiggestUInt(val).uint64
+        timeOrbitPhaseSet = true
+      of "salt":
+        timeOrbitSalt = val
+        timeOrbitSaltSet = true
       of "select": selection = val
       of "selection": selection = val
       of "cursor": cursor = val
@@ -2447,8 +2666,12 @@ proc main() =
       of "no-vectors": includeVectors = false
       of "user": username = val
       of "password": password = val
+      of "password-file": passwordFile = val
       of "auth-token": authToken = val
+      of "auth-token-file": authTokenFile = val
       of "secret-key": secretKey = val
+      of "secret-key-file": secretKeyFile = val
+      of "durability": durability = parseDurability(val)
       of "tls": tls = true
       of "tls-ca": tlsCaFile = val
       of "tls-server-name": tlsServerName = val
@@ -2477,6 +2700,20 @@ proc main() =
         requiredHealthySet = true
       else: discard
     else: discard
+  if passwordFile.len > 0:
+    password = readSecretFile(passwordFile, "password")
+  if authTokenFile.len > 0:
+    authToken = readSecretFile(authTokenFile, "auth-token")
+  if secretKeyFile.len > 0:
+    secretKey = readSecretFile(secretKeyFile, "secret-key")
+  if username.len == 0:
+    username = getEnv("ROCHE_USER")
+  if password.len == 0:
+    password = getEnv("ROCHE_PASSWORD")
+  if authToken.len == 0:
+    authToken = getEnv("ROCHE_AUTH_TOKEN")
+  if secretKey.len == 0:
+    secretKey = getEnv("ROCHE_SECRET_KEY")
   if help or cmd.len == 0:
     printHelp()
     quit 0
@@ -2499,6 +2736,22 @@ proc main() =
     runStellar(dataDir, peers, username, password, authToken, secretKey, galaxy,
                positionals, stellarName, ringName, tls, tlsCaFile,
                tlsServerName, tlsInsecureSkipVerify)
+  of "time-orbit":
+    runTimeOrbit(dataDir, peers, username, password, authToken, secretKey,
+                 galaxy, ringName, timeOrbitBits, timeOrbitBitsSet,
+                 timeOrbitBucketMs, timeOrbitBucketMsSet, timeOrbitPhase,
+                 timeOrbitPhaseSet, timeOrbitSalt, timeOrbitSaltSet, tls,
+                 tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
+  of "time-put":
+    runTimePut(dataDir, peers, username, password, authToken, secretKey, galaxy,
+               ringName, payload, inPath, timeMs, tls, tlsCaFile,
+               tlsServerName, tlsInsecureSkipVerify)
+  of "time-get":
+    let readFilter = effectiveFilter(filterArg, whereArg)
+    runTimeGet(dataDir, peers, username, password, authToken, secretKey, galaxy,
+               ringName, readFilter, view, selection, fromMs, toMs, limit,
+               sortArg, rsortArg, tls, tlsCaFile, tlsServerName,
+               tlsInsecureSkipVerify)
   of "query":
     let readFilter = effectiveFilter(filterArg, whereArg)
     runQuery(dataDir, peers, username, password, authToken, secretKey, galaxy,
@@ -2558,13 +2811,15 @@ proc main() =
     let driverArgs = if positionals.len > 1: positionals[1 .. ^1] else: @[]
     runDriver(driverArgs, driverManifestPath, driverProjectDir,
               executeDriverInstall)
-  of "compact": runCompact(dataDir)
+  of "compact": runCompact(dataDir, durability)
   of "locality": runLocality(dataDir, metricsFormat)
-  of "backup": runBackup(dataDir, backupDir)
-  of "restore": runRestore(backupDir, dataDir, overwrite)
-  of "backup-encrypted": runBackupEncrypted(dataDir, backupDir, backupPassphrase)
+  of "backup": runBackup(dataDir, backupDir, durability)
+  of "restore": runRestore(backupDir, dataDir, overwrite, durability)
+  of "backup-encrypted": runBackupEncrypted(dataDir, backupDir, backupPassphrase,
+                                            durability)
   of "restore-encrypted": runRestoreEncrypted(backupDir, dataDir,
-                                              backupPassphrase, overwrite)
+                                              backupPassphrase, overwrite,
+                                              durability)
   of "recovery-backup":
     let recoveryConfig = recoveryUniversesFromInputs(mirrors, universeConfig,
                                                     universeName, galaxy,
@@ -2594,7 +2849,7 @@ proc main() =
                                                     failureDomain, authRef, priority,
                                                     snapshotSeq, readonly)
     runRecoveryRestore(recoveryArchives(recoveryConfig.universes), dataDir,
-                       backupPassphrase, overwrite)
+                       backupPassphrase, overwrite, durability)
   of "dump": runDump(dataDir, outPath, includeVectors)
   of "import-jsonl": runImportJsonl(dataDir, inPath, defaultRing, ringField,
                                     ringPrefix, payloadField, vecField, n)

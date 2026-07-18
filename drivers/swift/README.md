@@ -19,7 +19,7 @@ let atlas = try db.atlas(queryVector: [1.0, 0.0], maxCentroidDims: 8)
 Build the RocheDB shared library first:
 
 ```bash
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
+scripts/build_capi.sh
 drivers/swift/docker-test.sh
 ```
 

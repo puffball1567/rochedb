@@ -26,7 +26,7 @@ _ = ok
 Build the RocheDB shared library first:
 
 ```bash
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
+scripts/build_capi.sh
 cd drivers/go
 go test ./...
 ```

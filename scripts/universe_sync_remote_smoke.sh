@@ -7,6 +7,7 @@ PEERS="127.0.0.1:${BASE_PORT},127.0.0.1:$((BASE_PORT + 1)),127.0.0.1:$((BASE_POR
 WORK="${TMPDIR:-/tmp}/rochedb-universe-sync-remote-smoke-$$"
 SOURCE="$WORK/source"
 RETRY_SOURCE="$WORK/retry-source"
+DELAY_SOURCE="$WORK/delay-source"
 TARGET="$WORK/target"
 PIDS=()
 
@@ -63,6 +64,7 @@ src/rochecli universe-status --data="$SOURCE" | grep -q "pending=1"
 
 echo "[universe-remote] start target server"
 start_target
+sleep 1.2
 
 echo "[universe-remote] sync source to remote target"
 src/rochecli universe-sync --data="$SOURCE" --peers="$PEERS" --prune-acked |
@@ -82,5 +84,11 @@ src/rochecli universe-sync --data="$RETRY_SOURCE" --peers="$PEERS" --prune-acked
   grep -q "read=1 applied=0 skipped=1 acked=1 pruned=1 errors=0"
 src/rochecli universe-status --peers="$PEERS" --metrics | grep -q "universeApplySkipped 1"
 src/rochecli universe-status --data="$RETRY_SOURCE" | grep -q "pending=0"
+
+echo "[universe-remote] delayed remote apply stays pending"
+bin/universe_sync_demo --source="$DELAY_SOURCE" --target="$TARGET" --mode=enqueue --delay-ms=60000
+src/rochecli universe-sync --data="$DELAY_SOURCE" --peers="$PEERS" --prune-acked |
+  grep -q "read=1 applied=0 skipped=1 acked=0 pruned=0 errors=0"
+src/rochecli universe-status --data="$DELAY_SOURCE" | grep -q "pending=1"
 
 echo "[universe-remote] OK"

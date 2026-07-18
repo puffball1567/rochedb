@@ -55,7 +55,9 @@ Run one server:
 bin/roched --id=0 --peers=127.0.0.1:7301 \
   --data=.data/app-main \
   --galaxy=app-main \
-  --user=app --password=change-me --secret-key=change-me-too
+  --user=app \
+  --password-file=/run/secrets/roche_app_password \
+  --secret-key-file=/run/secrets/roche_app_secret_key
 ```
 
 Use rings to express locality:
@@ -92,10 +94,14 @@ Each galaxy can run as a separate RocheDB instance:
 
 ```sh
 bin/roched --id=0 --peers=127.0.0.1:7311 --data=.data/training-data \
-  --galaxy=training-data --user=train --password=... --secret-key=...
+  --galaxy=training-data --user=train \
+  --password-file=/run/secrets/roche_train_password \
+  --secret-key-file=/run/secrets/roche_train_secret_key
 
 bin/roched --id=0 --peers=127.0.0.1:7321 --data=.data/prompt-cache \
-  --galaxy=prompt-cache --user=cache --password=... --secret-key=...
+  --galaxy=prompt-cache --user=cache \
+  --password-file=/run/secrets/roche_cache_password \
+  --secret-key-file=/run/secrets/roche_cache_secret_key
 ```
 
 Choose this when compromise of one dataset must not imply compromise of the
