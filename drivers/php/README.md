@@ -19,9 +19,12 @@ $db->close();
 Build the RocheDB shared library first:
 
 ```bash
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
+scripts/build_capi.sh
 drivers/php/docker-test.sh
 ```
+
+The build script enables TLS support in `lib/librochedb.so`, which is required
+for `roche_connect_auth_tls`-based drivers.
 
 Local PHP must have `ext-ffi` enabled. If it does not, use `drivers/php/docker-test.sh`;
 it builds a small `php:8.3-cli` based image with FFI enabled.

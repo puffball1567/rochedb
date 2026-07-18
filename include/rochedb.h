@@ -68,14 +68,28 @@ typedef struct roche_batch_result {
 #define ROCHE_CODEC_NIF  2
 #define ROCHE_CODEC_BIF  3
 
-/* ABI バージョンと直近エラー。last_error はスレッドローカル相当で、所有権は呼び出し側にない。 */
+/* ABI バージョンと直近エラー。last_error はスレッドローカル相当で、所有権は呼び出し側にない。
+ * Returned text is valid until the next RocheDB C ABI call on the same thread.
+ */
 int         roche_abi_version(void);
 const char *roche_last_error(void);
 
-/* Nim ランタイム初期化。プロセスで最初に一度呼ぶ。 */
+/* Nim ランタイム初期化。冪等なので、driver setup paths may call it more than once. */
 void   roche_init(void);
 
-/* DB を開く / 閉じる。nodes はノード数（8 が無難な既定）。失敗時 NULL。 */
+/* DB を開く / 閉じる。nodes はノード数（8 が無難な既定）。失敗時 NULL。
+ * Handles are opaque and become invalid after roche_close. Reusing a closed or
+ * unknown handle fails closed rather than dereferencing it.
+ *
+ * Thread-safety contract:
+ * - roche_init() is idempotent.
+ * - roche_last_error() is thread-local in practice; copy it before another
+ *   RocheDB C ABI call on the same thread.
+ * - Do not call roche_close() concurrently with any other operation on the same
+ *   handle.
+ * - If an application or driver shares one handle across threads, serialize
+ *   calls around that handle. Separate handles may be used independently.
+ */
 void  *roche_open(int nodes);
 /* 永続化つきで開く。dir の追記ログに書き、再オープンで復元される。 */
 void  *roche_open_dir(int nodes, const char *dir);

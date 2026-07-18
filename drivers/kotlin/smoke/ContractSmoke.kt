@@ -5,7 +5,7 @@ private fun checkState(condition: Boolean, message: String) {
 }
 
 fun main() {
-    checkState(RocheDb.abiVersion == 1, "unexpected ABI version")
+    checkState(RocheDb.abiVersion == 2, "unexpected ABI version")
 
     RocheDb.open(4).use { db ->
         db.configureRing("docs", 45.0)
@@ -38,4 +38,3 @@ fun main() {
 
     println("Kotlin driver OK")
 }
-

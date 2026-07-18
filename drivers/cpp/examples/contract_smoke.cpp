@@ -6,7 +6,7 @@
 #include "rochedb/rochedb.hpp"
 
 int main() {
-  assert(rochedb::abiVersion() == 1);
+  assert(rochedb::abiVersion() == ROCHE_ABI_VERSION);
 
   auto db = rochedb::Db::open(4);
   db.configureRing("docs", 45.0);
@@ -47,4 +47,3 @@ int main() {
   std::cout << "C++ driver OK\n";
   return 0;
 }
-

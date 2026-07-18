@@ -25,7 +25,7 @@
 ##   TXRESERVE <txid> <ringKey> <period> <head>\n              → OK <seq> <tWrite>\n
 ##   TXCOMMIT <txid> <n>\n repeated: <parent> ... <vecDim>\n<payload><vec> → OK\n
 ##   TXSTATUS <txid>\n                                             → OK APPLIED|PENDING|UNKNOWN\n
-##   UAPPLY <len>\n<json event>                                    → UOK APPLIED|SKIPPED
+##   UAPPLY <len>\n<json event>                                    → UOK APPLIED|SKIPPED|DELAYED
 ##   USTATUS\n
 ##       → USTATUS <pending> <appliedKeys> <appliedOps> <skippedOps> <errors> <forwarded> <lastOk> <lastError>
 ##   WIREVER\n                                                     → WIREVER <version>
@@ -262,29 +262,35 @@ proc bytesVec*(bytes: string, dim: int): seq[float32] =
     copyMem(addr result[i], unsafeAddr bits, sizeof(uint32))
     pos += 4
 
+proc splitHeaderLine(line: string): seq[string] =
+  let clean = line.strip(chars = {'\r', '\n'})
+  if clean.len == 0:
+    raise newException(IOError, "接続が切断された")
+  if clean.len > MaxWireHeaderBytes:
+    raise newException(ValueError, "wire header exceeds max bytes")
+  result = clean.splitWhitespace()
+  if result.len == 0:
+    raise newException(ValueError, "empty wire header")
+
 proc readHeader*(sock: Socket, timeoutMs = 10_000): seq[string] =
   let fd = sock.getFd.int
   if fd notin secureConns:
     let line = sock.recvLine(timeout = timeoutMs)
     if line.len == 0 or line == "\r\n":
       raise newException(IOError, "接続が切断された")
-    if line.len > MaxWireHeaderBytes:
-      raise newException(ValueError, "wire header exceeds max bytes")
-    return line.split(' ')
+    return splitHeaderLine(line)
 
   while true:
     var st = secureConns[fd]
     let nl = st.buffer.find('\n')
     if nl >= 0:
       let line = st.buffer[0 ..< nl]
-      if line.len > MaxWireHeaderBytes:
-        raise newException(ValueError, "wire header exceeds max bytes")
       if nl + 1 == st.buffer.len:
         st.buffer = ""
       else:
         st.buffer = st.buffer[nl + 1 .. ^1]
       secureConns[fd] = st
-      return line.split(' ')
+      return splitHeaderLine(line)
     if st.buffer.len > MaxWireHeaderBytes:
       raise newException(ValueError, "wire header exceeds max bytes")
     secureConns[fd] = st
@@ -304,7 +310,13 @@ proc socketFor(c: ClusterClient, node: int): Socket =
   result.setSockOpt(OptNoDelay, true, level = IPPROTO_TCP.cint)  # short request/response frames dominate
   if c.tls:
     when defined(ssl):
-      let verifyMode = if c.tlsInsecureSkipVerify: CVerifyNone else: CVerifyPeerUseEnvVars
+      let verifyMode =
+        if c.tlsInsecureSkipVerify:
+          CVerifyNone
+        elif c.tlsCaFile.len > 0:
+          CVerifyPeer
+        else:
+          CVerifyPeerUseEnvVars
       let ctx = newContext(verifyMode = verifyMode, caFile = c.tlsCaFile)
       let hostname = if c.tlsServerName.len > 0: c.tlsServerName else: c.peers[node].host
       ctx.wrapConnectedSocket(result, handshakeAsClient, hostname)
@@ -560,6 +572,8 @@ proc txStatusReq*(c: ClusterClient, node: int, txid: uint64): string =
 proc universeApplyReq*(c: ClusterClient, node: int, eventJson: string): string =
   let r = c.rpc(node, "UAPPLY " & $eventJson.len, eventJson)
   expect(r, "UOK", "UAPPLY")
+  if r[1] != "APPLIED" and r[1] != "SKIPPED" and r[1] != "DELAYED":
+    raise newException(IOError, "UAPPLY returned invalid status: " & r[1])
   r[1]
 
 proc universeStatusReq*(c: ClusterClient, node: int): UniverseWireStatus =

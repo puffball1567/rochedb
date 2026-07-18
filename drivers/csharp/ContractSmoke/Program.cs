@@ -7,7 +7,7 @@ static void Check(bool condition, string message)
 }
 
 using var db = RocheDb.Open(4);
-Check(RocheDb.AbiVersion == 1, "unexpected ABI version");
+Check(RocheDb.AbiVersion == 2, "unexpected ABI version");
 
 db.ConfigureRing("docs", 45.0);
 db.SetGalaxyDescription("Smoke-test galaxy for C# binding.");
@@ -37,4 +37,3 @@ Check(db.NextVisit(first, located) >= 0.0, "nextVisit failed");
 Check(db.NextJoin(first, second) >= -1.0, "nextJoin failed");
 
 Console.WriteLine("C# driver OK");
-

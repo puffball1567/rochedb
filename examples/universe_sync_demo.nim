@@ -15,9 +15,13 @@ proc argValue(name, defaultValue: string): string =
       return arg[prefix.len .. ^1]
   defaultValue
 
-proc enqueueSample(sourceDir: string) =
+proc enqueueSample(sourceDir: string, delayMs = 0) =
   var source = open(dataDir = sourceDir)
   try:
+    if delayMs > 0:
+      source.configureRingApplyPolicy("posts/u1",
+        RingApplyPolicy(mode: ramDelayedTimestamp, historyKeep: 1,
+                        delayMs: delayMs))
     discard source.enqueueUniverseSyncEvent(
       sourceUniverse = "tokyo",
       sourceGalaxy = "social",
@@ -67,17 +71,18 @@ when isMainModule:
   let sourceDir = requireArg("source")
   let targetDir = requireArg("target")
   let mode = argValue("mode", "full")
+  let delayMs = parseInt(argValue("delay-ms", "0"))
 
   case mode
   of "enqueue":
-    enqueueSample(sourceDir)
+    enqueueSample(sourceDir, delayMs)
     printPending(sourceDir, "source pending after enqueue")
   of "sync":
     printPending(sourceDir, "source pending before sync")
     syncAndPrint(sourceDir, targetDir)
     printPending(sourceDir, "source pending after sync")
   of "full":
-    enqueueSample(sourceDir)
+    enqueueSample(sourceDir, delayMs)
     printPending(sourceDir, "source pending before sync")
     syncAndPrint(sourceDir, targetDir)
     printPending(sourceDir, "source pending after sync")

@@ -60,6 +60,7 @@ type
     scope*: RocheLockScope
     coordinate*: string
     token*: string
+    fence*: uint64
     expiresAt*: float
     keys*: seq[string]
 
@@ -162,8 +163,12 @@ type
     codec*: PayloadCodec
     vec*: seq[float32]
     timestamp*: float
+    applyAfter*: float
     originSeq*: uint64
     attempts*: int
+    maxAttempts*: int
+    retryAt*: float
+    deadLetter*: bool
     acknowledged*: bool
     error*: string
 
@@ -176,12 +181,14 @@ type
     ringKeyNames: Table[uint64, string]
     ringDescriptions: Table[uint64, string]
     ringPayloadProfiles: Table[uint64, RingPayloadProfile]
+    timeOrbitProfiles: Table[uint64, TimeOrbitProfile]
     ringWriteAckModes: Table[uint64, WriteAckMode]
     ringApplyPolicies: Table[uint64, RingApplyPolicy]
     ringChildren: Table[uint64, seq[uint64]]
     stellarMembers: Table[string, seq[string]]
     stellarByMember: Table[string, seq[string]]
     activeLocks: Table[string, RocheLockState]
+    lockFence: uint64
     retrievalTunings: Table[string, RetrievalTuning]
     searchProfiles: Table[string, SearchProfile]
     lastRingName: string        # 1エントリキャッシュ（putのホットパス最適化, §16.2）
@@ -277,6 +284,15 @@ type
     pageLimit*: int
     sortField*: string
     sortDirection*: RocheReadSortDirection
+
+  RocheTimeReadPage* = object
+    ring*: string
+    fromMs*: int64
+    toMs*: int64
+    bucketsVisited*: int
+    count*: int
+    items*: seq[RocheRecord]
+    rings*: seq[string]
 
   RocheStellarOptions* = object
     ## Read a coordinate-local stellar neighborhood.
@@ -396,6 +412,7 @@ type
     acked*: int
     pruned*: int
     errors*: int
+    deadLetter*: int
 
 const
   durBuffered* = store.durBuffered
@@ -414,6 +431,8 @@ proc ringKeyForRead(db: RocheDb, ring: string): uint64
 proc descendantRingKeys(db: RocheDb, root: uint64, maxDepth, branchBudget: int): seq[uint64]
 proc addUniqueRingKey(keys: var seq[uint64], key: uint64)
 proc stellarNeighborKeys(db: RocheDb, root: uint64, maxDepth, branchBudget: int): seq[uint64]
+proc put*(db: RocheDb, encoded: EncodedPayload, ring: string = "default",
+          vec: seq[float32] = @[]): RocheId
 proc put*(db: RocheDb, payload: string, ring: string = "default",
           vec: seq[float32] = @[]): RocheId
 proc enqueueUniverseSyncEvent*(db: RocheDb, sourceUniverse, sourceGalaxy,
@@ -423,6 +442,13 @@ proc enqueueUniverseSyncEvent*(db: RocheDb, sourceUniverse, sourceGalaxy,
                                op = "put", logicalKey = "",
                                timestamp = -1.0,
                                eventKey = ""): uint64
+proc stageUniverseSyncEvent(db: RocheDb, tx: StoreTxn, sourceUniverse,
+                            sourceGalaxy, ring, payload: string,
+                            vec: seq[float32] = @[], codec = pcRaw,
+                            op = "put", logicalKey = "",
+                            timestamp = -1.0,
+                            eventKey = ""): tuple[event: UniverseSyncEvent,
+                                                   removed: seq[int]]
 
 proc defaultRetrievalTuning*(): RetrievalTuning =
   RetrievalTuning(budget: 8, focus: 0, topRings: 0, branchBudget: 0,
@@ -533,10 +559,13 @@ proc purgeExpiredLocks(db: RocheDb, now = epochTime()) =
   for key in expired:
     db.activeLocks.del key
 
-proc newLockToken(keys: seq[string]): string =
+proc newLockToken(db: RocheDb, keys: seq[string]): tuple[token: string, fence: uint64] =
   ## Cooperative lock token. This is not an auth secret; it prevents accidental
   ## unlock by callers that do not own the lock.
-  $epochTime() & ":" & $keys.len & ":" & $hash(keys.join("|"))
+  inc db.lockFence
+  result.fence = db.lockFence
+  result.token = $result.fence & ":" & $epochTime() & ":" & $keys.len & ":" &
+    $hash(keys.join("|"))
 
 proc acquireLockKeys(db: RocheDb, scope: RocheLockScope, coordinate: string,
                      keys: seq[string], ttlSeconds = 30.0,
@@ -561,15 +590,16 @@ proc acquireLockKeys(db: RocheDb, scope: RocheLockScope, coordinate: string,
         busy = key
         break
     if busy.len == 0:
-      let token = newLockToken(uniqueKeys)
+      let generated = db.newLockToken(uniqueKeys)
       let expiresAt = now + ttlSeconds
       for key in uniqueKeys:
         db.activeLocks[key] = RocheLockState(scope: scope,
                                              coordinate: coordinate,
-                                             token: token,
+                                             token: generated.token,
                                              expiresAt: expiresAt)
       return RocheLockToken(scope: scope, coordinate: coordinate,
-                            token: token, expiresAt: expiresAt,
+                            token: generated.token, fence: generated.fence,
+                            expiresAt: expiresAt,
                             keys: uniqueKeys)
     if waitMs <= 0 or epochTime() >= deadline:
       raise newException(IOError, "coordinate lock is busy: " & busy)
@@ -637,8 +667,11 @@ proc open*(nodes: int = 8, dataDir: string = "",
            durability: RocheDurability = durBuffered): RocheDb =
   ## 組み込みモードで開く。dataDir を渡すと追記ログに永続化され、
   ## 再オープン時に中身と時計が復元される。
+  if nodes <= 0 or nodes > int(high(uint16)):
+    raise newException(ValueError, "nodes must be in 1.." & $int(high(uint16)))
+  let tbl = equalArcTable(1, uint16(nodes))
   result = RocheDb(mode: mEmbedded,
-                   tbl: ArcTable(epoch: 1, nNodes: uint16(nodes)),
+                   tbl: tbl,
                    st: openStore(dataDir, durability = durability),
                    vectorBackend: newExactVectorBackend(),
                    plannerBackend: newHeuristicPlannerBackend())
@@ -652,6 +685,8 @@ proc open*(nodes: int = 8, dataDir: string = "",
     result.ringDescriptions[key] = desc
   for key, profile in result.st.ringPayloadProfiles:
     result.ringPayloadProfiles[key] = profile
+  for key, profile in result.st.ringTimeOrbitProfiles:
+    result.timeOrbitProfiles[key] = profile
   for _, blob in result.st.stellarMaps:
     result.loadStellarMap(blob)
   result.rebuildStellarMembership()
@@ -712,12 +747,18 @@ proc open*(nodes: int = 8, dataDir: string = "",
       codec: parsePayloadCodec(raw{"codec"}.getStr("raw")),
       vec: vec,
       timestamp: raw{"timestamp"}.getFloat(),
+      applyAfter: raw{"applyAfter"}.getFloat(),
       originSeq: raw{"originSeq"}.getBiggestInt().uint64,
       attempts: raw{"attempts"}.getInt(),
+      maxAttempts: raw{"maxAttempts"}.getInt(8),
+      retryAt: raw{"retryAt"}.getFloat(),
+      deadLetter: raw{"deadLetter"}.getBool(),
       acknowledged: raw{"acknowledged"}.getBool(),
       error: raw{"error"}.getStr())
     result.universeSyncEvents.add event
     result.nextUniverseSyncId = max(result.nextUniverseSyncId, event.id)
+  result.nextUniverseSyncId = max(result.nextUniverseSyncId,
+                                  result.st.nextUniverseSyncId)
   for key, name in result.st.ringNames:
     let parentName = parentRingName(name)
     if parentName.len > 0 and parentName in result.ringNames:
@@ -821,6 +862,72 @@ proc ringPayloadProfile*(db: RocheDb, ring: string): RingPayloadProfile =
   else:
     db.ringPayloadProfiles.getOrDefault(key, defaultRingPayloadProfile())
 
+proc stableHash64(value: string): uint64 =
+  ## Stable FNV-1a hash for persistent coordinate derivation.
+  result = 14695981039346656037'u64
+  for ch in value:
+    result = result xor uint64(ord(ch))
+    result = result * 1099511628211'u64
+
+proc timeOrbitMask(bits: int): uint64 =
+  if bits <= 0 or bits > 60:
+    raise newException(ValueError, "time orbit bits must be 1..60")
+  (1'u64 shl bits) - 1'u64
+
+proc normalizedTimeOrbitProfile(ring: string;
+                                profile: TimeOrbitProfile): TimeOrbitProfile =
+  result = profile
+  if result.bits == 0:
+    result.bits = 60
+  if result.bucketMs == 0:
+    result.bucketMs = 60_000
+  if result.bucketMs < 0:
+    raise newException(ValueError, "time orbit bucketMs must be > 0")
+  let mask = timeOrbitMask(result.bits)
+  if result.phase == 0'u64:
+    let salt =
+      if result.salt.len > 0: result.salt
+      else: ring
+    result.phase = stableHash64(ring & "\0" & salt) and mask
+  elif result.phase > mask:
+    raise newException(ValueError, "time orbit phase exceeds coordinate space")
+
+proc configureTimeOrbitProfile*(db: RocheDb, ring: string,
+                                profile: TimeOrbitProfile) =
+  ## Configure a ring-local time orbit. It does not move existing records.
+  let key = db.ringKey(ring)
+  let normalized = normalizedTimeOrbitProfile(ring, profile)
+  db.timeOrbitProfiles[key] = normalized
+  if db.mode == mEmbedded:
+    db.st.putTimeOrbitProfile(key, normalized)
+
+proc timeOrbitProfile*(db: RocheDb, ring: string): TimeOrbitProfile =
+  let key = db.ringKeyForRead(ring)
+  if key == 0'u64:
+    normalizedTimeOrbitProfile(ring, defaultTimeOrbitProfile())
+  else:
+    db.timeOrbitProfiles.getOrDefault(
+      key, normalizedTimeOrbitProfile(ring, defaultTimeOrbitProfile()))
+
+proc timeOrbitBucket*(profile: TimeOrbitProfile, timestampMs: int64): uint64 =
+  if timestampMs < 0:
+    raise newException(ValueError, "timestampMs must be >= 0")
+  let normalized = normalizedTimeOrbitProfile("", profile)
+  uint64(timestampMs div normalized.bucketMs)
+
+proc timeOrbitCoordinate*(profile: TimeOrbitProfile, timestampMs: int64): uint64 =
+  let normalized = normalizedTimeOrbitProfile("", profile)
+  let mask = timeOrbitMask(normalized.bits)
+  (normalized.phase + timeOrbitBucket(normalized, timestampMs)) and mask
+
+proc timeOrbitRing*(baseRing: string, profile: TimeOrbitProfile,
+                    timestampMs: int64): string =
+  let base = normalizedCoordinate(baseRing)
+  if base.len == 0:
+    raise newException(ValueError, "time orbit base ring must not be empty")
+  let coord = timeOrbitCoordinate(profile, timestampMs)
+  base & "/@time/" & $coord
+
 proc compact*(db: RocheDb): CompactStats =
   ## 組み込み永続 Store の WAL を生存レコードだけに再構築する。
   ## cluster 接続では各 roched 側の管理操作として実行する。
@@ -855,15 +962,19 @@ proc verifyEncryptedBackup*(backupDir, passphrase: string): BackupStats =
   ## backupDir の encrypted backup を復号し、復元前に strict 検証する。
   store.verifyEncryptedBackup(backupDir, passphrase)
 
-proc restoreBackup*(backupDir, dataDir: string, overwrite = false): BackupStats =
+proc restoreBackup*(backupDir, dataDir: string, overwrite = false,
+                    durability: RocheDurability = durBuffered): BackupStats =
   ## backupDir の WAL を dataDir へ復元する。dataDir が既存の場合は overwrite が必要。
-  store.restoreBackup(backupDir, dataDir, overwrite = overwrite)
+  store.restoreBackup(backupDir, dataDir, overwrite = overwrite,
+                      durability = durability)
 
 proc restoreEncryptedBackup*(backupDir, dataDir, passphrase: string,
-                             overwrite = false): BackupStats =
+                             overwrite = false,
+                             durability: RocheDurability = durBuffered): BackupStats =
   ## backupDir の encrypted backup を dataDir へ復元する。
   store.restoreEncryptedBackup(backupDir, dataDir, passphrase,
-                               overwrite = overwrite)
+                               overwrite = overwrite,
+                               durability = durability)
 
 proc writeDumpLine(outFile: File, node: JsonNode): BiggestInt =
   let line = $node
@@ -922,7 +1033,8 @@ proc dump*(db: RocheDb, path: string = "", includeVectors = true): DumpStats =
         "ring": db.ringNameOf(p.parent),
         "period": p.period,
         "head": p.head,
-        "payload": p.payload
+        "payload": p.payload,
+        "codec": payloadCodecName(p.codec)
       }
       if includeVectors:
         doc["vec"] = %p.vec
@@ -991,6 +1103,7 @@ proc importJsonl*(db: RocheDb, path: string, defaultRing = "imported",
   result.source = path
   result.defaultRing = defaultRing
   var seenRings = initTable[string, bool]()
+  var rocheDumpMode = false
   for line in lines(path):
     if maxRecords > 0 and result.read >= maxRecords:
       break
@@ -1001,6 +1114,31 @@ proc importJsonl*(db: RocheDb, path: string, defaultRing = "imported",
       continue
     try:
       let node = parseJson(trimmed)
+      let nodeType =
+        if node.kind == JObject and node.hasKey("type"): node["type"].getStr()
+        else: ""
+      if nodeType == "meta" and
+          node{"format"}.getStr("") == "rochedb.dump.v1":
+        rocheDumpMode = true
+        inc result.skipped
+        continue
+      if nodeType == "ring" and
+          (rocheDumpMode or
+           (node.hasKey("key") and node.hasKey("name") and
+            node.hasKey("period") and node.hasKey("head"))):
+        inc result.skipped
+        continue
+      if nodeType == "document" and node.hasKey("ring") and node.hasKey("payload"):
+        let ring = node["ring"].getStr(defaultRing)
+        let codec =
+          if node.hasKey("codec"): parsePayloadCodec(node["codec"].getStr("raw"))
+          else: pcRaw
+        discard db.put(encodedPayload(node["payload"].getStr(), codec),
+                       ring = ring,
+                       vec = pathVector(node, "vec"))
+        seenRings[ring] = true
+        inc result.imported
+        continue
       var ring =
         if ringField.len > 0: pathString(node, ringField) else: ""
       if ring.len == 0:
@@ -1259,6 +1397,33 @@ proc putUsingRingProfile*(db: RocheDb, payload: string,
   db.put(encodedPayload(payload, db.ringPayloadProfile(ring).defaultCodec),
          ring, vec)
 
+proc timeJsonPayload(payload: string, timestampMs: int64): EncodedPayload =
+  ## Time writes keep JSON queryable by adding event/ingest timestamps when the
+  ## payload is a JSON object. Non-JSON payloads stay raw and are bucket-local.
+  try:
+    var node = parseJson(payload)
+    if node.kind == JObject:
+      if not node.hasKey("eventTimeMs"):
+        node["eventTimeMs"] = %timestampMs
+      if not node.hasKey("ingestTimeMs"):
+        node["ingestTimeMs"] = %(int64(epochTime() * 1000.0))
+      return encodedPayload($node, pcJson)
+  except JsonParsingError:
+    discard
+  encodedPayload(payload, pcRaw)
+
+proc putTime*(db: RocheDb, payload: string, ring: string,
+              timestampMs: int64, vec: seq[float32] = @[]): RocheId =
+  ## Store a log/event payload into the ring's calculated time-orbit coordinate.
+  let profile = db.timeOrbitProfile(ring)
+  db.put(timeJsonPayload(payload, timestampMs),
+         ring = timeOrbitRing(ring, profile, timestampMs),
+         vec = vec)
+
+proc putTime*(db: RocheDb, doc: JsonNode, ring: string,
+              timestampMs: int64, vec: seq[float32] = @[]): RocheId =
+  db.putTime($doc, ring, timestampMs, vec)
+
 proc put*(db: RocheDb, doc: JsonNode, ring: string = "default",
           vec: seq[float32] = @[]): RocheId =
   ## 構造化ドキュメントの書き込み。query（選択取得）の対象になる。
@@ -1271,15 +1436,41 @@ proc putSynced*(db: RocheDb, encoded: EncodedPayload,
   ## embedded put と universe outbox 登録を同時に行う。
   ## 既存 put の意味は変えず、Universe 同期したい write path だけで使う。
   doAssert db.mode == mEmbedded, "putSynced は embedded mode 専用"
-  result = db.put(encoded, ring = ring, vec = vec)
-  discard db.enqueueUniverseSyncEvent(sourceUniverse = sourceUniverse,
-                                      sourceGalaxy = sourceGalaxy,
-                                      ring = ring,
-                                      payload = encoded.data,
-                                      vec = vec,
-                                      codec = encoded.codec,
-                                      logicalKey = logicalKey,
-                                      timestamp = epochTime())
+  let key = db.ringKey(ring, persist = false)
+  let ri = db.rings[key]
+  let normVec = vec.normalize()
+  let tx = db.st.beginTxn()
+  var committed = false
+  try:
+    if db.st.ringNames.getOrDefault(key, "") != ring:
+      tx.putRingName(key, ring)
+    if key notin db.st.ringMeta:
+      tx.putRingMeta(key, ri.period, ri.headAngle)
+    let seq = db.st.nextSeq(key)
+    result = RocheId(parent: key, epoch: db.tbl.epoch, seq: seq,
+                     tWrite: db.clock)
+    tx.upsert Particle(parent: key, seq: seq, period: ri.period,
+                       head: ri.headAngle, tWrite: db.clock,
+                       payload: encoded.data, codec: encoded.codec,
+                       vec: normVec)
+    let staged = db.stageUniverseSyncEvent(tx,
+      sourceUniverse = sourceUniverse,
+      sourceGalaxy = sourceGalaxy,
+      ring = ring,
+      payload = encoded.data,
+      vec = vec,
+      codec = encoded.codec,
+      logicalKey = logicalKey,
+      timestamp = epochTime())
+    tx.commit()
+    committed = true
+    for idx in staged.removed:
+      db.universeSyncEvents.delete(idx)
+    db.universeSyncEvents.add staged.event
+  except CatchableError:
+    if not committed:
+      tx.rollback()
+    raise
 
 proc putSynced*(db: RocheDb, payload: string, sourceUniverse, sourceGalaxy: string,
                 ring: string = "default", vec: seq[float32] = @[],
@@ -1315,6 +1506,8 @@ proc put*(tx: RocheTx, encoded: EncodedPayload, ring: string = "default",
   let normVec = vec.normalize()
   case tx.db.mode
   of mEmbedded:
+    if tx.db.st.ringNames.getOrDefault(key, "") != ring:
+      tx.tx.putRingName(key, ring)
     if key notin tx.db.st.ringMeta:
       tx.tx.putRingMeta(key, ri.period, ri.headAngle)
     let seq = tx.db.st.nextSeq(key)
@@ -1967,6 +2160,82 @@ proc readRing*(db: RocheDb, ring: string,
   result.count = result.items.len
   result.nextCursor = nextCursor
 
+proc eventTimeMsOf(item: RocheRecord): tuple[ok: bool, value: int64] =
+  if not item.codec.supportsJsonProjection:
+    return (false, 0'i64)
+  try:
+    let node = parseJson(item.payload)
+    if node.kind == JObject and node.hasKey("eventTimeMs"):
+      case node["eventTimeMs"].kind
+      of JInt:
+        return (true, node["eventTimeMs"].getBiggestInt().int64)
+      of JFloat:
+        return (true, int64(node["eventTimeMs"].getFloat()))
+      else:
+        discard
+  except JsonParsingError:
+    discard
+  (false, 0'i64)
+
+proc compareTimeRecords(a, b: RocheRecord): int =
+  let ta = eventTimeMsOf(a)
+  let tb = eventTimeMsOf(b)
+  if ta.ok and tb.ok:
+    result = cmp(ta.value, tb.value)
+  elif ta.ok:
+    result = -1
+  elif tb.ok:
+    result = 1
+  else:
+    result = cmp(a.id.tWrite, b.id.tWrite)
+  if result == 0:
+    result = cmp($a.id, $b.id)
+
+proc readTime*(db: RocheDb, ring: string, fromMs, toMs: int64,
+               options: RocheReadOptions = defaultReadOptions(),
+               maxBuckets = 1024): RocheTimeReadPage =
+  ## Read a ring-local time-orbit range. This calculates affected bucket rings
+  ## first, then uses normal readRing controls inside each bucket.
+  if fromMs < 0 or toMs < 0:
+    raise newException(ValueError, "time range must be >= 0")
+  if toMs < fromMs:
+    raise newException(ValueError, "toMs must be >= fromMs")
+  if maxBuckets <= 0:
+    raise newException(ValueError, "maxBuckets must be > 0")
+  let profile = db.timeOrbitProfile(ring)
+  let fromBucket = timeOrbitBucket(profile, fromMs)
+  let toBucket = timeOrbitBucket(profile, toMs)
+  if toBucket < fromBucket:
+    raise newException(ValueError, "time range crosses orbit wrap")
+  let bucketCount = int(toBucket - fromBucket + 1'u64)
+  if bucketCount > maxBuckets:
+    raise newException(ValueError, "time range exceeds maxBuckets")
+
+  result.ring = ring
+  result.fromMs = fromMs
+  result.toMs = toMs
+  result.bucketsVisited = bucketCount
+
+  var readOpts = options
+  if readOpts.limit <= 0:
+    readOpts.limit = 100
+  let perBucketLimit = readOpts.limit
+  for bucket in fromBucket .. toBucket:
+    let timestampMs = int64(bucket) * profile.bucketMs
+    let bucketRing = timeOrbitRing(ring, profile, timestampMs)
+    result.rings.add bucketRing
+    readOpts.limit = perBucketLimit
+    let page = db.readRing(bucketRing, readOpts)
+    for item in page.items:
+      let eventTime = eventTimeMsOf(item)
+      if eventTime.ok and (eventTime.value < fromMs or eventTime.value > toMs):
+        continue
+      result.items.add item
+  result.items.sort(compareTimeRecords)
+  if options.limit > 0 and result.items.len > options.limit:
+    result.items.setLen(options.limit)
+  result.count = result.items.len
+
 proc anchorRingName(db: RocheDb, anchor: RocheId): string =
   result = db.ringKeyNames.getOrDefault(anchor.parent, "")
   if result.len == 0:
@@ -2223,8 +2492,12 @@ proc universeSyncEventJson(event: UniverseSyncEvent): JsonNode =
     "codec": event.codec.payloadCodecName,
     "vec": event.vec,
     "timestamp": event.timestamp,
+    "applyAfter": event.applyAfter,
     "originSeq": event.originSeq,
     "attempts": event.attempts,
+    "maxAttempts": event.maxAttempts,
+    "retryAt": event.retryAt,
+    "deadLetter": event.deadLetter,
     "acknowledged": event.acknowledged,
     "error": event.error
   }
@@ -2253,10 +2526,10 @@ proc deleteUniverseSyncEventAt(db: RocheDb, idx: int) =
   if db.mode == mEmbedded and not db.st.isNil:
     db.st.deleteUniverseSyncEvent(eventId)
 
-proc coalescePendingUniverseSyncEvents(db: RocheDb, sourceUniverse,
-                                       sourceGalaxy, ring, op,
-                                       logicalKey: string,
-                                       policy: RingApplyPolicy) =
+proc pendingUniverseSyncCoalesceIndexes(db: RocheDb, sourceUniverse,
+                                        sourceGalaxy, ring, op,
+                                        logicalKey: string,
+                                        policy: RingApplyPolicy): seq[int] =
   if logicalKey.len == 0:
     return
   case policy.mode
@@ -2266,7 +2539,7 @@ proc coalescePendingUniverseSyncEvents(db: RocheDb, sourceUniverse,
       if not event.acknowledged and
           event.sameUniverseLogicalStream(sourceUniverse, sourceGalaxy, ring,
                                           op, logicalKey):
-        db.deleteUniverseSyncEventAt(i)
+        result.add i
   of ramBoundedHistory:
     let keep = max(1, policy.historyKeep)
     var matches: seq[tuple[idx: int, timestamp: float, originSeq: uint64]]
@@ -2287,15 +2560,69 @@ proc coalescePendingUniverseSyncEvents(db: RocheDb, sourceUniverse,
         removeIdx.add matches[j].idx
       removeIdx.sort(SortOrder.Descending)
       for idx in removeIdx:
-        db.deleteUniverseSyncEventAt(idx)
+        result.add idx
   of ramAppendOnly, ramDelayedTimestamp:
     discard
 
+proc coalescePendingUniverseSyncEvents(db: RocheDb, sourceUniverse,
+                                       sourceGalaxy, ring, op,
+                                       logicalKey: string,
+                                       policy: RingApplyPolicy) =
+  for idx in db.pendingUniverseSyncCoalesceIndexes(sourceUniverse, sourceGalaxy,
+                                                  ring, op, logicalKey, policy):
+    db.deleteUniverseSyncEventAt(idx)
+
 proc universeSyncEventReady(db: RocheDb, event: UniverseSyncEvent): bool =
+  if event.applyAfter > 0.0:
+    return epochTime() >= event.applyAfter
   let policy = db.ringApplyPolicy(event.ring)
   if policy.mode != ramDelayedTimestamp or policy.delayMs <= 0:
     return true
   epochTime() >= event.timestamp + float(policy.delayMs) / 1000.0
+
+proc universeSyncRetryDelaySeconds(attempts: int): float =
+  let capped = min(max(attempts, 1), 8)
+  min(300.0, float(1 shl (capped - 1)))
+
+proc universeSyncDispatchable*(event: UniverseSyncEvent, now = epochTime()): bool =
+  if event.acknowledged or event.deadLetter:
+    return false
+  if event.retryAt > 0.0 and event.retryAt > now:
+    return false
+  if event.applyAfter > 0.0 and event.applyAfter > now:
+    return false
+  true
+
+proc markUniverseSyncDelayed*(db: RocheDb, eventId: uint64, retryAt: float) =
+  for i, event in db.universeSyncEvents:
+    if event.id == eventId:
+      var updated = event
+      updated.retryAt = max(updated.retryAt, retryAt)
+      db.universeSyncEvents[i] = updated
+      db.persistUniverseSyncEvent(updated)
+      return
+  raise newException(KeyError, "universe sync event not found")
+
+proc markUniverseSyncFailure*(db: RocheDb, eventId: uint64,
+                              message: string): UniverseSyncEvent =
+  ## Record a failed delivery attempt. The event remains in the outbox until it
+  ## is acknowledged or reaches its retry budget and becomes dead-lettered.
+  for i, event in db.universeSyncEvents:
+    if event.id == eventId:
+      var updated = event
+      inc updated.attempts
+      updated.error = message
+      if updated.maxAttempts <= 0:
+        updated.maxAttempts = 8
+      if updated.attempts >= updated.maxAttempts:
+        updated.deadLetter = true
+        updated.retryAt = 0.0
+      else:
+        updated.retryAt = epochTime() + universeSyncRetryDelaySeconds(updated.attempts)
+      db.universeSyncEvents[i] = updated
+      db.persistUniverseSyncEvent(updated)
+      return updated
+  raise newException(KeyError, "universe sync event not found")
 
 proc enqueueUniverseSyncEvent*(db: RocheDb, sourceUniverse, sourceGalaxy,
                                ring, payload: string,
@@ -2315,7 +2642,14 @@ proc enqueueUniverseSyncEvent*(db: RocheDb, sourceUniverse, sourceGalaxy,
   db.coalescePendingUniverseSyncEvents(sourceUniverse, sourceGalaxy, ring,
                                        op, logicalKey, policy)
   inc db.nextUniverseSyncId
+  if db.mode == mEmbedded and not db.st.isNil:
+    db.st.setNextUniverseSyncId(db.nextUniverseSyncId)
   let ts = if timestamp >= 0.0: timestamp else: epochTime()
+  let applyAfter =
+    if policy.mode == ramDelayedTimestamp and policy.delayMs > 0:
+      ts + float(policy.delayMs) / 1000.0
+    else:
+      0.0
   let key = if eventKey.len > 0: eventKey
             else: makeUniverseEventKey(sourceUniverse, sourceGalaxy, ring,
                                        logicalKey, db.nextUniverseSyncId, ts)
@@ -2330,16 +2664,65 @@ proc enqueueUniverseSyncEvent*(db: RocheDb, sourceUniverse, sourceGalaxy,
                                 codec: codec,
                                 vec: vec.normalize(),
                                 timestamp: ts,
-                                originSeq: db.nextUniverseSyncId)
+                                applyAfter: applyAfter,
+                                originSeq: db.nextUniverseSyncId,
+                                maxAttempts: 8)
   db.universeSyncEvents.add event
   db.persistUniverseSyncEvent(event)
   event.id
 
+proc stageUniverseSyncEvent(db: RocheDb, tx: StoreTxn, sourceUniverse,
+                            sourceGalaxy, ring, payload: string,
+                            vec: seq[float32] = @[], codec = pcRaw,
+                            op = "put", logicalKey = "",
+                            timestamp = -1.0,
+                            eventKey = ""): tuple[event: UniverseSyncEvent,
+                                                   removed: seq[int]] =
+  doAssert db.mode == mEmbedded, "universe sync event queue は embedded mode 専用"
+  if ring.len == 0:
+    raise newException(ValueError, "universe sync event ring is empty")
+  if op != "put":
+    raise newException(ValueError, "only put universe sync events are supported")
+  let policy = db.ringApplyPolicy(ring)
+  result.removed = db.pendingUniverseSyncCoalesceIndexes(sourceUniverse,
+    sourceGalaxy, ring, op, logicalKey, policy)
+  for idx in result.removed:
+    tx.deleteUniverseSyncEvent(db.universeSyncEvents[idx].id)
+  inc db.nextUniverseSyncId
+  if not db.st.isNil:
+    db.st.setNextUniverseSyncId(db.nextUniverseSyncId)
+  let ts = if timestamp >= 0.0: timestamp else: epochTime()
+  let applyAfter =
+    if policy.mode == ramDelayedTimestamp and policy.delayMs > 0:
+      ts + float(policy.delayMs) / 1000.0
+    else:
+      0.0
+  let key = if eventKey.len > 0: eventKey
+            else: makeUniverseEventKey(sourceUniverse, sourceGalaxy, ring,
+                                       logicalKey, db.nextUniverseSyncId, ts)
+  result.event = UniverseSyncEvent(id: db.nextUniverseSyncId,
+                                   eventKey: key,
+                                   sourceUniverse: sourceUniverse,
+                                   sourceGalaxy: sourceGalaxy,
+                                   ring: ring,
+                                   op: op,
+                                   logicalKey: logicalKey,
+                                   payload: payload,
+                                   codec: codec,
+                                   vec: vec.normalize(),
+                                   timestamp: ts,
+                                   applyAfter: applyAfter,
+                                   originSeq: db.nextUniverseSyncId,
+                                   maxAttempts: 8)
+  tx.putUniverseSyncEvent(result.event.id, $result.event.universeSyncEventJson())
+
 proc universeSyncEvents*(db: RocheDb,
-                         includeAcknowledged = false): seq[UniverseSyncEvent] =
+                         includeAcknowledged = false,
+                         includeDeadLetter = true): seq[UniverseSyncEvent] =
   ## 未配送/未ackの universe sync outbox を返す。配送先は core 外の scheduler/adapter が選ぶ。
   for event in db.universeSyncEvents:
-    if includeAcknowledged or not event.acknowledged:
+    if (includeAcknowledged or not event.acknowledged) and
+        (includeDeadLetter or not event.deadLetter):
       result.add event
 
 proc applyUniverseSyncEvent*(db: RocheDb, event: UniverseSyncEvent): bool =
@@ -2364,6 +2747,8 @@ proc ackUniverseSyncEvent*(db: RocheDb, eventId: uint64): UniverseSyncEvent =
     if event.id == eventId:
       var updated = event
       updated.acknowledged = true
+      updated.retryAt = 0.0
+      updated.error = ""
       db.universeSyncEvents[i] = updated
       db.persistUniverseSyncEvent(updated)
       return updated
@@ -2385,8 +2770,11 @@ proc syncUniverseOnce*(source, target: RocheDb,
   ## Transport / scheduling は呼び出し側が担当し、core は durable event 境界だけを提供する。
   doAssert source.mode == mEmbedded, "source universe sync は embedded mode 専用"
   doAssert target.mode == mEmbedded, "target universe sync は embedded mode 専用"
-  for event in source.universeSyncEvents():
+  for event in source.universeSyncEvents(includeDeadLetter = false):
     inc result.read
+    if not universeSyncDispatchable(event):
+      inc result.skipped
+      continue
     if not target.universeSyncEventReady(event):
       inc result.skipped
       continue
@@ -2399,6 +2787,9 @@ proc syncUniverseOnce*(source, target: RocheDb,
       inc result.acked
     except CatchableError:
       inc result.errors
+      let updated = source.markUniverseSyncFailure(event.id, getCurrentExceptionMsg())
+      if updated.deadLetter:
+        inc result.deadLetter
   if pruneAcked:
     result.pruned = source.pruneAckedUniverseSyncEvents()
 

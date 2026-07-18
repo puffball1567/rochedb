@@ -33,9 +33,12 @@ downstream AI/RAG or application logic.
 - [Topology Remapping](topology-remapping.md)
 - [Universe Sync](universe-sync.md)
 - [Data Locality](data-locality.md)
+- [Time Orbit Design](time-orbit.md)
+- [Data Migration](data-migration.md)
 - [Cloud Operations Metrics](cloud-operations.md)
 - [Threat Model](threat-model.md)
 - [Test Coverage](test-coverage.md)
+- [Audit Remediation Tracker](audit-remediation.md)
 - [Development Workflow](development-workflow.md)
 
 ## Drivers And Protocol
@@ -52,4 +55,4 @@ downstream AI/RAG or application logic.
 ## Release
 
 - [Release Checklist](release-checklist.md)
-- [GitHub Release Draft](github-release-v0.6.0.md)
+- [GitHub Release Draft](github-release-v0.7.0.md)

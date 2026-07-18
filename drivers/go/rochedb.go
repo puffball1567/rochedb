@@ -16,7 +16,7 @@ import (
 	"unsafe"
 )
 
-const ABIVersion = 1
+const ABIVersion = 2
 
 var initOnce sync.Once
 

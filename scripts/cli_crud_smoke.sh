@@ -129,6 +129,25 @@ auto_nif_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$auto_nif_out")"
 bin/roche get --ring=artifacts/auto-nif --filter="{\"id\":\"$auto_nif_id\"}" |
   grep -q '"codec": "nif"'
 
+echo "[cli-crud] time orbit"
+bin/roche time-orbit --ring=logs/api --bucket-ms=1000 --bits=60 --phase=100 --salt=api |
+  grep -q '"bucketMs": 1000'
+bin/roche time-put --ring=logs/api --time-ms=1200 \
+  --payload='{"level":"info","message":"boot"}' >/dev/null
+bin/roche time-put --ring=logs/api --time-ms=2500 \
+  --payload='{"level":"error","message":"timeout"}' >/dev/null
+bin/roche time-put --ring=logs/api --time-ms=4200 \
+  --payload='{"level":"error","message":"too-late"}' >/dev/null
+time_page="$(bin/roche time-get --ring=logs/api --from-ms=1000 --to-ms=3000 \
+  --filter='{"level":"error"}' --selection='{ level message eventTimeMs }' --limit=10 --sort=time)"
+grep -q '"bucketsVisited": 3' <<<"$time_page"
+grep -q '"logs/api/@time/102"' <<<"$time_page"
+grep -q '"message": "timeout"' <<<"$time_page"
+if grep -q 'too-late' <<<"$time_page"; then
+  echo "time-get included an out-of-range event" >&2
+  exit 1
+fi
+
 raw_out="$(bin/roche put --ring=logs/raw --payload='plain text payload' --codec=raw)"
 raw_text_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$raw_out")"
 bin/roche get --ring=logs/raw --filter="{\"id\":\"$raw_text_id\"}" |
@@ -180,6 +199,18 @@ bad_sort_out="$(bin/roche get --ring=docs/japan --sort=payload 2>&1 >/dev/null |
 grep -q 'sort field must be id, time, or write' <<<"$bad_sort_out"
 bad_selection_out="$(bin/roche get --ring=artifacts/bif --selection='{ title }' 2>&1 >/dev/null || true)"
 grep -q 'payload codec bif does not support JSON projection' <<<"$bad_selection_out"
+
+echo "[cli-crud] dump/import JSONL roundtrip"
+bin/roche dump --data="$ROCHE_DATA" --out="$WORK/rochedb-dump.jsonl" |
+  grep -q "dump OK"
+bin/roche import-jsonl --data="$WORK/imported" --in="$WORK/rochedb-dump.jsonl" |
+  grep -q "import-jsonl OK"
+bin/roche get --data="$WORK/imported" --ring=docs/japan --limit=1 |
+  grep -q '"status": "draft"'
+bin/roche get --data="$WORK/imported" --ring=artifacts/nif --limit=1 |
+  grep -q '"codec": "nif"'
+bin/roche get --data="$WORK/imported" --ring=artifacts/bif --limit=1 |
+  grep -q '"codec": "bif"'
 
 echo "[cli-crud] shell"
 shell_out="$(bin/roche shell --data="$WORK/shell" <<'SHELL'

@@ -49,8 +49,13 @@ reproducible build, set `ROCHE_FAISS_COMMIT`. See
 Most C ABI wrappers need `lib/librochedb.so`:
 
 ```sh
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
+scripts/build_capi.sh
 ```
+
+This is the canonical C ABI build. It compiles `lib/librochedb.so` with
+`-d:ssl`, so `roche_connect_auth_tls` is available to Rust, Node native addons,
+PHP FFI, C++, C#, Swift, Kotlin, Go, and other wrappers without each driver
+duplicating Nim flags.
 
 For native wire driver tests, build `roched`:
 
@@ -88,10 +93,20 @@ scripts/test_core.sh
 Include `include/rochedb.h` and link `lib/librochedb.so`:
 
 ```sh
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
+scripts/build_capi.sh
 gcc examples/cabi_contract.c -Iinclude -Llib -lrochedb -Wl,-rpath,'$ORIGIN/../lib' -o bin/cabi_contract
 LD_LIBRARY_PATH=lib bin/cabi_contract
 ```
+
+Thread-safety contract:
+
+- `roche_init()` is idempotent.
+- `roche_last_error()` returns text owned by RocheDB. Copy it before the next
+  RocheDB C ABI call on the same thread.
+- Do not call `roche_close()` concurrently with any other operation on the same
+  handle.
+- If a driver shares one handle across threads, serialize calls around that
+  handle. Separate handles may be used independently.
 
 ## Python
 
@@ -182,7 +197,7 @@ repository README for the full setup flow.
 The Go driver is a C ABI wrapper.
 
 ```sh
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
+scripts/build_capi.sh
 cd drivers/go
 GOCACHE="${GOCACHE:-/tmp/roche-go-cache}" go test ./...
 ```
@@ -211,7 +226,7 @@ composer require rochedb/rochedb:^0.1
 Build the RocheDB core shared library first and point the PHP driver at it:
 
 ```sh
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
+scripts/build_capi.sh
 export ROCHEDB_CORE_DIR=/path/to/rochedb
 ```
 
@@ -241,7 +256,7 @@ The Swift driver is a SwiftPM wrapper over the C ABI. Linux smoke is Docker
 backed.
 
 ```sh
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
+scripts/build_capi.sh
 drivers/swift/docker-test.sh
 ```
 
@@ -259,7 +274,7 @@ integration are still future validation work.
 The C# driver is a generic .NET C ABI wrapper.
 
 ```sh
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
+scripts/build_capi.sh
 dotnet run --project drivers/csharp/ContractSmoke/ContractSmoke.csproj
 ```
 
@@ -297,7 +312,7 @@ The Kotlin driver is Kotlin-first and Java-compatible at the bytecode level. It
 uses a small JNI bridge over the C ABI.
 
 ```sh
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
+scripts/build_capi.sh
 drivers/kotlin/docker-test.sh
 ```
 

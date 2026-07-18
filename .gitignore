@@ -24,6 +24,7 @@ src/rochebench
 src/rochesim
 src/rochedb
 tests/tapi
+tests/tauth
 tests/tcore
 tests/tfield
 tests/tselect
