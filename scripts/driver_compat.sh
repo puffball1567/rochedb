@@ -19,7 +19,7 @@ require_cmd() {
 cd "$ROOT"
 
 log "build C ABI shared library"
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
+scripts/build_capi.sh
 
 log "build roched for wire-driver tests"
 nim c -d:release --nimcache:/tmp/nimcache_roched -o:src/roched src/roched.nim
@@ -28,6 +28,11 @@ log "C ABI contract"
 mkdir -p bin
 gcc examples/cabi_contract.c -Iinclude -Llib -lrochedb -Wl,-rpath,'$ORIGIN/../lib' -o bin/cabi_contract
 LD_LIBRARY_PATH=lib bin/cabi_contract
+
+if [[ "${ROCHE_COMPAT_TLS:-1}" == "1" ]]; then
+  log "C ABI TLS contract"
+  scripts/cabi_tls_smoke.sh
+fi
 
 log "C++ driver"
 g++ -std=c++17 -Iinclude -Idrivers/cpp/include drivers/cpp/examples/contract_smoke.cpp -Llib -lrochedb -o /tmp/roche_cpp_contract_smoke

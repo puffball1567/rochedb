@@ -18,6 +18,16 @@ proc transportKey(secretKey, challengeHex: string): SecretBoxKey =
 proc authMessage(username, password, challengeHex: string): string =
   AuthDomain & "\n" & username & "\n" & password & "\n" & challengeHex
 
+proc secureEqual*(a, b: string): bool =
+  ## Compare secret-like values without data-dependent early exit.
+  var diff = a.len xor b.len
+  let n = max(a.len, b.len)
+  for i in 0 ..< n:
+    let ca = if i < a.len: ord(a[i]) else: 0
+    let cb = if i < b.len: ord(b[i]) else: 0
+    diff = diff or (ca xor cb)
+  diff == 0
+
 proc newChallengeHex*(): string =
   randomBytes(ChallengeBytes).toHex
 
@@ -28,8 +38,8 @@ proc secretResponseHex*(username, password, challengeHex, secretKey: string): st
 proc verifySecretResponse*(username, password, challengeHex, responseHex,
                            secretKey: string): bool =
   try:
-    decryptSecretBox(fromHex(responseHex), boxKey(secretKey)) ==
-      authMessage(username, password, challengeHex)
+    secureEqual(decryptSecretBox(fromHex(responseHex), boxKey(secretKey)),
+                authMessage(username, password, challengeHex))
   except CatchableError:
     false
 

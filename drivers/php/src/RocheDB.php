@@ -40,7 +40,7 @@ final class RetrieveResult
 
 final class RocheDB
 {
-    private const ABI_VERSION = 1;
+    private const ABI_VERSION = 2;
 
     private static ?FFI $ffi = null;
     private ?CData $handle;

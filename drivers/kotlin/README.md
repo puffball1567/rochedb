@@ -17,7 +17,7 @@ targets JVM servers and desktop tooling.
 Build the native library from the repository root:
 
 ```sh
-nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi -o:lib/librochedb.so src/rochedb_capi.nim
+scripts/build_capi.sh
 ```
 
 Run the Docker smoke test:

@@ -52,9 +52,34 @@ jobs:
 
       - name: C ABI contract
         run: |
-          nim c --app:lib -d:release --nimcache:/tmp/nimcache_roche_capi_ci -o:lib/librochedb.so src/rochedb_capi.nim
+          ROCHEDB_CAPI_NIMCACHE=/tmp/nimcache_roche_capi_ci scripts/build_capi.sh
           gcc examples/cabi_contract.c -Iinclude -Llib -lrochedb -Wl,-rpath,'$ORIGIN/../lib' -o /tmp/roche_cabi_contract
           LD_LIBRARY_PATH=lib /tmp/roche_cabi_contract
+
+      - name: C ABI TLS contract
+        run: scripts/cabi_tls_smoke.sh
+
+  capi-macos-build:
+    name: C ABI TLS-enabled build on macOS
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: brew install libsodium openssl
+
+      - name: Set up Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.10'
+
+      - name: Install Nim dependencies
+        run: nimble install -y --depsOnly
+
+      - name: Build TLS-enabled C ABI library
+        run: ROCHEDB_CAPI_NIMCACHE=/tmp/nimcache_roche_capi_macos scripts/build_capi.sh
 
   core-tests:
     name: Core test suite
@@ -112,6 +137,9 @@ jobs:
       - name: Run cluster RBAC smoke
         run: scripts/cluster_rbac_smoke.sh
 
+      - name: Run cluster wire driver smoke
+        run: scripts/cluster_wire_driver_smoke.sh
+
       - name: Run cluster wire fuzz smoke
         run: scripts/cluster_wire_fuzz_smoke.sh
 
@@ -123,6 +151,9 @@ jobs:
 
       - name: Run universe remote sync smoke
         run: scripts/universe_sync_remote_smoke.sh
+
+      - name: Run demo smoke matrix
+        run: scripts/demo_smoke.sh
 
   tls-smoke:
     name: TLS transport smoke

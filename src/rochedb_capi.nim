@@ -1,6 +1,6 @@
 ## rochedb_capi — C ABI 層（設計書 §13）
 ##
-## ビルド:  nim c --app:lib -d:release -o:lib/librochedb.so src/rochedb_capi.nim
+## ビルド:  scripts/build_capi.sh
 ## ヘッダ:  include/rochedb.h（手書き・本ファイルと1:1対応）
 ##
 ## 規約:
@@ -9,10 +9,14 @@
 ##   - 例外は境界を越えない: すべて捕捉し、エラーはリターンコード / nil で返す。
 ##   - roche_get が返すバッファは呼び出し側が roche_free で解放する。
 
-import std/[base64, json]
+import std/[base64, json, tables]
 import rochedb
 
 type
+  RocheCHandle = ref object
+    db: RocheDb
+    closed: bool
+
   RocheCId {.exportc: "roche_id", bycopy.} = object
     parent: uint64
     epoch: uint32
@@ -52,6 +56,8 @@ const
   RocheAbiVersion = cint(2)
 
 var lastError {.threadvar.}: string
+var runtimeReady = false
+var handles = initTable[pointer, RocheCHandle]()
 
 proc NimMain() {.cdecl, importc.}
 
@@ -70,7 +76,23 @@ proc setError(e: ref CatchableError) =
 proc ensureHandle(h: pointer): RocheDb =
   if h == nil:
     raise newException(ValueError, "db handle is nil")
-  cast[RocheDb](h)
+  if h notin handles:
+    raise newException(ValueError, "db handle is unknown or closed")
+  let handle = handles[h]
+  if handle.closed or handle.db.isNil:
+    raise newException(ValueError, "db handle is closed")
+  handle.db
+
+proc registerHandle(db: RocheDb): pointer =
+  let handle = RocheCHandle(db: db)
+  GC_ref(handle)
+  result = cast[pointer](handle)
+  handles[result] = handle
+
+proc initRuntime() =
+  if not runtimeReady:
+    NimMain()
+    runtimeReady = true
 
 proc cstringToString(s: cstring, name: string, allowNil = true): string =
   if s == nil:
@@ -122,6 +144,8 @@ proc payloadCodecName(value: PayloadCodec): string =
 proc bytesFromC(data: pointer, len: csize_t): string =
   if len > 0 and data == nil:
     raise newException(ValueError, "data is nil")
+  if len > csize_t(high(int)):
+    raise newException(ValueError, "data length is too large")
   result = newString(int(len))
   if len > 0:
     copyMem(addr result[0], data, int(len))
@@ -133,15 +157,15 @@ proc roche_last_error(): cstring {.exportc, cdecl, dynlib.} =
   lastError.cstring
 
 proc roche_init() {.exportc, cdecl, dynlib.} =
-  ## 最初に一度呼ぶ（Nim ランタイム初期化）。
-  NimMain()
+  ## Nim runtime initialization. Idempotent for driver setup paths.
+  initRuntime()
 
 proc roche_open(nodes: cint): pointer {.exportc, cdecl, dynlib.} =
   try:
+    initRuntime()
     clearError()
     let db = rochedb.open(int(nodes))
-    GC_ref(db)
-    return cast[pointer](db)
+    return registerHandle(db)
   except CatchableError as e:
     setError(e)
     return nil
@@ -149,10 +173,10 @@ proc roche_open(nodes: cint): pointer {.exportc, cdecl, dynlib.} =
 proc roche_open_dir(nodes: cint, dir: cstring): pointer {.exportc, cdecl, dynlib.} =
   ## 永続化つきで開く（設計書 §16）。
   try:
+    initRuntime()
     clearError()
     let db = rochedb.open(int(nodes), dataDir = cstringToString(dir, "dir"))
-    GC_ref(db)
-    return cast[pointer](db)
+    return registerHandle(db)
   except CatchableError as e:
     setError(e)
     return nil
@@ -160,10 +184,10 @@ proc roche_open_dir(nodes: cint, dir: cstring): pointer {.exportc, cdecl, dynlib
 proc roche_connect(peers: cstring): pointer {.exportc, cdecl, dynlib.} =
   ## クラスタへ接続（設計書 §14）。peers = "host:port,host:port,..."
   try:
+    initRuntime()
     clearError()
     let db = rochedb.connect(cstringToString(peers, "peers", allowNil = false))
-    GC_ref(db)
-    return cast[pointer](db)
+    return registerHandle(db)
   except CatchableError as e:
     setError(e)
     return nil
@@ -172,6 +196,7 @@ proc roche_connect_auth(peers, username, password, authToken, secretKey,
                         galaxy: cstring): pointer {.exportc, cdecl, dynlib.} =
   ## 認証つきクラスタ接続。NULL は空文字として扱う。
   try:
+    initRuntime()
     clearError()
     let db = rochedb.connect(optStr(peers),
                              username = optStr(username),
@@ -179,8 +204,7 @@ proc roche_connect_auth(peers, username, password, authToken, secretKey,
                              authToken = optStr(authToken),
                              secretKey = optStr(secretKey),
                              galaxy = optStr(galaxy))
-    GC_ref(db)
-    return cast[pointer](db)
+    return registerHandle(db)
   except CatchableError as e:
     setError(e)
     return nil
@@ -192,6 +216,7 @@ proc roche_connect_auth_tls(peers, username, password, authToken, secretKey,
   ## TLS-aware authenticated cluster connection. TLS requires a RocheDB core
   ## build compiled with -d:ssl.
   try:
+    initRuntime()
     clearError()
     let db = rochedb.connect(optStr(peers),
                              username = optStr(username),
@@ -203,20 +228,29 @@ proc roche_connect_auth_tls(peers, username, password, authToken, secretKey,
                              tlsCaFile = optStr(tlsCaFile),
                              tlsServerName = optStr(tlsServerName),
                              tlsInsecureSkipVerify = tlsInsecureSkipVerify != 0)
-    GC_ref(db)
-    return cast[pointer](db)
+    return registerHandle(db)
   except CatchableError as e:
     setError(e)
     return nil
 
 proc roche_close(h: pointer) {.exportc, cdecl, dynlib.} =
-  if h != nil:
-    let db = cast[RocheDb](h)
-    try:
-      db.close()
-    except CatchableError as e:
-      setError(e)
-    GC_unref(db)
+  try:
+    initRuntime()
+    clearError()
+    if h == nil:
+      return
+    if h notin handles:
+      setError("db handle is unknown or closed")
+      return
+    let handle = handles[h]
+    handles.del h
+    if not handle.closed and not handle.db.isNil:
+      handle.db.close()
+    handle.closed = true
+    handle.db = nil
+    GC_unref(handle)
+  except CatchableError as e:
+    setError(e)
 
 proc roche_now(h: pointer): cdouble {.exportc, cdecl, dynlib.} =
   try:

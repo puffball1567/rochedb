@@ -1,6 +1,6 @@
 ## 公開 API（src/rochedb.nim）のテスト
 
-import std/[json, os, strutils, tempfiles, unittest]
+import std/[json, os, strutils, tempfiles, times, unittest]
 import ../src/rochedb
 
 suite "public api":
@@ -52,6 +52,50 @@ suite "public api":
     check compacted.ringPayloadProfile("artifacts") == profile
     check compacted.getEncoded(id).codec == pcBif
     compacted.close()
+    removeDir(dir)
+
+  test "time orbit profile places and reads log records by calculated buckets":
+    let dir = createTempDir("rochedb", "time-orbit")
+    var db = open(dataDir = dir)
+    let apiProfile = TimeOrbitProfile(bits: 60, bucketMs: 1000'i64,
+                                      phase: 100'u64, salt: "api")
+    let auditProfile = TimeOrbitProfile(bits: 60, bucketMs: 1000'i64,
+                                        phase: 10000'u64, salt: "audit")
+    db.configureTimeOrbitProfile("logs/api", apiProfile)
+    db.configureTimeOrbitProfile("logs/audit", auditProfile)
+    check db.timeOrbitProfile("logs/api") == apiProfile
+    check timeOrbitRing("logs/api", apiProfile, 2500) == "logs/api/@time/102"
+    check timeOrbitRing("logs/audit", auditProfile, 2500) == "logs/audit/@time/10002"
+
+    discard db.putTime(%*{"level": "info", "message": "boot"}, "logs/api", 1200)
+    discard db.putTime(%*{"level": "error", "message": "timeout"}, "logs/api", 2500)
+    discard db.putTime(%*{"level": "error", "message": "too-late"}, "logs/api", 4200)
+    discard db.putTime(%*{"level": "error", "message": "audit"}, "logs/audit", 2500)
+
+    let page = db.readTime("logs/api", 1000, 3000, RocheReadOptions(
+      filter: %*{"level": "error"},
+      selection: "{ level message eventTimeMs }",
+      limit: 10,
+      sortField: "time",
+      sortDirection: rsAsc))
+    check page.bucketsVisited == 3
+    check page.rings == @["logs/api/@time/101", "logs/api/@time/102", "logs/api/@time/103"]
+    check page.count == 1
+    check parseJson(page.items[0].payload) == %*{
+      "level": "error",
+      "message": "timeout",
+      "eventTimeMs": 2500
+    }
+    db.close()
+
+    var reopened = open(dataDir = dir)
+    check reopened.timeOrbitProfile("logs/api") == apiProfile
+    check reopened.readTime("logs/api", 1000, 3000, RocheReadOptions(
+      filter: %*{"level": "error"},
+      limit: 10,
+      sortField: "time",
+      sortDirection: rsAsc)).count == 1
+    reopened.close()
     removeDir(dir)
 
   test "locate は決定論的で、未来も計算できる":
@@ -594,6 +638,67 @@ suite "public api":
     db.close()
     removeDir(dir)
 
+  test "putSynced は prune と再起動後も universe event id を再利用しない":
+    let srcDir = createTempDir("roche-universe", "putsynced-seq-src")
+    let dstDir = createTempDir("roche-universe", "putsynced-seq-dst")
+    var src = open(dataDir = srcDir)
+    var dst = open(dataDir = dstDir)
+    discard src.putSynced("""{"name":"Ada"}""",
+                          sourceUniverse = "tokyo",
+                          sourceGalaxy = "users",
+                          ring = "users/u1",
+                          logicalKey = "user:u1")
+    let stats = syncUniverseOnce(src, dst, pruneAcked = true)
+    check stats.applied == 1
+    check stats.pruned == 1
+    check src.universeSyncEvents().len == 0
+    src.close()
+    dst.close()
+
+    src = open(dataDir = srcDir)
+    discard src.putSynced("""{"name":"Grace"}""",
+                          sourceUniverse = "tokyo",
+                          sourceGalaxy = "users",
+                          ring = "users/u2",
+                          logicalKey = "user:u2")
+    let events = src.universeSyncEvents()
+    check events.len == 1
+    check events[0].id == 2'u64
+    src.close()
+    removeDir(srcDir)
+    removeDir(dstDir)
+
+  test "putSynced latest-only coalesce は local write と outbox replacement を同時に commit する":
+    let dir = createTempDir("roche-universe", "putsynced-latest")
+    var db = open(dataDir = dir)
+    db.configureRingApplyPolicy("profiles/u1",
+      RingApplyPolicy(mode: ramLatestOnly, historyKeep: 1, delayMs: 0))
+    discard db.putSynced("""{"name":"old"}""",
+                         sourceUniverse = "tokyo",
+                         sourceGalaxy = "users",
+                         ring = "profiles/u1",
+                         logicalKey = "profile:u1")
+    discard db.putSynced("""{"name":"new"}""",
+                         sourceUniverse = "tokyo",
+                         sourceGalaxy = "users",
+                         ring = "profiles/u1",
+                         logicalKey = "profile:u1")
+    check db.countByRing("profiles/u1") == 2
+    var events = db.universeSyncEvents()
+    check events.len == 1
+    check events[0].id == 2'u64
+    check events[0].payload == """{"name":"new"}"""
+    db.close()
+
+    db = open(dataDir = dir)
+    events = db.universeSyncEvents()
+    check db.countByRing("profiles/u1") == 2
+    check events.len == 1
+    check events[0].id == 2'u64
+    check events[0].payload == """{"name":"new"}"""
+    db.close()
+    removeDir(dir)
+
   test "latest-only ring policy は未配送 outbox を logical key で畳み込む":
     let srcDir = createTempDir("roche-universe", "latest-src")
     let dstDir = createTempDir("roche-universe", "latest-dst")
@@ -664,6 +769,56 @@ suite "public api":
     check dst.countByRing("audit/u1") == 1
     src.close()
     dst.close()
+
+    removeDir(srcDir)
+    removeDir(dstDir)
+
+  test "universe sync retry accounting gates dispatch and dead-letters":
+    let srcDir = createTempDir("roche-universe", "retry-src")
+    let dstDir = createTempDir("roche-universe", "retry-dst")
+
+    var src = open(dataDir = srcDir)
+    var dst = open(dataDir = dstDir)
+    let eventId = src.enqueueUniverseSyncEvent(
+      sourceUniverse = "tokyo",
+      sourceGalaxy = "audit",
+      ring = "audit/u1",
+      payload = """{"event":"retry"}""",
+      logicalKey = "audit:u1:retry")
+
+    let firstFailure = src.markUniverseSyncFailure(eventId, "target down")
+    check firstFailure.attempts == 1
+    check firstFailure.retryAt > epochTime()
+    check not firstFailure.deadLetter
+    check not universeSyncDispatchable(firstFailure)
+
+    let waiting = syncUniverseOnce(src, dst, pruneAcked = true)
+    check waiting.read == 1
+    check waiting.skipped == 1
+    check waiting.applied == 0
+    check src.universeSyncEvents().len == 1
+    check dst.countByRing("audit/u1") == 0
+
+    for _ in 0 ..< 7:
+      discard src.markUniverseSyncFailure(eventId, "target still down")
+    let dead = src.universeSyncEvents(includeDeadLetter = true)[0]
+    check dead.attempts == dead.maxAttempts
+    check dead.deadLetter
+    check not universeSyncDispatchable(dead)
+    check src.universeSyncEvents(includeDeadLetter = false).len == 0
+
+    let afterDead = syncUniverseOnce(src, dst, pruneAcked = true)
+    check afterDead.read == 0
+    check afterDead.applied == 0
+    check src.universeSyncEvents(includeDeadLetter = true).len == 1
+    src.close()
+    dst.close()
+
+    var reopened = open(dataDir = srcDir)
+    let restored = reopened.universeSyncEvents(includeDeadLetter = true)[0]
+    check restored.deadLetter
+    check restored.attempts == restored.maxAttempts
+    reopened.close()
 
     removeDir(srcDir)
     removeDir(dstDir)
@@ -1047,6 +1202,23 @@ suite "永続化":
     removeDir(backupDir)
     removeDir(restoredDir)
 
+  test "transaction-created ring names survive reopen":
+    let dir = createTempDir("rochedb", "tx-ring-name")
+    var db = open(dataDir = dir)
+    db.transaction(proc(tx: RocheTx) =
+      discard tx.put("tx-live", ring = "events/tx-only")
+    )
+    let before = db.readRing("events/tx-only")
+    check before.items.len == 1
+    db.close()
+
+    var reopened = open(dataDir = dir)
+    let after = reopened.readRing("events/tx-only")
+    check after.items.len == 1
+    check after.items[0].payload == "tx-live"
+    reopened.close()
+    removeDir(dir)
+
   test "open は strong durability を指定できる":
     let dir = createTempDir("rochedb", "strong")
     var db = open(dataDir = dir, durability = durStrong)
@@ -1119,6 +1291,45 @@ suite "永続化":
         check not node.hasKey("vec")
     removeDir(dir)
 
+  test "dump JSONL は別 dataDir に import できる移行境界になる":
+    let root = createTempDir("rochedb", "dump-roundtrip")
+    let srcDir = root / "src"
+    let dstDir = root / "dst"
+    let outPath = root / "dump.jsonl"
+
+    var src = open(dataDir = srcDir)
+    discard src.put(%*{"title": "alpha", "status": "published"},
+                    ring = "docs/json", vec = @[1.0'f32, 0.0'f32])
+    discard src.put(encodedPayload("(object (title beta))", pcNif),
+                    ring = "docs/nif", vec = @[0.0'f32, 1.0'f32])
+    let dumpStats = src.dump(outPath)
+    check dumpStats.documents == 2
+    src.close()
+
+    var dst = open(dataDir = dstDir)
+    let importStats = dst.importJsonl(outPath)
+    check importStats.read == dumpStats.records
+    check importStats.imported == 2
+    check importStats.skipped >= 1
+    check dst.countByRing("docs/json") == 1
+    check dst.countByRing("docs/nif") == 1
+
+    let jsonPage = dst.listByRing("docs/json")
+    check jsonPage.items.len == 1
+    check dst.getEncoded(jsonPage.items[0].id).codec == pcJson
+    check parseJson(jsonPage.items[0].payload)["title"].getStr() == "alpha"
+
+    let nifPage = dst.listByRing("docs/nif")
+    check nifPage.items.len == 1
+    check dst.getEncoded(nifPage.items[0].id) ==
+      encodedPayload("(object (title beta))", pcNif)
+
+    let hits = dst.retrieve(@[0.0'f32, 1.0'f32], ring = "docs/nif", budget = 1)
+    check hits.len == 1
+    check hits[0].payload == "(object (title beta))"
+    dst.close()
+    removeDir(root)
+
   test "importJsonl は外部 NoSQL JSONL を ring に割り振って保存できる":
     let dir = createTempDir("rochedb", "import-jsonl")
     let input = dir / "mongo-export.jsonl"
@@ -1186,6 +1397,20 @@ suite "transaction":
     tx.rollback()
     check not (id in db)
     db.close()
+
+  test "rollback-created ring names do not survive reopen":
+    let dir = createTempDir("rochedb", "tx-ring-rollback")
+    var db = open(dataDir = dir)
+    let tx = db.beginTransaction()
+    discard tx.put("hidden", ring = "events/rolled-back")
+    tx.rollback()
+    db.close()
+
+    var reopened = open(dataDir = dir)
+    check reopened.readRing("events/rolled-back").items.len == 0
+    check reopened.ringMetrics().len == 0
+    reopened.close()
+    removeDir(dir)
 
   test "transaction 内の削除は commit 後に反映される":
     var db = open()
@@ -1375,6 +1600,8 @@ suite "transaction":
       check not db.lockActive(short)
       let next = db.acquireRingLock("users/123", ttlSeconds = 5)
       check db.lockActive(next)
+      check next.fence > short.fence
+      check next.token != short.token
       db.releaseLock(next)
 
     block finallyReleaseOnException:

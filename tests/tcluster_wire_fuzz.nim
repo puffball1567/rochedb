@@ -4,6 +4,7 @@
 ## frames that previously could block or escape the connection boundary.
 
 import std/[net, os, strutils, unittest]
+import ../src/roche/payload
 import ../src/roche/wire
 
 type FuzzCase = object
@@ -41,6 +42,7 @@ suite "cluster wire fuzz":
     let peers = getEnv("ROCHE_TEST_PEERS",
       "127.0.0.1:17711,127.0.0.1:17712,127.0.0.1:17713")
     let ps = parsePeers(peers)
+    let deepJson = repeat("{\"x\":", 140) & "\"v\"" & repeat("}", 140)
 
     let cases = @[
       FuzzCase(name: "short-putr", header: "PUTR"),
@@ -69,6 +71,8 @@ suite "cluster wire fuzz":
       FuzzCase(name: "huge-uapply", header: "UAPPLY 999999999"),
       FuzzCase(name: "bad-uapply-json", header: "UAPPLY 8",
                payload: "not-json"),
+      FuzzCase(name: "deep-uapply-json", header: "UAPPLY " & $deepJson.len,
+               payload: deepJson),
       FuzzCase(name: "short-applytx", header: "APPLYTX"),
       FuzzCase(name: "short-trf", header: "TRF"),
       FuzzCase(name: "unknown-command", header: "WHAT_IS_THIS 1 2 3"),
@@ -84,3 +88,32 @@ suite "cluster wire fuzz":
         s.tryReadResponse()
       s.close()
       checkAlive(ps, tc.name)
+
+    var bad = authSocket(ps[0])
+    bad.send("GET not-a-number\n")
+    let badResp = bad.readHeader(timeoutMs = 1_000)
+    check badResp == @["ERR", "bad-request"]
+    bad.close()
+    checkAlive(ps, "stable-error-category")
+
+    var c = newClusterClient(ps, username = "alice", password = "secret")
+    let id = c.putRingReq(0, "allowed/fuzz/selection-limit",
+                          """{"title":"ok"}""", @[], pcJson)
+    let hugeSelection = repeat("a", 64 * 1024 + 1)
+    var rejected = false
+    for node in 0 ..< ps.len:
+      try:
+        discard c.queryReq(node, id.parent, id.seq, id.period, id.head,
+                           id.tWrite, hugeSelection)
+      except ValueError:
+        rejected = true
+        break
+    check rejected
+
+    for i in 0 ..< 5:
+      discard c.putRingReq(0, "allowed/fuzz/retrieve-cost/" & $i,
+                           "cost-" & $i, @[1.0'f32, float32(i) / 10.0])
+    expect IOError:
+      discard c.retrieveReq(0, false, 0'u64, @[1.0'f32, 0.0'f32], 2)
+    c.close()
+    checkAlive(ps, "retrieve-cost-limit")

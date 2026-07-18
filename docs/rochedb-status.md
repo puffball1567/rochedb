@@ -29,6 +29,7 @@ Translations:
 | Galaxy isolation | Done | Separate data dir / peer list / credential boundary |
 | Atlas / ring map | Done | `atlas()` and `roche atlas` |
 | Galaxy/ring description | Done | Atlas map annotations, not payload text |
+| Time orbit | PoC | Embedded ring-local 60-bit millisecond orbit for log/event/time-series placement. Includes persisted profiles, `putTime` / `readTime`, and `roche time-orbit/time-put/time-get`; cluster profile administration is still pending. Design note: [time-orbit.md](./time-orbit.md) |
 | Retrieval tuning profile | Done | amount / scope / depth |
 | FAISS vector backend | PoC | Dynamic bridge via `libroche_faiss.so`; default fetch tag is FAISS `v1.14.3`, exact commit pinning is optional via `ROCHE_FAISS_COMMIT`; `roche doctor`, bridge build, `tests/tapi.nim`, and `examples/vector_backend_bench.sh` are verified locally |
 | FAISS GPU backend | Not planned for core | RocheDB is designed to reduce the search set before ANN/LLM work. Needing GPU FAISS is treated as a placement or retrieval-profile issue first |
@@ -39,7 +40,7 @@ Translations:
 
 | Feature | Status | Notes |
 |---|---|---|
-| Append-only WAL | Done | Batched flush by default; `durStrong` / `--durability=strong` adds flush + fsync write boundaries |
+| Append-only WAL | Done | Batched flush by default; `durStrong` / `--durability=strong` adds flush + fsync write boundaries. New WAL files use a magic/version header and per-record length + CRC32 wrappers; legacy pre-v1.0 WAL remains readable for migration |
 | Reopen recovery | Done | Items / vectors / ring metadata / descriptions |
 | Transaction | Done | Embedded atomic transaction plus all-or-nothing `batchPutAtomic`, `batchUpdateAtomic`, and `batchDeleteAtomic` helpers |
 | Cooperative coordinate locks | Done | Embedded opt-in `ring` and `stellar` locks for high-integrity workflows; normal NoSQL read/write paths do not check locks |
@@ -47,9 +48,9 @@ Translations:
 | Cluster CRUD/list/count | PoC | `update`, `deleteById`, JSON `patch`, `listByRing`, `countByRing` use landing intents or node fan-out; `scripts/cluster_tx_smoke.sh` covers smoke |
 | Compact | Done | Rebuilds WAL from live records |
 | Backup / restore | Done | Backup as compacted WAL and restore into another data dir |
-| Dump / import-jsonl | Done | NoSQL JSONL import rules |
-| Universe sync outbox | PoC | WAL-backed eventual sync event queue with idempotent apply, ack/prune, `putSynced`, latest-only pending coalescing, delayed timestamp apply windows, `roche universe-export` / `universe-apply` JSONL handoff, one-shot `roche universe-sync` between local data dirs, remote `--peers` delivery via `UAPPLY`, and `universe-status` operational counters. It is a durable scheduler boundary, not immediate global consistency |
-| Crash recovery tests | Partial | Torn WAL tail repair, compact interruption, partial commit cases |
+| Dump / import-jsonl | Done | NoSQL JSONL import rules. This is the stable human-readable migration boundary while the pre-v1.0 internal WAL format can still evolve |
+| Universe sync outbox | PoC | WAL-backed eventual sync event queue with idempotent apply, ack/prune, transaction-backed `putSynced`, prune-safe monotonic source ids, latest-only pending coalescing, delayed timestamp apply windows, retryAt / maxAttempts / dead-letter state, `roche universe-export` / `universe-apply` JSONL handoff, one-shot `roche universe-sync` between local data dirs, remote `--peers` delivery via `UAPPLY`, and `universe-status` operational counters. It is a durable scheduler boundary, not immediate global consistency |
+| Crash recovery tests | Partial | Torn WAL tail repair, versioned-WAL checksum mismatch refusal, mid-file WAL corruption refusal, compact interruption, partial commit cases |
 | Strong durability / fsync knob | Done | `open(dataDir=..., durability=durStrong)` and `roched --durability=strong`; store/API tests cover reopen, transaction, compact |
 | Core test suite | Done | `scripts/test_core.sh` runs orbital core, selection, field, store, and public API tests |
 | Full smoke suite | Done | `scripts/test_all_smoke.sh` runs core tests plus cluster tx, failure retry, authz, wire fuzz, recovery, and remote universe sync smoke; driver compatibility is opt-in |
@@ -65,10 +66,12 @@ Translations:
 | Handoff / forwarder | PoC | Slow tick integration exists. Fully distributed forwarder placement is not done |
 | Driver-friendly wire | Done | `PUTR/GETID/QRYID`; `WIREVER` exposes the current protocol version and `CODECS` exposes payload formats. Compatibility policy is documented in `docs/protocol-compatibility.md` |
 | Health / metrics / rings | Done | CLI and wire protocol; metrics include uptime, request/error/auth counters, connection counts, WAL bytes, warp backlog, universe apply counters, cluster tx backlog, and storage/ring counts |
-| Authn + secret key | Done | username/password/secret-key |
+| Authn + secret key | Done | username/password/secret-key; unusable credential combinations fail at startup |
 | TLS | Done | Standard TLS transport for `roched` and CLI/client connections when built with `-d:ssl`; `scripts/cluster_tls_smoke.sh` covers authenticated TLS, secret-key transport, JSON put/get, and plain-client rejection |
 | Authz / RBAC | PoC | `roched --allow-ring=prefix[,prefix...]` and `--role=user:password:reader|writer|admin[:prefixes]`; `scripts/cluster_authz_smoke.sh` and `scripts/cluster_rbac_smoke.sh` cover prefix and role matrix behavior |
-| Wire fuzz smoke | Done | `scripts/cluster_wire_fuzz_smoke.sh` runs deterministic malformed-frame cases, including oversized headers, and verifies the cluster stays healthy |
+| Wire fuzz smoke | Done | `scripts/cluster_wire_fuzz_smoke.sh` runs deterministic malformed-frame cases, including oversized headers and deep JSON, and verifies the cluster stays healthy |
+| Server resource guardrails | Partial | Accepted sockets have a body-read timeout and fixed active-connection cap; fuller request-deadline and per-query cost controls remain planned |
+| Bounded server retrieve | Done | `roched` keeps only the current top candidates up to request budget while scanning local vectors instead of retaining every matching payload before truncation |
 | Dynamic membership / epoch migration | Foundation | Current peer list is still static at runtime, but v0.6 adds explicit arc tables, weighted arcs, deterministic virtual arcs, topology validation, and `remapFraction` so membership changes can be modeled with less unnecessary remapping than naive `mod nNodes`. Online rebalance workflow is still planned |
 | Cluster transaction coordinator redundancy | Planned | Remove node0 as a single point of failure |
 | Read-your-writes for cluster tx | PoC | `get/query/batchGet` fallback to node0 landing intent before owner apply; cluster smoke covers update/delete |
@@ -113,7 +116,7 @@ Translations:
 | Cluster failure retry smoke | Partial | `scripts/cluster_failure_smoke.sh` kills the owner node, verifies the intent remains pending, restarts the owner, and verifies retry apply |
 | Universe sync demo | Done | `examples/universe_sync_demo.sh` builds a small source/target pair, demonstrates API-level sync, then demonstrates the CLI export/sync/prune boundary. `scripts/universe_sync_failure_smoke.sh` verifies malformed JSONL handling, replay idempotency, and explicit ack/prune. `scripts/universe_sync_remote_smoke.sh` verifies remote `--peers` delivery and target-down retry behavior |
 | Payload codec demos | Done | `examples/payload_codecs_demo.sh` covers embedded persistence and prepared selection; `examples/payload_codecs_cluster_demo.sh` covers codec negotiation and legacy wire-header compatibility |
-| Crash / failure case study | Partial | Store-level WAL tail repair, compact interruption, partial commit, and cluster owner crash/restart retry are covered |
+| Crash / failure case study | Partial | Store-level WAL tail repair, mid-file WAL corruption refusal, compact interruption, partial commit, and cluster owner crash/restart retry are covered |
 | Multi-node cloud case study | Planned | VM/AZ, latency, failover behavior |
 | Prometheus / Datadog exporter | Post-v0.1 candidate | Core exposes key/value metrics now; OpenMetrics / Datadog collector should be added outside the core server loop |
 | State boundary demo | Post-v0.1 candidate | browser/RN local-global state demo |
@@ -122,8 +125,8 @@ Translations:
 
 | Item | Status | Notes |
 |---|---|---|
-| Username/password auth | Done | roched and driver path |
-| Secret key gate | Done | ID/password alone can be insufficient |
+| Username/password auth | Done | roched and driver path; user without password fails closed |
+| Secret key gate | Done | ID/password alone can be insufficient; secret-key without user/password fails closed |
 | nimsodium encryption primitive | Partial | Used for auth transport; scope may expand |
 | Galaxy isolation | Done | Limits blast radius by galaxy |
 | TLS | Done | Standard TCP transport TLS is implemented for `-d:ssl` builds; certificate rotation and managed CA workflows remain operational work |

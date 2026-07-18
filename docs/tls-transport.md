@@ -29,8 +29,8 @@ src/roched \
   --peers=127.0.0.1:7301 \
   --data=/var/lib/rochedb \
   --user=alice \
-  --password=change-me \
-  --secret-key=change-me-too \
+  --password-file=/run/secrets/roche_password \
+  --secret-key-file=/run/secrets/roche_secret_key \
   --tls-cert=/etc/rochedb/server.crt \
   --tls-key=/etc/rochedb/server.key \
   --tls-ca=/etc/rochedb/ca.crt
@@ -49,8 +49,8 @@ Use `--tls` to connect to a TLS-enabled `roched`:
 src/rochecli health \
   --peers=127.0.0.1:7301 \
   --user=alice \
-  --password=change-me \
-  --secret-key=change-me-too \
+  --password-file=/run/secrets/roche_password \
+  --secret-key-file=/run/secrets/roche_secret_key \
   --tls \
   --tls-ca=/etc/rochedb/ca.crt
 ```
@@ -61,13 +61,17 @@ For local self-signed experiments only:
 src/rochecli health \
   --peers=127.0.0.1:7301 \
   --user=alice \
-  --password=change-me \
-  --secret-key=change-me-too \
+  --password-file=/run/secrets/roche_password \
+  --secret-key-file=/run/secrets/roche_secret_key \
   --tls \
   --tls-insecure-skip-verify
 ```
 
 Do not use `--tls-insecure-skip-verify` for production deployments.
+For local smoke tests, direct `--password` / `--secret-key` values are accepted.
+For shared systems, prefer `--password-file`, `--secret-key-file`, or the
+`ROCHE_PASSWORD` / `ROCHE_SECRET_KEY` environment variables so secrets do not
+appear in shell history or process listings.
 
 ## C ABI
 

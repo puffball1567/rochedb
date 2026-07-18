@@ -20,7 +20,8 @@ drivers.
 - Embedded mode: the application process is trusted. Local filesystem access is
   outside RocheDB's control.
 - Cluster mode: each `roched` process is trusted after authentication. The
-  network between clients and nodes is not trusted until TLS is implemented.
+  network between clients and nodes is not trusted unless TLS is enabled and
+  certificate verification is configured for that deployment.
 - Galaxy isolation: separate data directories, peer lists, credentials, and
   secret keys define isolation boundaries.
 - Drivers: official drivers must not weaken authentication, ID parsing, or error
@@ -91,7 +92,9 @@ drivers.
 
 ## Deployment Guidance
 
-- Use private networks or tunnels until TLS lands.
+- Use TLS for untrusted networks. Private networks or tunnels are still useful
+  defense-in-depth and are recommended when certificate management is not yet
+  operationally mature.
 - Use separate galaxies, credentials, and secret keys for separate trust domains.
 - Use `--durability=strong` for data where losing the last flush batch is
   unacceptable.
