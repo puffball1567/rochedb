@@ -3,28 +3,28 @@
 import PackageDescription
 
 let package = Package(
-    name: "RocheDB",
+    name: "OrbeliasDB",
     platforms: [
         .macOS(.v13)
     ],
     products: [
-        .library(name: "RocheDB", targets: ["RocheDB"])
+        .library(name: "OrbeliasDB", targets: ["OrbeliasDB"])
     ],
     targets: [
         .systemLibrary(
-            name: "CRocheDB",
-            path: "Sources/CRocheDB"
+            name: "COrbeliasDB",
+            path: "Sources/COrbeliasDB"
         ),
         .target(
-            name: "RocheDB",
-            dependencies: ["CRocheDB"],
+            name: "OrbeliasDB",
+            dependencies: ["COrbeliasDB"],
             linkerSettings: [
                 .unsafeFlags(["-L../../lib"])
             ]
         ),
         .testTarget(
-            name: "RocheDBTests",
-            dependencies: ["RocheDB"]
+            name: "OrbeliasDBTests",
+            dependencies: ["OrbeliasDB"]
         )
     ]
 )

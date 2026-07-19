@@ -1,11 +1,11 @@
-# RocheDB v0.5.1
+# OrbeliasDB v0.5.1
 
-RocheDB v0.5.1 is a documentation-focused patch release for the v0.5.x
+OrbeliasDB v0.5.1 is a documentation-focused patch release for the v0.5.x
 technical preview.
 
 Release:
 
-https://github.com/puffball1567/rochedb/releases/tag/v0.5.1
+https://github.com/puffball1567/orbeliasdb/releases/tag/v0.5.1
 
 ## Main Changes
 
@@ -15,7 +15,7 @@ https://github.com/puffball1567/rochedb/releases/tag/v0.5.1
 
 ## Why This Patch Exists
 
-RocheDB has enough unusual terminology that first-time reviewers need a direct
+OrbeliasDB has enough unusual terminology that first-time reviewers need a direct
 technical entry point. The new FAQ answers the questions most likely to come
 from database engineers:
 
@@ -26,9 +26,9 @@ from database engineers:
 - Where do the benchmark improvements come from?
 - How are records grouped on disk?
 - What happens when write patterns are messy?
-- Is RocheDB production-ready?
+- Is OrbeliasDB production-ready?
 
-The answers are intentionally conservative. They explain RocheDB's current
+The answers are intentionally conservative. They explain OrbeliasDB's current
 strengths, but also document boundaries around production readiness, dynamic
 membership, broad secondary-index planning, and real-workload validation.
 

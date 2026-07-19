@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-OUT="${ROCHEDB_CAPI_OUT:-lib/librochedb.so}"
-NIMCACHE="${ROCHEDB_CAPI_NIMCACHE:-/tmp/nimcache_roche_capi}"
+OUT="${ORBELIASDB_CAPI_OUT:-lib/liborbeliasdb.so}"
+NIMCACHE="${ORBELIASDB_CAPI_NIMCACHE:-/tmp/nimcache_orbelias_capi}"
 
 mkdir -p "$(dirname "$OUT")"
 
@@ -23,6 +23,6 @@ fi
 nim c "${NIM_FLAGS[@]}" \
   --nimcache:"$NIMCACHE" \
   -o:"$OUT" \
-  src/rochedb_capi.nim
+  src/orbeliasdb_capi.nim
 
 echo "built $OUT with -d:ssl"

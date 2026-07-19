@@ -1,6 +1,6 @@
 {
-  "name": "rochedb/rochedb",
-  "description": "PHP FFI driver for RocheDB",
+  "name": "orbeliasdb/orbeliasdb",
+  "description": "PHP FFI driver for OrbeliasDB",
   "type": "library",
   "license": "Apache-2.0",
   "require": {
@@ -9,7 +9,7 @@
   },
   "autoload": {
     "psr-4": {
-      "RocheDB\\": "src/"
+      "OrbeliasDB\\": "src/"
     }
   }
 }

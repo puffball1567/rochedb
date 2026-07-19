@@ -1,6 +1,6 @@
-# RocheDB Topology Configuration
+# OrbeliasDB Topology Configuration
 
-This is the reference for RocheDB recovery / universe topology files. For
+This is the reference for OrbeliasDB recovery / universe topology files. For
 deployment patterns, see [topology-examples.md](./topology-examples.md). For
 cloud metrics and recovery commands, see [cloud-operations.md](./cloud-operations.md).
 
@@ -19,7 +19,7 @@ The topology file is JSON.
       "galaxies": [
         {
           "galaxy": "app-main",
-          "archive": "/backup/rochedb/app-main/local-a"
+          "archive": "/backup/orbeliasdb/app-main/local-a"
         }
       ]
     }
@@ -30,14 +30,14 @@ The topology file is JSON.
 Run:
 
 ```sh
-roche recovery-backup --data=/var/lib/rochedb \
-  --universe-config=/etc/rochedb/topology.json
+orbelias recovery-backup --data=/var/lib/orbeliasdb \
+  --universe-config=/etc/orbeliasdb/topology.json
 
-roche recovery-status --universe-config=/etc/rochedb/topology.json \
+orbelias recovery-status --universe-config=/etc/orbeliasdb/topology.json \
   --metrics
 
-roche recovery-restore --universe-config=/etc/rochedb/topology.json \
-  --data=/var/lib/rochedb-restored
+orbelias recovery-restore --universe-config=/etc/orbeliasdb/topology.json \
+  --data=/var/lib/orbeliasdb-restored
 ```
 
 ## Full Example
@@ -49,11 +49,11 @@ roche recovery-restore --universe-config=/etc/rochedb/topology.json \
   "authProfiles": {
     "shared-ai": {
       "mode": "user-password-secret-key",
-      "source": "secret-manager:roche/shared-ai"
+      "source": "secret-manager:orbelias/shared-ai"
     },
     "audit-readonly": {
       "mode": "user-password-secret-key",
-      "source": "secret-manager:roche/audit-readonly"
+      "source": "secret-manager:orbelias/audit-readonly"
     }
   },
   "universes": [
@@ -67,11 +67,11 @@ roche recovery-restore --universe-config=/etc/rochedb/topology.json \
       "galaxies": [
         {
           "galaxy": "training-data",
-          "archive": "/backup/rochedb/training-data/tokyo-a"
+          "archive": "/backup/orbeliasdb/training-data/tokyo-a"
         },
         {
           "galaxy": "prompt-cache",
-          "archive": "/backup/rochedb/prompt-cache/tokyo-a",
+          "archive": "/backup/orbeliasdb/prompt-cache/tokyo-a",
           "authRef": "audit-readonly",
           "readonly": false
         }
@@ -80,7 +80,7 @@ roche recovery-restore --universe-config=/etc/rochedb/topology.json \
     {
       "universe": "oregon-a",
       "location": "remote",
-      "endpoint": "roche://oregon-training.internal:7301",
+      "endpoint": "orbelias://oregon-training.internal:7301",
       "failureDomain": "aws-us-west-2",
       "authRef": "shared-ai",
       "priority": 5,
@@ -88,11 +88,11 @@ roche recovery-restore --universe-config=/etc/rochedb/topology.json \
       "galaxies": [
         {
           "galaxy": "training-data",
-          "archive": "/backup/rochedb/training-data/oregon-a"
+          "archive": "/backup/orbeliasdb/training-data/oregon-a"
         },
         {
           "galaxy": "prompt-cache",
-          "archive": "/backup/rochedb/prompt-cache/oregon-a",
+          "archive": "/backup/orbeliasdb/prompt-cache/oregon-a",
           "authRef": "audit-readonly",
           "readonly": true
         }
@@ -121,7 +121,7 @@ roche recovery-restore --universe-config=/etc/rochedb/topology.json \
   "authProfiles": {
     "shared-ai": {
       "mode": "user-password-secret-key",
-      "source": "secret-manager:roche/shared-ai"
+      "source": "secret-manager:orbelias/shared-ai"
     }
   }
 }
@@ -133,7 +133,7 @@ roche recovery-restore --universe-config=/etc/rochedb/topology.json \
 | `source` | string | No | Operator-defined location of the real credentials, such as a secret manager path. |
 
 Do not include `username`, `password`, or `secretKey` in the topology file.
-RocheDB rejects those fields under `authProfiles`.
+OrbeliasDB rejects those fields under `authProfiles`.
 
 ## `universes[]`
 
@@ -212,7 +212,7 @@ excluded as write targets during `recovery-backup`.
 The recovery CLI can create entries without a topology file:
 
 ```sh
-roche recovery-backup --data=/var/lib/rochedb \
+orbelias recovery-backup --data=/var/lib/orbeliasdb \
   --mirror=/backup/app-main \
   --universe=local-a \
   --galaxy=app-main \

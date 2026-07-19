@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BASE_PORT="${ROCHE_UNIVERSE_SYNC_BASE_PORT:-17611}"
+BASE_PORT="${ORBELIAS_UNIVERSE_SYNC_BASE_PORT:-17611}"
 PEERS="127.0.0.1:${BASE_PORT},127.0.0.1:$((BASE_PORT + 1)),127.0.0.1:$((BASE_PORT + 2))"
-WORK="${TMPDIR:-/tmp}/rochedb-universe-sync-remote-smoke-$$"
+WORK="${TMPDIR:-/tmp}/orbeliasdb-universe-sync-remote-smoke-$$"
 SOURCE="$WORK/source"
 RETRY_SOURCE="$WORK/retry-source"
 DELAY_SOURCE="$WORK/delay-source"
@@ -27,68 +27,68 @@ trap cleanup EXIT
 
 start_target() {
   for id in 0 1 2; do
-    src/roched --id="$id" --peers="$PEERS" --data="$TARGET/node$id" --slow-tick=0.05 &
+    src/orbeliasd --id="$id" --peers="$PEERS" --data="$TARGET/node$id" --slow-tick=0.05 &
     PIDS+=("$!")
   done
   for _ in $(seq 1 50); do
-    if src/rochecli health --peers="$PEERS" >/dev/null 2>&1; then
+    if src/orbeliascli health --peers="$PEERS" >/dev/null 2>&1; then
       break
     fi
     sleep 0.1
   done
-  src/rochecli health --peers="$PEERS" >/dev/null
+  src/orbeliascli health --peers="$PEERS" >/dev/null
 }
 
 cd "$ROOT"
 mkdir -p "$WORK" "$ROOT/bin"
 
-echo "[universe-remote] build roched"
-nim c -d:release --nimcache:/tmp/nimcache_roched -o:src/roched src/roched.nim >/dev/null
+echo "[universe-remote] build orbeliasd"
+nim c -d:release --nimcache:/tmp/nimcache_orbeliasd -o:src/orbeliasd src/orbeliasd.nim >/dev/null
 
-echo "[universe-remote] build rochecli"
-nim c -d:release --nimcache:/tmp/nimcache_rochecli -o:src/rochecli src/rochecli.nim >/dev/null
+echo "[universe-remote] build orbeliascli"
+nim c -d:release --nimcache:/tmp/nimcache_orbeliascli -o:src/orbeliascli src/orbeliascli.nim >/dev/null
 
 echo "[universe-remote] build demo enqueuer"
-nim c -d:release --nimcache:/tmp/nimcache_roche_universe_sync_demo \
+nim c -d:release --nimcache:/tmp/nimcache_orbelias_universe_sync_demo \
   -o:bin/universe_sync_demo examples/universe_sync_demo.nim >/dev/null
 
 echo "[universe-remote] enqueue source event"
 bin/universe_sync_demo --source="$SOURCE" --target="$TARGET" --mode=enqueue
-src/rochecli universe-status --data="$SOURCE" | grep -q "pending=1"
+src/orbeliascli universe-status --data="$SOURCE" | grep -q "pending=1"
 cp -a "$SOURCE" "$RETRY_SOURCE"
 
 echo "[universe-remote] target down keeps source pending"
-src/rochecli universe-sync --data="$SOURCE" --peers="$PEERS" --prune-acked |
+src/orbeliascli universe-sync --data="$SOURCE" --peers="$PEERS" --prune-acked |
   grep -q "read=1 applied=0 skipped=0 acked=0 pruned=0 errors=1"
-src/rochecli universe-status --data="$SOURCE" | grep -q "pending=1"
+src/orbeliascli universe-status --data="$SOURCE" | grep -q "pending=1"
 
 echo "[universe-remote] start target server"
 start_target
 sleep 1.2
 
 echo "[universe-remote] sync source to remote target"
-src/rochecli universe-sync --data="$SOURCE" --peers="$PEERS" --prune-acked |
+src/orbeliascli universe-sync --data="$SOURCE" --peers="$PEERS" --prune-acked |
   grep -q "read=1 applied=1 skipped=0 acked=1 pruned=1 errors=0"
-src/rochecli universe-status --data="$SOURCE" | grep -q "pending=0"
-src/rochecli universe-status --peers="$PEERS" | grep -q "applied=1"
-src/rochecli universe-status --peers="$PEERS" --metrics | grep -q "universeApplyApplied 1"
-src/rochecli universe-status --peers="$PEERS" --metrics | grep -q "universeApplyErrors 0"
+src/orbeliascli universe-status --data="$SOURCE" | grep -q "pending=0"
+src/orbeliascli universe-status --peers="$PEERS" | grep -q "applied=1"
+src/orbeliascli universe-status --peers="$PEERS" --metrics | grep -q "universeApplyApplied 1"
+src/orbeliascli universe-status --peers="$PEERS" --metrics | grep -q "universeApplyErrors 0"
 
 echo "[universe-remote] restart target preserves applied event keys"
 stop_target
 start_target
-src/rochecli universe-status --peers="$PEERS" | grep -q "applied=1"
+src/orbeliascli universe-status --peers="$PEERS" | grep -q "applied=1"
 
 echo "[universe-remote] duplicate delivery after restart is skipped"
-src/rochecli universe-sync --data="$RETRY_SOURCE" --peers="$PEERS" --prune-acked |
+src/orbeliascli universe-sync --data="$RETRY_SOURCE" --peers="$PEERS" --prune-acked |
   grep -q "read=1 applied=0 skipped=1 acked=1 pruned=1 errors=0"
-src/rochecli universe-status --peers="$PEERS" --metrics | grep -q "universeApplySkipped 1"
-src/rochecli universe-status --data="$RETRY_SOURCE" | grep -q "pending=0"
+src/orbeliascli universe-status --peers="$PEERS" --metrics | grep -q "universeApplySkipped 1"
+src/orbeliascli universe-status --data="$RETRY_SOURCE" | grep -q "pending=0"
 
 echo "[universe-remote] delayed remote apply stays pending"
 bin/universe_sync_demo --source="$DELAY_SOURCE" --target="$TARGET" --mode=enqueue --delay-ms=60000
-src/rochecli universe-sync --data="$DELAY_SOURCE" --peers="$PEERS" --prune-acked |
+src/orbeliascli universe-sync --data="$DELAY_SOURCE" --peers="$PEERS" --prune-acked |
   grep -q "read=1 applied=0 skipped=1 acked=0 pruned=0 errors=0"
-src/rochecli universe-status --data="$DELAY_SOURCE" | grep -q "pending=1"
+src/orbeliascli universe-status --data="$DELAY_SOURCE" | grep -q "pending=1"
 
 echo "[universe-remote] OK"

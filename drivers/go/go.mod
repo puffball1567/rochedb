@@ -1,3 +1,3 @@
-module github.com/rochedb/rochedb-go
+module github.com/orbeliasdb/orbeliasdb-go
 
 go 1.23

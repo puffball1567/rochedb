@@ -2,11 +2,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK="${TMPDIR:-/tmp}/rochedb-payload-codecs-demo-$$"
+WORK="${TMPDIR:-/tmp}/orbeliasdb-payload-codecs-demo-$$"
 mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 cd "$ROOT"
-nim c -d:release --nimcache:/tmp/nimcache_roche_payload_codecs_demo \
+nim c -d:release --nimcache:/tmp/nimcache_orbelias_payload_codecs_demo \
   -o:bin/payload_codecs_demo examples/payload_codecs_demo.nim
 bin/payload_codecs_demo --data="$WORK/data"

@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="${ROCHE_FAISS_VERSION:-v1.14.3}"
-PINNED_COMMIT="${ROCHE_FAISS_COMMIT:-}"
-URL="${ROCHE_FAISS_URL:-https://github.com/facebookresearch/faiss.git}"
+VERSION="${ORBELIAS_FAISS_VERSION:-v1.14.3}"
+PINNED_COMMIT="${ORBELIAS_FAISS_COMMIT:-}"
+URL="${ORBELIAS_FAISS_URL:-https://github.com/facebookresearch/faiss.git}"
 DEST="${ROOT}/third_party/faiss"
 
 mkdir -p "${ROOT}/third_party"

@@ -1,7 +1,7 @@
-## roche/core の単体テスト（設計書 §12 Step 1 の完了条件を含む）
+## orbelias/core の単体テスト（設計書 §12 Step 1 の完了条件を含む）
 
 import std/[unittest, math]
-import ../src/roche/core
+import ../src/orbelias/core
 
 suite "wrap / angDist":
   test "正規化":

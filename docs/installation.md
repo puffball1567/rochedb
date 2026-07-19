@@ -5,11 +5,11 @@ title: Installation
 
 # Installation
 
-RocheDB installs command-line binaries named `roche`, `roched`, `rochecli`,
-`rochebench`, and `rochesim`.
+OrbeliasDB installs command-line binaries named `orbelias`, `orbeliasd`, `orbeliascli`,
+`orbeliasbench`, and `orbeliassim`.
 
-For normal use, the command should be available as `roche`, not as
-`bin/roche`. The `bin/` form is only for source-tree development and smoke
+For normal use, the command should be available as `orbelias`, not as
+`bin/orbelias`. The `bin/` form is only for source-tree development and smoke
 tests.
 
 ## Prerequisites
@@ -21,23 +21,23 @@ tests.
 
 ## User Install
 
-Install RocheDB from Nimble:
+Install OrbeliasDB from Nimble:
 
 ```sh
-nimble install rochedb
+nimble install orbeliasdb
 ```
 
 Use a source checkout when you want to run the full test suite, examples, or
 driver smoke tests:
 
 ```sh
-git clone https://github.com/puffball1567/rochedb.git
-cd rochedb
+git clone https://github.com/puffball1567/orbeliasdb.git
+cd orbeliasdb
 nimble install -y
 ```
 
 Nimble installs binaries into `~/.nimble/bin` by default. Add it to your shell
-PATH if `roche --help` is not found:
+PATH if `orbelias --help` is not found:
 
 ```sh
 export PATH="$HOME/.nimble/bin:$PATH"
@@ -52,8 +52,8 @@ printf '\nexport PATH="$HOME/.nimble/bin:$PATH"\n' >> ~/.profile
 Then verify:
 
 ```sh
-roche --help
-roched --help
+orbelias --help
+orbeliasd --help
 ```
 
 ## System Install
@@ -65,32 +65,32 @@ binaries.
 Build repo-local binaries:
 
 ```sh
-nim c -d:release --nimcache:/tmp/nimcache_roche -o:bin/roche src/rochecli.nim
-nim c -d:release --nimcache:/tmp/nimcache_roched -o:bin/roched src/roched.nim
+nim c -d:release --nimcache:/tmp/nimcache_orbelias -o:bin/orbelias src/orbeliascli.nim
+nim c -d:release --nimcache:/tmp/nimcache_orbeliasd -o:bin/orbeliasd src/orbeliasd.nim
 ```
 
 Install them onto the system PATH:
 
 ```sh
-sudo install -m 0755 bin/roche /usr/local/bin/roche
-sudo install -m 0755 bin/roched /usr/local/bin/roched
+sudo install -m 0755 bin/orbelias /usr/local/bin/orbelias
+sudo install -m 0755 bin/orbeliasd /usr/local/bin/orbeliasd
 ```
 
 Optional development and benchmark tools:
 
 ```sh
-nim c -d:release --nimcache:/tmp/nimcache_rochebench -o:bin/rochebench src/rochebench.nim
-nim c -d:release --nimcache:/tmp/nimcache_rochesim -o:bin/rochesim src/rochesim.nim
-sudo install -m 0755 bin/rochebench /usr/local/bin/rochebench
-sudo install -m 0755 bin/rochesim /usr/local/bin/rochesim
+nim c -d:release --nimcache:/tmp/nimcache_orbeliasbench -o:bin/orbeliasbench src/orbeliasbench.nim
+nim c -d:release --nimcache:/tmp/nimcache_orbeliassim -o:bin/orbeliassim src/orbeliassim.nim
+sudo install -m 0755 bin/orbeliasbench /usr/local/bin/orbeliasbench
+sudo install -m 0755 bin/orbeliassim /usr/local/bin/orbeliassim
 ```
 
 Verify:
 
 ```sh
-command -v roche
-command -v roched
-roche --help
+command -v orbelias
+command -v orbeliasd
+orbelias --help
 ```
 
 ## Source-Tree Development
@@ -99,9 +99,9 @@ Use repo-local binaries only when you explicitly want to test the current
 checkout without installing it:
 
 ```sh
-nim c -d:release --nimcache:/tmp/nimcache_roche -o:bin/roche src/rochecli.nim
-bin/roche --help
+nim c -d:release --nimcache:/tmp/nimcache_orbelias -o:bin/orbelias src/orbeliascli.nim
+bin/orbelias --help
 ```
 
-Documentation and examples use `roche` for installed usage. Test scripts may use
-`bin/roche` to avoid depending on the user's PATH.
+Documentation and examples use `orbelias` for installed usage. Test scripts may use
+`bin/orbelias` to avoid depending on the user's PATH.

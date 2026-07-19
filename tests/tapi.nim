@@ -1,7 +1,7 @@
-## 公開 API（src/rochedb.nim）のテスト
+## 公開 API（src/orbeliasdb.nim）のテスト
 
 import std/[json, os, strutils, tempfiles, times, unittest]
-import ../src/rochedb
+import ../src/orbeliasdb
 
 suite "public api":
   test "put/get の往復":
@@ -14,8 +14,8 @@ suite "public api":
   test "payload codecs are selectable and JSON projection is format-aware":
     var db = open()
     let rawId = db.put(encodedPayload("raw\0bytes", pcRaw))
-    let jsonId = db.put(%*{"title": "RocheDB", "private": true})
-    let nifId = db.put(encodedPayload("(object (title RocheDB))", pcNif))
+    let jsonId = db.put(%*{"title": "OrbeliasDB", "private": true})
+    let nifId = db.put(encodedPayload("(object (title OrbeliasDB))", pcNif))
     let bifId = db.put(encodedPayload("\x01\x00\x00\x00", pcBif))
 
     check db.getEncoded(rawId) == encodedPayload("raw\0bytes", pcRaw)
@@ -24,7 +24,7 @@ suite "public api":
     check db.getEncoded(bifId).codec == pcBif
 
     let prepared = prepareSelection("{ title }")
-    check db.query(jsonId, prepared) == %*{"title": "RocheDB"}
+    check db.query(jsonId, prepared) == %*{"title": "OrbeliasDB"}
     expect ValueError:
       discard db.query(nifId, prepared)
     expect ValueError:
@@ -32,7 +32,7 @@ suite "public api":
     db.close()
 
   test "ring payload profile persists and can drive explicit writes":
-    let dir = createTempDir("rochedb", "ring-profile")
+    let dir = createTempDir("orbeliasdb", "ring-profile")
     var db = open(dataDir = dir)
     let profile = RingPayloadProfile(defaultCodec: pcBif,
       charset: "", formatVersion: "1")
@@ -55,7 +55,7 @@ suite "public api":
     removeDir(dir)
 
   test "time orbit profile places and reads log records by calculated buckets":
-    let dir = createTempDir("rochedb", "time-orbit")
+    let dir = createTempDir("orbeliasdb", "time-orbit")
     var db = open(dataDir = dir)
     let apiProfile = TimeOrbitProfile(bits: 60, bucketMs: 1000'i64,
                                       phase: 100'u64, salt: "api")
@@ -72,7 +72,7 @@ suite "public api":
     discard db.putTime(%*{"level": "error", "message": "too-late"}, "logs/api", 4200)
     discard db.putTime(%*{"level": "error", "message": "audit"}, "logs/audit", 2500)
 
-    let page = db.readTime("logs/api", 1000, 3000, RocheReadOptions(
+    let page = db.readTime("logs/api", 1000, 3000, OrbeliasReadOptions(
       filter: %*{"level": "error"},
       selection: "{ level message eventTimeMs }",
       limit: 10,
@@ -90,7 +90,7 @@ suite "public api":
 
     var reopened = open(dataDir = dir)
     check reopened.timeOrbitProfile("logs/api") == apiProfile
-    check reopened.readTime("logs/api", 1000, 3000, RocheReadOptions(
+    check reopened.readTime("logs/api", 1000, 3000, OrbeliasReadOptions(
       filter: %*{"level": "error"},
       limit: 10,
       sortField: "time",
@@ -193,7 +193,7 @@ suite "public api":
     check page2.items[0].payload.contains("\"name\":\"c\"")
     check page2.nextCursor.len == 0
 
-    let read1 = db.readRing("users", RocheReadOptions(
+    let read1 = db.readRing("users", OrbeliasReadOptions(
       filter: %*{"name": "b"},
       selection: "{ name }",
       limit: 10,
@@ -203,7 +203,7 @@ suite "public api":
     check read1.items.len == 1
     check parseJson(read1.items[0].payload) == %*{"name": "b"}
 
-    let readLimited = db.readRing("users", RocheReadOptions(
+    let readLimited = db.readRing("users", OrbeliasReadOptions(
       filter: newJObject(),
       limit: 10,
       sortField: "id",
@@ -211,7 +211,7 @@ suite "public api":
     check readLimited.items.len == 3
     check readLimited.count == 3
 
-    let readPaged = db.readRing("users", RocheReadOptions(
+    let readPaged = db.readRing("users", OrbeliasReadOptions(
       filter: newJObject(),
       pagination: rpOn,
       page: 2,
@@ -227,19 +227,19 @@ suite "public api":
     let raw0 = ids[0].toRaw()
     let raw0Text = $raw0.parent & ":" & $raw0.epoch & ":" &
       $raw0.seq & ":" & $raw0.tWrite
-    let readById = db.readRing("users", RocheReadOptions(
+    let readById = db.readRing("users", OrbeliasReadOptions(
       filter: %*{"id": raw0Text},
       limit: 10))
     check readById.count == 1
     check readById.items[0].id == ids[0]
 
-    let readMissing = db.readRing("users", RocheReadOptions(
+    let readMissing = db.readRing("users", OrbeliasReadOptions(
       filter: %*{"name": "missing"},
       limit: 10))
     check readMissing.count == 0
     check readMissing.items.len == 0
 
-    let readAlias = db.readRing("users", RocheReadOptions(
+    let readAlias = db.readRing("users", OrbeliasReadOptions(
       filter: newJObject(),
       limit: 2,
       sortField: "write",
@@ -248,7 +248,7 @@ suite "public api":
     check readAlias.sortDirection == rsDesc
     check readAlias.items.len == 2
 
-    let readDefaulted = db.readRing("users", RocheReadOptions(
+    let readDefaulted = db.readRing("users", OrbeliasReadOptions(
       filter: newJObject(),
       limit: 0,
       pageLimit: 0,
@@ -258,7 +258,7 @@ suite "public api":
     check readDefaulted.items.len == 3
 
     expect ValueError:
-      discard db.readRing("users", RocheReadOptions(
+      discard db.readRing("users", OrbeliasReadOptions(
         filter: newJObject(),
         limit: 10,
         sortField: "unsupported"))
@@ -266,24 +266,24 @@ suite "public api":
     let bifDoc = db.put(encodedPayload("\x01\x02\x03", pcBif), ring = "binary")
     check db.getEncoded(bifDoc).codec == pcBif
     expect ValueError:
-      discard db.readRing("binary", RocheReadOptions(
+      discard db.readRing("binary", OrbeliasReadOptions(
         selection: "{ title }",
         limit: 1))
 
-    let baseFilter = rocheFilter().eq("name", "a")
+    let baseFilter = orbeliasFilter().eq("name", "a")
     let extendedFilter = baseFilter.eq("meta", %*{"n": 1})
     check baseFilter.toJson() == %*{"name": "a"}
     check extendedFilter.toJson() == %*{"name": "a", "meta": {"n": 1}}
 
     let builtRead = db.readRing("users", defaultReadOptions().withFilter(
-      rocheFilter().eq("name", "b").eq("meta", %*{"n": 2})))
+      orbeliasFilter().eq("name", "b").eq("meta", %*{"n": 2})))
     check builtRead.count == 1
     check parseJson(builtRead.items[0].payload)["name"].getStr() == "b"
 
     let typedBool = db.put(%*{"name": "flagged", "active": true, "age": 7},
                            ring = "typed")
-    let typedRead = db.readRing("typed", RocheReadOptions(
-      filter: rocheFilter().eq("active", true).eq("age", 7).toJson(),
+    let typedRead = db.readRing("typed", OrbeliasReadOptions(
+      filter: orbeliasFilter().eq("active", true).eq("age", 7).toJson(),
       limit: 10,
       sortField: "id",
       sortDirection: rsAsc))
@@ -291,12 +291,12 @@ suite "public api":
     check typedRead.items[0].id == typedBool
 
     let byBuilderId = db.readRing("users", defaultReadOptions().withFilter(
-      rocheFilter().id(ids[1])))
+      orbeliasFilter().id(ids[1])))
     check byBuilderId.count == 1
     check byBuilderId.items[0].id == ids[1]
 
     expect ValueError:
-      discard rocheFilter().eq("", "bad")
+      discard orbeliasFilter().eq("", "bad")
 
     db.update(ids[0], %*{"name": "a2", "meta": {"n": 10}})
     check db.query(ids[0], "{ name }") == %*{"name": "a2"}
@@ -321,7 +321,7 @@ suite "public api":
                              ring = "billing")
     let distant = db.put(%*{"kind": "order", "orderNo": "B-999"}, ring = "users/999/orders")
 
-    let stellar = db.readStellar("users/123", RocheStellarOptions(
+    let stellar = db.readStellar("users/123", OrbeliasStellarOptions(
       filter: newJObject(),
       selection: "{ kind }",
       limitPerRing: 10,
@@ -344,7 +344,7 @@ suite "public api":
     check sawBilling
     check not sawDistant
 
-    let fromOrders = db.readStellar("users/123/orders", RocheStellarOptions(
+    let fromOrders = db.readStellar("users/123/orders", OrbeliasStellarOptions(
       filter: newJObject(),
       selection: "{ kind }",
       limitPerRing: 10,
@@ -363,7 +363,7 @@ suite "public api":
     check ordersSawOrder
     check not ordersSawDistant
 
-    let onlyOrders = db.readStellar("users/123", RocheStellarOptions(
+    let onlyOrders = db.readStellar("users/123", OrbeliasStellarOptions(
       filter: newJObject(),
       limitPerRing: 10,
       maxDepth: 1,
@@ -381,7 +381,7 @@ suite "public api":
     db.close()
 
   test "stellar attach/detach links existing coordinates without copying data":
-    let dir = createTempDir("rochedb", "stellar")
+    let dir = createTempDir("orbeliasdb", "stellar")
     var db = open(dataDir = dir)
     discard db.put(%*{"kind": "user", "id": "123"}, ring = "users/123")
     discard db.put(%*{"kind": "shop", "id": "1123"}, ring = "shops/1123")
@@ -393,7 +393,7 @@ suite "public api":
     db.attachStellar("commerce/order/A-001", "orders/A-001")
     check db.stellarMembers("commerce/order/A-001").len == 3
 
-    let fromStellar = db.readStellar("commerce/order/A-001", RocheStellarOptions(
+    let fromStellar = db.readStellar("commerce/order/A-001", OrbeliasStellarOptions(
       filter: newJObject(),
       limitPerRing: 10,
       maxDepth: 1,
@@ -403,11 +403,11 @@ suite "public api":
     check fromStellar.count == 3
 
     let fromShop = db.readStellar("shops/1123", defaultStellarOptions().withFilter(
-      rocheFilter().eq("kind", "user")))
+      orbeliasFilter().eq("kind", "user")))
     check fromShop.count == 1
     check fromShop.rings[0].ring == "users/123"
 
-    let usersOnly = db.readStellar("commerce/order/A-001", RocheStellarOptions(
+    let usersOnly = db.readStellar("commerce/order/A-001", OrbeliasStellarOptions(
       filter: newJObject(),
       limitPerRing: 10,
       maxDepth: 1,
@@ -422,7 +422,7 @@ suite "public api":
     var reopened = open(dataDir = dir)
     check reopened.stellarMembers("commerce/order/A-001").len == 3
     reopened.detachStellar("commerce/order/A-001", "users/123")
-    let afterDetach = reopened.readStellar("shops/1123", RocheStellarOptions(
+    let afterDetach = reopened.readStellar("shops/1123", OrbeliasStellarOptions(
       filter: %*{"kind": "user"},
       limitPerRing: 10,
       maxDepth: 1,
@@ -484,7 +484,7 @@ suite "public api":
     db.close()
 
   test "warp job は WAL から進捗と ack 状態を復元する":
-    let dir = createTempDir("roche-warp", "persist")
+    let dir = createTempDir("orbelias-warp", "persist")
     var db = open(dataDir = dir)
     let a1 = db.put(%*{"orderId": "o1", "status": "paid"},
                     ring = "orders/2026/07/06")
@@ -529,8 +529,8 @@ suite "public api":
     removeDir(dir)
 
   test "universe sync event は WAL で復元され idempotent に適用できる":
-    let srcDir = createTempDir("roche-universe", "src")
-    let dstDir = createTempDir("roche-universe", "dst")
+    let srcDir = createTempDir("orbelias-universe", "src")
+    let dstDir = createTempDir("orbelias-universe", "dst")
 
     var src = open(dataDir = srcDir)
     let eventId = src.enqueueUniverseSyncEvent(
@@ -566,14 +566,14 @@ suite "public api":
     removeDir(dstDir)
 
   test "universe sync preserves an opaque payload codec":
-    let srcDir = createTempDir("roche-universe", "codec-src")
-    let dstDir = createTempDir("roche-universe", "codec-dst")
+    let srcDir = createTempDir("orbelias-universe", "codec-src")
+    let dstDir = createTempDir("orbelias-universe", "codec-dst")
     var src = open(dataDir = srcDir)
     discard src.enqueueUniverseSyncEvent(
       sourceUniverse = "tokyo",
       sourceGalaxy = "models",
       ring = "artifacts/nif",
-      payload = "(object (name RocheDB))",
+      payload = "(object (name OrbeliasDB))",
       codec = pcNif,
       logicalKey = "artifact-1")
     src.close()
@@ -585,15 +585,15 @@ suite "public api":
     check dst.applyUniverseSyncEvent(event)
     let item = dst.listByRing("artifacts/nif", limit = 1).items[0]
     check item.codec == pcNif
-    check item.payload == "(object (name RocheDB))"
+    check item.payload == "(object (name OrbeliasDB))"
     resumed.close()
     dst.close()
     removeDir(srcDir)
     removeDir(dstDir)
 
   test "syncUniverseOnce は source outbox から target へ配送して ack/prune できる":
-    let srcDir = createTempDir("roche-universe", "sync-src")
-    let dstDir = createTempDir("roche-universe", "sync-dst")
+    let srcDir = createTempDir("orbelias-universe", "sync-src")
+    let dstDir = createTempDir("orbelias-universe", "sync-dst")
 
     var src = open(dataDir = srcDir)
     var dst = open(dataDir = dstDir)
@@ -623,7 +623,7 @@ suite "public api":
     removeDir(dstDir)
 
   test "putSynced は local put と universe outbox 登録を同時に行う":
-    let dir = createTempDir("roche-universe", "putsynced")
+    let dir = createTempDir("orbelias-universe", "putsynced")
     var db = open(dataDir = dir)
     let id = db.putSynced("""{"name":"Ada"}""",
                           sourceUniverse = "tokyo",
@@ -639,8 +639,8 @@ suite "public api":
     removeDir(dir)
 
   test "putSynced は prune と再起動後も universe event id を再利用しない":
-    let srcDir = createTempDir("roche-universe", "putsynced-seq-src")
-    let dstDir = createTempDir("roche-universe", "putsynced-seq-dst")
+    let srcDir = createTempDir("orbelias-universe", "putsynced-seq-src")
+    let dstDir = createTempDir("orbelias-universe", "putsynced-seq-dst")
     var src = open(dataDir = srcDir)
     var dst = open(dataDir = dstDir)
     discard src.putSynced("""{"name":"Ada"}""",
@@ -669,7 +669,7 @@ suite "public api":
     removeDir(dstDir)
 
   test "putSynced latest-only coalesce は local write と outbox replacement を同時に commit する":
-    let dir = createTempDir("roche-universe", "putsynced-latest")
+    let dir = createTempDir("orbelias-universe", "putsynced-latest")
     var db = open(dataDir = dir)
     db.configureRingApplyPolicy("profiles/u1",
       RingApplyPolicy(mode: ramLatestOnly, historyKeep: 1, delayMs: 0))
@@ -700,8 +700,8 @@ suite "public api":
     removeDir(dir)
 
   test "latest-only ring policy は未配送 outbox を logical key で畳み込む":
-    let srcDir = createTempDir("roche-universe", "latest-src")
-    let dstDir = createTempDir("roche-universe", "latest-dst")
+    let srcDir = createTempDir("orbelias-universe", "latest-src")
+    let dstDir = createTempDir("orbelias-universe", "latest-dst")
 
     var src = open(dataDir = srcDir)
     src.configureRingApplyPolicy("profiles/u1",
@@ -736,8 +736,8 @@ suite "public api":
     removeDir(dstDir)
 
   test "delayed timestamp ring policy は ready になるまで ack しない":
-    let srcDir = createTempDir("roche-universe", "delay-src")
-    let dstDir = createTempDir("roche-universe", "delay-dst")
+    let srcDir = createTempDir("orbelias-universe", "delay-src")
+    let dstDir = createTempDir("orbelias-universe", "delay-dst")
 
     var src = open(dataDir = srcDir)
     var dst = open(dataDir = dstDir)
@@ -774,8 +774,8 @@ suite "public api":
     removeDir(dstDir)
 
   test "universe sync retry accounting gates dispatch and dead-letters":
-    let srcDir = createTempDir("roche-universe", "retry-src")
-    let dstDir = createTempDir("roche-universe", "retry-dst")
+    let srcDir = createTempDir("orbelias-universe", "retry-src")
+    let dstDir = createTempDir("orbelias-universe", "retry-dst")
 
     var src = open(dataDir = srcDir)
     var dst = open(dataDir = dstDir)
@@ -1039,7 +1039,7 @@ suite "retrieve":
     let env = db.retrievalEnvelope(@[1.0'f32, 0.0'f32], ring = "ai", budget = 2)
     check env["schema"].getStr() == RetrievalEnvelopeSchema
     check env["version"].getInt() == RetrievalEnvelopeVersion
-    check env["source"]["provider"].getStr() == "rochedb"
+    check env["source"]["provider"].getStr() == "orbeliasdb"
     check env["source"]["ring"].getStr() == "ai"
     check env["source"]["sourceType"].getStr() == "document"
     check env["query"]["ringScoped"].getBool() == true
@@ -1103,7 +1103,7 @@ suite "retrieve":
 
 suite "永続化":
   test "再オープンで中身・環設定・時計が戻る":
-    let dir = createTempDir("rochedb", "test")
+    let dir = createTempDir("orbeliasdb", "test")
     var db = open(dataDir = dir)
     db.setGalaxyDescription("Persistent galaxy description")
     db.configureRing("r", 30.0)
@@ -1125,7 +1125,7 @@ suite "永続化":
     removeDir(dir)
 
   test "階層 ring 名は再オープン後も復元される":
-    let dir = createTempDir("rochedb", "rings")
+    let dir = createTempDir("orbeliasdb", "rings")
     var db = open(dataDir = dir)
     discard db.put("tokyo", ring = "japan/tokyo", vec = @[1.0'f32, 0.0'f32])
     db.close()
@@ -1141,7 +1141,7 @@ suite "永続化":
     removeDir(dir)
 
   test "compact 後も生存データと ring 階層が復元される":
-    let dir = createTempDir("rochedb", "compact")
+    let dir = createTempDir("orbeliasdb", "compact")
     var db = open(dataDir = dir)
     let oldId = db.put("old", ring = "japan/tokyo",
                        vec = @[0.0'f32, 1.0'f32])
@@ -1168,15 +1168,15 @@ suite "永続化":
     removeDir(dir)
 
   test "backup/restore で別 dataDir に復元できる":
-    let dir = createTempDir("rochedb", "backup-src")
-    let backupDir = createTempDir("rochedb", "backup")
-    let restoredDir = createTempDir("rochedb", "restore")
+    let dir = createTempDir("orbeliasdb", "backup-src")
+    let backupDir = createTempDir("orbeliasdb", "backup")
+    let restoredDir = createTempDir("orbeliasdb", "restore")
     var db = open(dataDir = dir)
     let oldId = db.put("old", ring = "docs/ai",
                        vec = @[0.0'f32, 1.0'f32])
     let liveId = db.put("live", ring = "docs/ai",
                         vec = @[1.0'f32, 0.0'f32])
-    db.transaction(proc(tx: RocheTx) =
+    db.transaction(proc(tx: OrbeliasTx) =
       tx.remove(oldId)
     )
     let backupStats = db.backup(backupDir)
@@ -1203,9 +1203,9 @@ suite "永続化":
     removeDir(restoredDir)
 
   test "transaction-created ring names survive reopen":
-    let dir = createTempDir("rochedb", "tx-ring-name")
+    let dir = createTempDir("orbeliasdb", "tx-ring-name")
     var db = open(dataDir = dir)
-    db.transaction(proc(tx: RocheTx) =
+    db.transaction(proc(tx: OrbeliasTx) =
       discard tx.put("tx-live", ring = "events/tx-only")
     )
     let before = db.readRing("events/tx-only")
@@ -1220,7 +1220,7 @@ suite "永続化":
     removeDir(dir)
 
   test "open は strong durability を指定できる":
-    let dir = createTempDir("rochedb", "strong")
+    let dir = createTempDir("orbeliasdb", "strong")
     var db = open(dataDir = dir, durability = durStrong)
     let id = db.put("durable", ring = "ops/strong")
     db.close()
@@ -1231,9 +1231,9 @@ suite "永続化":
     removeDir(dir)
 
   test "encrypted backup/restore で別 dataDir に復元できる":
-    let dir = createTempDir("rochedb", "enc-backup-src")
-    let backupDir = createTempDir("rochedb", "enc-backup")
-    let restoredDir = createTempDir("rochedb", "enc-restore")
+    let dir = createTempDir("orbeliasdb", "enc-backup-src")
+    let backupDir = createTempDir("orbeliasdb", "enc-backup")
+    let restoredDir = createTempDir("orbeliasdb", "enc-restore")
     var db = open(dataDir = dir)
     let id = db.put("classified", ring = "secure/docs",
                     vec = @[1.0'f32, 0.0'f32])
@@ -1257,7 +1257,7 @@ suite "永続化":
     removeDir(restoredDir)
 
   test "dump は JSONL で ring と document を出力できる":
-    let dir = createTempDir("rochedb", "dump")
+    let dir = createTempDir("orbeliasdb", "dump")
     let outPath = dir / "dump.jsonl"
     var db = open(dataDir = dir)
     discard db.put("hello", ring = "docs/ai", vec = @[1.0'f32, 0.0'f32])
@@ -1292,7 +1292,7 @@ suite "永続化":
     removeDir(dir)
 
   test "dump JSONL は別 dataDir に import できる移行境界になる":
-    let root = createTempDir("rochedb", "dump-roundtrip")
+    let root = createTempDir("orbeliasdb", "dump-roundtrip")
     let srcDir = root / "src"
     let dstDir = root / "dst"
     let outPath = root / "dump.jsonl"
@@ -1331,7 +1331,7 @@ suite "永続化":
     removeDir(root)
 
   test "importJsonl は外部 NoSQL JSONL を ring に割り振って保存できる":
-    let dir = createTempDir("rochedb", "import-jsonl")
+    let dir = createTempDir("orbeliasdb", "import-jsonl")
     let input = dir / "mongo-export.jsonl"
     writeFile(input,
       """{"tenant":"a","kind":"article","body":{"title":"alpha"},"embedding":[1.0,0.0]}""" & "\n" &
@@ -1361,7 +1361,7 @@ suite "永続化":
 
 suite "transaction":
   test "commit まで書き込みは見えず、commit 後に永続化される":
-    let dir = createTempDir("rochedb", "tx")
+    let dir = createTempDir("orbeliasdb", "tx")
     var db = open(dataDir = dir)
     let tx = db.beginTransaction()
     let id = tx.put("inside tx", ring = "tx-ring")
@@ -1377,7 +1377,7 @@ suite "transaction":
     removeDir(dir)
 
   test "transaction preserves payload codec across WAL replay":
-    let dir = createTempDir("rochedb", "tx-codec")
+    let dir = createTempDir("orbeliasdb", "tx-codec")
     var db = open(dataDir = dir)
     let tx = db.beginTransaction()
     let id = tx.put(encodedPayload("\x01\x02\x03", pcBif), ring = "binary")
@@ -1399,7 +1399,7 @@ suite "transaction":
     db.close()
 
   test "rollback-created ring names do not survive reopen":
-    let dir = createTempDir("rochedb", "tx-ring-rollback")
+    let dir = createTempDir("orbeliasdb", "tx-ring-rollback")
     var db = open(dataDir = dir)
     let tx = db.beginTransaction()
     discard tx.put("hidden", ring = "events/rolled-back")
@@ -1424,9 +1424,9 @@ suite "transaction":
 
   test "transaction helper は例外時 rollback":
     var db = open()
-    var id: RocheId
+    var id: OrbeliasId
     expect ValueError:
-      db.transaction(proc(tx: RocheTx) =
+      db.transaction(proc(tx: OrbeliasTx) =
         id = tx.put("never")
         raise newException(ValueError, "boom")
       )
@@ -1435,9 +1435,9 @@ suite "transaction":
 
   test "atomic batch put rolls back every staged write on failure":
     var db = open()
-    var ids: seq[RocheId] = @[]
+    var ids: seq[OrbeliasId] = @[]
     expect ValueError:
-      db.transaction(proc(tx: RocheTx) =
+      db.transaction(proc(tx: OrbeliasTx) =
         ids.add tx.put("a", ring = "bulk")
         ids.add tx.put("b", ring = "bulk")
         raise newException(ValueError, "bulk validation failed")
@@ -1486,7 +1486,7 @@ suite "transaction":
     var ran = false
     db.withRingLock("users/123", proc() =
       ran = true
-      db.transaction(proc(tx: RocheTx) =
+      db.transaction(proc(tx: OrbeliasTx) =
         discard tx.put("audit", ring = "users/123/audit")
       )
     )
@@ -1495,7 +1495,7 @@ suite "transaction":
     db.close()
 
   test "atomic batch matrix covers commit, rollback, mismatch, delete, and replay":
-    let dir = createTempDir("rochedb", "atomic-matrix")
+    let dir = createTempDir("orbeliasdb", "atomic-matrix")
     var db = open(dataDir = dir)
 
     block putSuccess:
@@ -1617,8 +1617,8 @@ suite "transaction":
 
 suite "galaxy router":
   test "コードから複数銀河を別 DB として扱える":
-    let dirA = createTempDir("rochedb", "galaxy-a")
-    let dirB = createTempDir("rochedb", "galaxy-b")
+    let dirA = createTempDir("orbeliasdb", "galaxy-a")
+    let dirB = createTempDir("orbeliasdb", "galaxy-b")
     var a = open(dataDir = dirA)
     var b = open(dataDir = dirB)
     let ida = a.put("A data", ring = "docs")

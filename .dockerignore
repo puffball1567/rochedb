@@ -1,5 +1,5 @@
 *
 !config.nims
-!rochedb.nimble
+!orbeliasdb.nimble
 !src
 !src/**

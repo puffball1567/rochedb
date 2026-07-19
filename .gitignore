@@ -18,11 +18,11 @@ drivers/**/target/
 drivers/**/.build/
 drivers/**/Cargo.lock
 
-src/roched
-src/rochecli
-src/rochebench
-src/rochesim
-src/rochedb
+src/orbeliasd
+src/orbeliascli
+src/orbeliasbench
+src/orbeliassim
+src/orbeliasdb
 tests/tapi
 tests/tauth
 tests/tcore

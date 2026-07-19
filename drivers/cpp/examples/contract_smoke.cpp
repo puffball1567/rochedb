@@ -3,18 +3,18 @@
 #include <string>
 #include <vector>
 
-#include "rochedb/rochedb.hpp"
+#include "orbeliasdb/orbeliasdb.hpp"
 
 int main() {
-  assert(rochedb::abiVersion() == ROCHE_ABI_VERSION);
+  assert(orbeliasdb::abiVersion() == ORBELIAS_ABI_VERSION);
 
-  auto db = rochedb::Db::open(4);
+  auto db = orbeliasdb::Db::open(4);
   db.configureRing("docs", 45.0);
   db.setGalaxyDescription("Smoke-test galaxy for C++ binding.");
   db.setRingDescription("docs", "Documents used by the C++ binding smoke test.");
 
-  rochedb::Id first = db.put("docs", R"({"title":"alpha","body":"hello"})");
-  rochedb::Id second =
+  orbeliasdb::Id first = db.put("docs", R"({"title":"alpha","body":"hello"})");
+  orbeliasdb::Id second =
       db.putVec("docs", R"({"title":"beta","body":"vector"})",
                 std::vector<float>{0.9f, 0.1f, 0.2f});
 
@@ -26,7 +26,7 @@ int main() {
   assert(projected.has_value());
   assert(*projected == R"({"title":"alpha"})");
 
-  auto batch = db.batchGet(std::vector<rochedb::Id>{first, second});
+  auto batch = db.batchGet(std::vector<orbeliasdb::Id>{first, second});
   assert(batch.size() == 2);
   assert(batch[1].has_value());
 

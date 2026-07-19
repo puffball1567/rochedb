@@ -1,11 +1,11 @@
-# RocheDB Swift Driver
+# OrbeliasDB Swift Driver
 
-Minimal Swift Package wrapper over the RocheDB C ABI.
+Minimal Swift Package wrapper over the OrbeliasDB C ABI.
 
 ```swift
-import RocheDB
+import OrbeliasDB
 
-let db = try RocheDB.open(nodes: 8)
+let db = try OrbeliasDB.open(nodes: 8)
 defer { db.close() }
 
 try db.setGalaxyDescription("Product and support knowledge")
@@ -16,7 +16,7 @@ let value = try db.getString(id)
 let atlas = try db.atlas(queryVector: [1.0, 0.0], maxCentroidDims: 8)
 ```
 
-Build the RocheDB shared library first:
+Build the OrbeliasDB shared library first:
 
 ```bash
 scripts/build_capi.sh
