@@ -486,9 +486,11 @@ are made visible.
 ### Driver Checks
 
 ```sh
-python3 -m unittest discover -s drivers/python/tests
 node --test drivers/node/test/*.test.js
 ```
+
+The Python driver is managed outside the core repository:
+[`puffball1567/rochedb-python`](https://github.com/puffball1567/rochedb-python).
 
 Cluster demo:
 
