@@ -1,22 +1,22 @@
-# RocheDB Node.js / Bun Driver
+# OrbeliasDB Node.js / Bun Driver
 
-Dependency-free Node.js and Bun TCP driver for RocheDB `roched`.
+Dependency-free Node.js and Bun TCP driver for OrbeliasDB `orbeliasd`.
 
-The driver uses RocheDB's high-level wire frames:
+The driver uses OrbeliasDB's high-level wire frames:
 
 - `PUTR`: write by human-readable `ring`
 - `GETID`: read by returned ID
 - `QRYID`: GraphQL-style projection by returned ID
 
-It does not reimplement RocheDB's `ringKey` / `period` / `head` derivation.
+It does not reimplement OrbeliasDB's `ringKey` / `period` / `head` derivation.
 
 ## Example
 
 ```js
-import { RocheClient } from "rochedb";
+import { OrbeliasClient } from "orbeliasdb";
 
 async function main() {
-  const db = RocheClient.connect("127.0.0.1:17301");
+  const db = OrbeliasClient.connect("127.0.0.1:17301");
   const id = await db.put("japan/tokyo", Buffer.from('{"title":"Tokyo"}'), {
     vector: [1.0, 0.0],
   });
@@ -39,7 +39,7 @@ Node.js and Bun. It currently supports:
 - `get`
 - `query`
 - `health`
-- typed `RocheId` declaration
+- typed `OrbeliasId` declaration
 - one reconnect retry
 - optional timeout
 - Bun smoke test via `bun test`

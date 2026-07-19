@@ -1,10 +1,10 @@
 ## AI/RAG case study over a generated JSONL corpus.
 ##
 ## The shell wrapper generates a deterministic corpus, then this program imports
-## it through RocheDB's JSONL import path and measures global vs routed retrieve.
+## it through OrbeliasDB's JSONL import path and measures global vs routed retrieve.
 
 import std/[json, parseopt, strformat, strutils, tables]
-import ../src/rochedb
+import ../src/orbeliasdb
 
 type
   QueryCase = object
@@ -19,7 +19,7 @@ type
     scanned: int
     tokens: int
 
-proc hasTarget(hits: seq[RocheHit], targetId: string): bool =
+proc hasTarget(hits: seq[OrbeliasHit], targetId: string): bool =
   for hit in hits:
     try:
       let doc = parseJson(hit.payload)
@@ -28,7 +28,7 @@ proc hasTarget(hits: seq[RocheHit], targetId: string): bool =
     except CatchableError:
       discard
 
-proc addRun(agg: var Aggregate, rr: tuple[hits: seq[RocheHit], stats: RetrieveStats,
+proc addRun(agg: var Aggregate, rr: tuple[hits: seq[OrbeliasHit], stats: RetrieveStats,
                                          plan: RetrievalPlan], targetId: string) =
   if rr.hits.hasTarget(targetId):
     inc agg.recall
@@ -116,7 +116,7 @@ proc main() =
     let ring = node{"ring"}.getStr("noise/general")
     ringCounts[ring] = ringCounts.getOrDefault(ring, 0) + 1
 
-  echo "== RocheDB AI/RAG case study =="
+  echo "== OrbeliasDB AI/RAG case study =="
   echo &"corpus={corpus}"
   echo &"import read={stats.read} imported={stats.imported} skipped={stats.skipped} errors={stats.errors} rings={stats.rings}"
   echo &"globalBudget={globalBudget} routedBudget={routedBudget}"

@@ -1,11 +1,11 @@
 # Unique Data Model And Operating Patterns
 
-RocheDB's current direction is not only "a faster key/value path". Its more
+OrbeliasDB's current direction is not only "a faster key/value path". Its more
 important direction is a placement-aware data model: the application stores
 records at meaningful coordinates, and those coordinates become part of the
 read path, maintenance path, dump/import boundary, and recovery topology.
 
-This document describes the RocheDB-specific shapes that are emerging from the
+This document describes the OrbeliasDB-specific shapes that are emerging from the
 current implementation.
 
 ## Core Idea
@@ -17,11 +17,11 @@ Most databases separate these concerns:
 - how a query is tuned;
 - how data is dumped, restored, synchronized, or isolated.
 
-RocheDB tries to make those concerns line up. A `ring` is not just a collection
+OrbeliasDB tries to make those concerns line up. A `ring` is not just a collection
 name. It is a coordinate that can reduce the working set before filtering,
 reranking, projection, or LLM/context processing.
 
-## RocheDB-Specific Shapes
+## OrbeliasDB-Specific Shapes
 
 | Shape | What It Expresses | Why It Matters |
 |---|---|---|
@@ -43,46 +43,46 @@ users.id = orders.user_id
 shops.id = orders.shop_id
 ```
 
-RocheDB can store the same facts as separate coordinates:
+OrbeliasDB can store the same facts as separate coordinates:
 
 ```bash
-roche put --ring=users/123 \
+orbelias put --ring=users/123 \
   --payload='{"kind":"user","name":"Alice"}' --codec=json
 
-roche put --ring=shops/1123 \
+orbelias put --ring=shops/1123 \
   --payload='{"kind":"shop","name":"Orbit Store"}' --codec=json
 
-roche put --ring=orders/A-001 \
+orbelias put --ring=orders/A-001 \
   --payload='{"kind":"order","orderNo":"A-001","total":42}' --codec=json
 ```
 
 Then it can attach those existing coordinates to a stellar lens:
 
 ```bash
-roche stellar attach --stellar=commerce/order/A-001 --ring=users/123
-roche stellar attach --stellar=commerce/order/A-001 --ring=shops/1123
-roche stellar attach --stellar=commerce/order/A-001 --ring=orders/A-001
+orbelias stellar attach --stellar=commerce/order/A-001 --ring=users/123
+orbelias stellar attach --stellar=commerce/order/A-001 --ring=shops/1123
+orbelias stellar attach --stellar=commerce/order/A-001 --ring=orders/A-001
 ```
 
 Now the order-centered read can see the nearby facts:
 
 ```bash
-roche get --stellar=commerce/order/A-001
+orbelias get --stellar=commerce/order/A-001
 ```
 
 The caller can narrow the visible field:
 
 ```bash
-roche get --stellar=commerce/order/A-001 --subring=shops
-roche get --stellar=commerce/order/A-001 --filter='{"kind":"order"}'
-roche get --stellar=commerce/order/A-001 --selection='{ kind name orderNo total }'
+orbelias get --stellar=commerce/order/A-001 --subring=shops
+orbelias get --stellar=commerce/order/A-001 --filter='{"kind":"order"}'
+orbelias get --stellar=commerce/order/A-001 --selection='{ kind name orderNo total }'
 ```
 
 Attach/detach does not copy the payload. It changes the visibility metadata of
 the stellar lens:
 
 ```bash
-roche stellar detach --stellar=commerce/order/A-001 --ring=shops/1123
+orbelias stellar detach --stellar=commerce/order/A-001 --ring=shops/1123
 ```
 
 This is not the same as a relational constraint. It is also not a global
@@ -94,7 +94,7 @@ use opt-in locks and atomic batches:
 
 ```nim
 db.withStellarLock("commerce/order/A-001", proc() =
-  db.transaction(proc(tx: RocheTx) =
+  db.transaction(proc(tx: OrbeliasTx) =
     discard tx.put("""{"kind":"event","status":"processing"}""",
                    ring = "orders/A-001/events")
   )
@@ -122,7 +122,7 @@ Examples:
 
 ## Where It Is Not A Fit
 
-RocheDB should not pretend this model replaces every database shape.
+OrbeliasDB should not pretend this model replaces every database shape.
 
 It is weaker when:
 
@@ -133,7 +133,7 @@ It is weaker when:
 - the application cannot express useful placement.
 
 The stronger claim is narrower: when the application has meaningful locality,
-RocheDB can make that locality part of the database model instead of rebuilding
+OrbeliasDB can make that locality part of the database model instead of rebuilding
 it after every query.
 
 ## Demo

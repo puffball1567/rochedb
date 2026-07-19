@@ -1,22 +1,22 @@
-# RocheDB Protocol / Compatibility Policy
+# OrbeliasDB Protocol / Compatibility Policy
 
-This is the canonical compatibility note for RocheDB's current technical
+This is the canonical compatibility note for OrbeliasDB's current technical
 preview.
 
 ## Scope
 
-RocheDB currently exposes two external contracts:
+OrbeliasDB currently exposes two external contracts:
 
-- C ABI: `ROCHE_ABI_VERSION`
+- C ABI: `ORBELIAS_ABI_VERSION`
 - TCP wire protocol: `WIREVER`
 
 Both are intentionally small. They are stable enough for local drivers and
-smoke tests, but RocheDB does not yet claim long-term production compatibility
+smoke tests, but OrbeliasDB does not yet claim long-term production compatibility
 across arbitrary mixed-version clusters.
 
 ## Wire Protocol
 
-The wire protocol is a RocheDB-specific text-header protocol with length-prefixed
+The wire protocol is a OrbeliasDB-specific text-header protocol with length-prefixed
 payloads. It is easy to inspect and fuzz, but compatibility must be managed
 explicitly as commands grow.
 
@@ -44,17 +44,17 @@ the stored codec where applicable. Clients that do not negotiate retain the
 original response shape. Missing metadata is interpreted as `raw` for
 compatibility with existing WAL records and drivers.
 
-NIF/BIF bytes are opaque to RocheDB core. The core preserves them across WAL
+NIF/BIF bytes are opaque to OrbeliasDB core. The core preserves them across WAL
 replay, cluster transfer, and retrieval but does not bundle a NIF/BIF encoder
 or decoder. Use the optional
-[`rochedb-nif`](https://github.com/puffball1567/rochedb-nif) adapter when an
+[`orbeliasdb-nif`](https://github.com/puffball1567/orbeliasdb-nif) adapter when an
 application needs NIF text / BIF byte conversion. See
 [Payload Codecs](payload-codecs.md).
 
 ## Vector Byte Order
 
 TCP wire vector bytes are canonical little-endian IEEE-754 `float32` values.
-This is now encoded and decoded explicitly in `src/roche/wire.nim`; native wire
+This is now encoded and decoded explicitly in `src/orbelias/wire.nim`; native wire
 drivers must follow the same byte order.
 
 The C ABI is different: C ABI calls accept normal host-native `float` arrays
@@ -64,19 +64,19 @@ the network directly.
 ## WAL / Snapshot Compatibility
 
 The internal WAL is not the long-term external migration format before v1.0.
-New WAL files start with `!ROCHEDB-WAL 2` and store each logical record behind
-a length + CRC32 wrapper. This lets RocheDB reject corrupted versioned records
+New WAL files start with `!ORBELIASDB-WAL 2` and store each logical record behind
+a length + CRC32 wrapper. This lets OrbeliasDB reject corrupted versioned records
 instead of silently treating shifted payload bytes as later headers.
 
 Legacy pre-v1.0 WAL records remain readable for migration and tests, but new
 writes and compacted snapshots use the versioned format. For portable,
-human-readable migration across releases, use `roche dump` and
-`roche import-jsonl` rather than copying or editing WAL internals directly.
+human-readable migration across releases, use `orbelias dump` and
+`orbelias import-jsonl` rather than copying or editing WAL internals directly.
 See [Data Migration](data-migration.md) for the supported JSONL boundary.
 
 ## Production Readiness Boundaries
 
-RocheDB has username/password/secret-key auth, ring-prefix authorization, simple
+OrbeliasDB has username/password/secret-key auth, ring-prefix authorization, simple
 RBAC, and deterministic wire fuzz smoke tests. For enterprise production claims,
 the remaining gaps are still material:
 
@@ -85,13 +85,13 @@ the remaining gaps are still material:
 - cluster transaction coordinator redundancy;
 - explicit mixed-version upgrade tests for wire, WAL, snapshots, and drivers.
 
-Until those land, expose `roched` only on trusted networks or behind a tunnel /
+Until those land, expose `orbeliasd` only on trusted networks or behind a tunnel /
 proxy that provides transport security.
 
 ## Planner Boundary
 
 The default retrieval planner is deterministic heuristic ranking. This is
 deliberate: it keeps the DB predictable and avoids embedding a model optimizer
-in the core. RocheDB's strongest current evidence is measured working-set and
+in the core. OrbeliasDB's strongest current evidence is measured working-set and
 token reduction under documented synthetic workloads. Broader production claims
 must come from larger real-corpus benchmarks and planner improvements.

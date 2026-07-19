@@ -1,16 +1,16 @@
 # Cloud Operations Metrics
 
-RocheDB v0.1.0 exposes lightweight node metrics through the existing wire
+OrbeliasDB v0.1.0 exposes lightweight node metrics through the existing wire
 protocol and CLI:
 
 ```sh
-roche metrics --peers=127.0.0.1:7301,127.0.0.1:7302,127.0.0.1:7303
+orbelias metrics --peers=127.0.0.1:7301,127.0.0.1:7302,127.0.0.1:7303
 ```
 
 Recovery mirrors can be verified as a separate operational check:
 
 ```sh
-roche recovery-verify --mirror=/backup/rochedb-a --metrics
+orbelias recovery-verify --mirror=/backup/orbeliasdb-a --metrics
 ```
 
 For multi-universe recovery, keep the recovery topology in a JSON file and pass
@@ -23,11 +23,11 @@ secrets separately:
   "authProfiles": {
     "shared-ai": {
       "mode": "user-password-secret-key",
-      "source": "secret-manager:roche/shared-ai"
+      "source": "secret-manager:orbelias/shared-ai"
     },
     "audit-readonly": {
       "mode": "user-password-secret-key",
-      "source": "secret-manager:roche/audit-readonly"
+      "source": "secret-manager:orbelias/audit-readonly"
     }
   },
   "universes": [
@@ -41,11 +41,11 @@ secrets separately:
       "galaxies": [
         {
           "galaxy": "training-data",
-          "archive": "/backup/rochedb/training-data/tokyo-a"
+          "archive": "/backup/orbeliasdb/training-data/tokyo-a"
         },
         {
           "galaxy": "prompt-cache",
-          "archive": "/backup/rochedb/prompt-cache/tokyo-a",
+          "archive": "/backup/orbeliasdb/prompt-cache/tokyo-a",
           "authRef": "audit-readonly",
           "readonly": false
         }
@@ -54,7 +54,7 @@ secrets separately:
     {
       "universe": "oregon-a",
       "location": "remote",
-      "endpoint": "roche://oregon-training.internal:7301",
+      "endpoint": "orbelias://oregon-training.internal:7301",
       "failureDomain": "aws-us-west-2",
       "authRef": "shared-ai",
       "priority": 5,
@@ -62,11 +62,11 @@ secrets separately:
       "galaxies": [
         {
           "galaxy": "training-data",
-          "archive": "/backup/rochedb/training-data/oregon-a"
+          "archive": "/backup/orbeliasdb/training-data/oregon-a"
         },
         {
           "galaxy": "prompt-cache",
-          "archive": "/backup/rochedb/prompt-cache/oregon-a",
+          "archive": "/backup/orbeliasdb/prompt-cache/oregon-a",
           "authRef": "audit-readonly",
           "readonly": true
         }
@@ -77,14 +77,14 @@ secrets separately:
 ```
 
 ```sh
-roche recovery-backup --data=/var/lib/rochedb \
-  --universe-config=/etc/rochedb/recovery.json
+orbelias recovery-backup --data=/var/lib/orbeliasdb \
+  --universe-config=/etc/orbeliasdb/recovery.json
 
-roche recovery-status --universe-config=/etc/rochedb/recovery.json \
+orbelias recovery-status --universe-config=/etc/orbeliasdb/recovery.json \
   --metrics
 
-roche recovery-restore --universe-config=/etc/rochedb/recovery.json \
-  --data=/var/lib/rochedb-restored
+orbelias recovery-restore --universe-config=/etc/orbeliasdb/recovery.json \
+  --data=/var/lib/orbeliasdb-restored
 ```
 
 Do not store passphrases in the recovery topology file. Use
@@ -92,13 +92,13 @@ Do not store passphrases in the recovery topology file. Use
 secret at runtime.
 
 Each universe is a logical parallel recovery universe. Its `galaxies` array
-names the RocheDB galaxies protected by that universe and the archive location
+names the OrbeliasDB galaxies protected by that universe and the archive location
 for each galaxy. Every universe must contain the same galaxy names; only the
 archive paths, endpoint, location, and failure domain should differ. `location`
 describes whether that universe is local or remote from the current process.
 `authProfiles` declares reusable galaxy authentication profile names, and
 `authRef` tells a galaxy placement which profile to use. The supported profile
-mode is `user-password-secret-key`: RocheDB expects the resolved profile to
+mode is `user-password-secret-key`: OrbeliasDB expects the resolved profile to
 provide both username/password authentication and the additional secret-key
 gate. The profile may point at a secret manager entry, environment convention,
 or operator policy, but the topology file must not contain the actual username,
@@ -112,11 +112,11 @@ copies, restore-only copies, and future replication policies without changing
 the topology format. Secrets remain outside this file.
 
 The topology is intentionally expressed as universes that each contain galaxies,
-instead of a flat list of local and remote paths. This lets RocheDB represent a
+instead of a flat list of local and remote paths. This lets OrbeliasDB represent a
 layout that most databases do not model directly: one logical database topology
 can contain both local and remote galaxy placements. That matters for AI and
 large document infrastructure because the corpus can be distributed by server,
-region, or trust boundary while still being managed as one coordinated RocheDB
+region, or trust boundary while still being managed as one coordinated OrbeliasDB
 deployment. The current v0.2 recovery path uses that model for verification and
 restore selection; future replication work should preserve the same rule that
 every universe carries the same galaxy names.
@@ -124,7 +124,7 @@ every universe carries the same galaxy names.
 Endpoints are physical placement hints, not galaxy identity. Different
 universes may point at the same endpoint, and one endpoint may host different
 galaxies, as long as each configured universe still contains the required galaxy
-names. RocheDB rejects duplicate galaxy names inside a single universe because
+names. OrbeliasDB rejects duplicate galaxy names inside a single universe because
 that would make the archive and policy target ambiguous.
 
 This is intentionally not a Prometheus, OpenMetrics, Datadog, or CloudWatch
@@ -166,7 +166,7 @@ similar platforms.
 
 ## Recovery Mirror Metrics
 
-`roche recovery-verify --metrics` emits one key/value line when the recovery
+`orbelias recovery-verify --metrics` emits one key/value line when the recovery
 mirror is valid. It exits non-zero when the mirror is missing, corrupt,
 undecryptable, or inconsistent with its manifest.
 
@@ -182,7 +182,7 @@ undecryptable, or inconsistent with its manifest.
 | `recoveryMirrorWarpJobs` | Warp jobs in the mirror | Delayed update recovery visibility |
 | `recoveryMirrorUniverseSyncEvents` | Universe sync outbox events in the mirror | Eventual-sync backlog recovery visibility |
 
-`roche recovery-status --metrics` verifies every configured universe
+`orbelias recovery-status --metrics` verifies every configured universe
 independently, counts healthy universes, and exits non-zero when the configured
 `requiredHealthy` threshold is not met.
 
@@ -222,11 +222,11 @@ collector that converts the key/value response into Cloud Monitoring metrics.
 Datadog can ingest the same values through a custom check or by converting them
 to OpenMetrics in a sidecar.
 
-RocheDB does not require cloud-specific APIs in the core. The core exposes the
+OrbeliasDB does not require cloud-specific APIs in the core. The core exposes the
 operational facts; deployment tooling decides how to ship them.
 
 ## Post-v0.1 Exporters
 
 Prometheus / OpenMetrics output and a Datadog-friendly collector are v0.2+
-candidates. They should live outside the core server loop so RocheDB does not
+candidates. They should live outside the core server loop so OrbeliasDB does not
 take a dependency on any single cloud or observability vendor.

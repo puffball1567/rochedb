@@ -1,6 +1,6 @@
 # Development Workflow
 
-RocheDB uses a stable-main workflow.
+OrbeliasDB uses a stable-main workflow.
 
 ## Branch Roles
 

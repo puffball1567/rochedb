@@ -1,7 +1,7 @@
-## roche/select（GraphQL 風選択取得）のテスト
+## orbelias/select（GraphQL 風選択取得）のテスト
 
 import std/[unittest, json]
-import ../src/roche/select
+import ../src/orbelias/select
 
 proc q(doc: JsonNode, sel: string): JsonNode =
   applySelection(parseSelection(sel), doc)

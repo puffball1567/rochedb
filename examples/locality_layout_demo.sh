@@ -10,7 +10,7 @@ READ_ITERS="${READ_ITERS:-100}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/roche-locality-layout-demo.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/orbelias-locality-layout-demo.XXXXXX")"
 BIN="$WORK/locality_layout_demo"
 NIMCACHE="$WORK/nimcache"
 cleanup() {

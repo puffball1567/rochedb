@@ -49,7 +49,7 @@
 
 ### Added
 
-- Added typed `RocheFilterBuilder` helpers for safer read filters without
+- Added typed `OrbeliasFilterBuilder` helpers for safer read filters without
   string-concatenated JSON.
 - Added locality validation workloads for interleaved, random, delete-heavy,
   backfill-heavy, and hot/cold write patterns, including compact-before/after
@@ -64,7 +64,7 @@
 - Added `docs/use-case-recipes.md` with application recipes for list/detail,
   membership, inventory locks, webhook idempotency, SaaS tenant isolation,
   stellar neighborhoods, and RAG corpus layout.
-- Added CLI connection config loading with `--config=FILE` and `ROCHE_CONFIG`.
+- Added CLI connection config loading with `--config=FILE` and `ORBELIAS_CONFIG`.
   Config can provide peers, auth, galaxy, and TLS defaults while command-line
   flags remain the override.
 
@@ -95,7 +95,7 @@
 
 ### Changed
 
-- Documented RocheDB's boundaries around partitioning, joins, secondary access
+- Documented OrbeliasDB's boundaries around partitioning, joins, secondary access
   paths, consistent-hashing-like owner mapping, physical locality, production
   readiness, and current best-fit workloads.
 - Bumped package metadata to `0.5.1`.
@@ -107,7 +107,7 @@
 - Added stellar locality lens workflows. Existing rings can be attached to or
   detached from a stellar coordinate, allowing related records to be read
   together without copying payloads.
-- Added `readStellar` / `roche get --stellar=...` workflows with `--subring`,
+- Added `readStellar` / `orbelias get --stellar=...` workflows with `--subring`,
   filter, selection, and grouped ring output.
 - Added embedded all-or-nothing bulk helpers:
   `batchPutAtomic`, `batchUpdateAtomic`, and `batchDeleteAtomic`.
@@ -115,14 +115,14 @@
   `acquireRingLock`, `acquireStellarLock`, `withRingLock`,
   `withStellarLock`, `releaseLock`, and `lockActive`.
 - Added `docs/unique-data-model.md` and
-  `examples/stellar_data_model_demo.sh` to demonstrate RocheDB-specific
+  `examples/stellar_data_model_demo.sh` to demonstrate OrbeliasDB-specific
   ring/stellar data modeling.
 
 ### Changed
 
 - Updated Redis, PostgreSQL, Docker-Docker, working-set, memory-pressure, and
   RAG benchmark documentation with the latest local verification numbers.
-- Documented that benchmark helpers use fresh temporary RocheDB/PostgreSQL
+- Documented that benchmark helpers use fresh temporary OrbeliasDB/PostgreSQL
   data directories, fresh Docker containers where applicable, or unique Redis
   key prefixes that are deleted before exit.
 - Expanded public API and test coverage documentation for high-integrity
@@ -142,7 +142,7 @@
 
 ### Added
 
-- Added the C ABI v2 `roche_read_ring_json` entry point so external drivers can
+- Added the C ABI v2 `orbelias_read_ring_json` entry point so external drivers can
   read ring-shaped pages with JSON filters, optional projection, sorting,
   cursor/page options, codec metadata, and a stable JSON response shape.
 - Added explicit CLI examples for JSON, NIF, BIF, raw, and ring-profile
@@ -190,8 +190,8 @@
 
 ### Added
 
-- Added driver discovery and installation guidance through `roche driver
-  list`, `roche driver info`, and `roche driver install`.
+- Added driver discovery and installation guidance through `orbelias driver
+  list`, `orbelias driver info`, and `orbelias driver install`.
 - Added Rust driver install targeting for manifest path, project directory, and
   environment-variable based setup.
 
@@ -204,7 +204,7 @@
 
 ### Fixed
 
-- Removed the `roched` selector `getData` path that triggered Nim's
+- Removed the `orbeliasd` selector `getData` path that triggered Nim's
   `ProveInit` warning during server builds.
 - Bumped package metadata to `0.2.3`.
 
@@ -212,10 +212,10 @@
 
 ### Changed
 
-- Updated installation documentation now that RocheDB is available through
+- Updated installation documentation now that OrbeliasDB is available through
   Nimble.
 - Clarified that non-Nim language packages remain repository-local foundations
-  while `nimble install rochedb` is the normal Nim install path.
+  while `nimble install orbeliasdb` is the normal Nim install path.
 - Bumped package metadata to `0.2.2`.
 
 ## v0.2.1
@@ -223,8 +223,8 @@
 ### Changed
 
 - Clarified CLI installation paths and documented `~/.nimble/bin` PATH setup.
-- Added system install guidance for `/usr/local/bin/roche` and
-  `/usr/local/bin/roched`.
+- Added system install guidance for `/usr/local/bin/orbelias` and
+  `/usr/local/bin/orbeliasd`.
 - Added a dedicated installation page and linked it from README and the docs
   index.
 
@@ -234,7 +234,7 @@
 
 - Added GitHub Pages documentation structure, public API/config/CLI references,
   and topology / universe sync guides.
-- Added `bin/roche` CLI workflows for CRUD, ring listing/counting, atlas, and a
+- Added `bin/orbelias` CLI workflows for CRUD, ring listing/counting, atlas, and a
   minimal interactive shell.
 - Added Docker Compose demos for a single galaxy, a three-node galaxy, and a
   local/remote universe-shaped topology.
@@ -283,7 +283,7 @@
 ### Changed
 
 - Documented how to look up records when the application does not already have a
-  RocheDB ID: start from a ring with `listByRing`, use ring-scoped `retrieve`
+  OrbeliasDB ID: start from a ring with `listByRing`, use ring-scoped `retrieve`
   for vector/RAG lookup, and use `atlas()` / ring descriptions to choose scope.
 
 ## v0.1.0 Technical Preview
@@ -292,7 +292,7 @@ Initial public technical preview target.
 
 ### Added
 
-- Embedded RocheDB API with memory-only and WAL-backed `open(dataDir=...)`
+- Embedded OrbeliasDB API with memory-only and WAL-backed `open(dataDir=...)`
   modes.
 - Ring / galaxy data model, ring hierarchy, galaxy and ring descriptions, and
   atlas output for LLM / agent navigation.
@@ -319,7 +319,7 @@ Initial public technical preview target.
 
 ### Known Gaps
 
-- TLS is not implemented; do not expose `roched` directly on untrusted networks.
+- TLS is not implemented; do not expose `orbeliasd` directly on untrusted networks.
 - Cluster membership is static, and node0 remains the landing coordinator.
 - Cluster coordinator redundancy and epoch migration are not implemented.
 - Server-side warp scheduling is not implemented.
@@ -331,8 +331,8 @@ Initial public technical preview target.
 
 ### Positioning
 
-RocheDB v0.1.0 should be described as a technical preview / research OSS
+OrbeliasDB v0.1.0 should be described as a technical preview / research OSS
 release. Do not claim general replacement status for Redis, PostgreSQL,
-MongoDB, or Apache Arrow. The current defensible claim is that RocheDB can
+MongoDB, or Apache Arrow. The current defensible claim is that OrbeliasDB can
 reduce working-set size under documented synthetic conditions while local and
 TCP read paths are being moved toward existing database speed bands.

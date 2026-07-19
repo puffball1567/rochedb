@@ -1,5 +1,5 @@
 services:
-  roche-training-local:
+  orbelias-training-local:
     build:
       context: ../..
       dockerfile: examples/compose/Dockerfile
@@ -9,14 +9,14 @@ services:
       - --data=/data/training-data
       - --galaxy=training-data
       - --user=train
-      - --password=${ROCHE_TRAIN_PASSWORD:-change-me}
-      - --secret-key=${ROCHE_TRAIN_SECRET_KEY:-change-me-too}
+      - --password=${ORBELIAS_TRAIN_PASSWORD:-change-me}
+      - --secret-key=${ORBELIAS_TRAIN_SECRET_KEY:-change-me-too}
     ports:
       - "7321:7301"
     volumes:
-      - roche_training_local:/data
+      - orbelias_training_local:/data
 
-  roche-training-remote:
+  orbelias-training-remote:
     build:
       context: ../..
       dockerfile: examples/compose/Dockerfile
@@ -26,14 +26,14 @@ services:
       - --data=/data/training-data
       - --galaxy=training-data
       - --user=train
-      - --password=${ROCHE_TRAIN_PASSWORD:-change-me}
-      - --secret-key=${ROCHE_TRAIN_SECRET_KEY:-change-me-too}
+      - --password=${ORBELIAS_TRAIN_PASSWORD:-change-me}
+      - --secret-key=${ORBELIAS_TRAIN_SECRET_KEY:-change-me-too}
     ports:
       - "7331:7301"
     volumes:
-      - roche_training_remote:/data
+      - orbelias_training_remote:/data
 
-  roche-prompt-cache-local:
+  orbelias-prompt-cache-local:
     build:
       context: ../..
       dockerfile: examples/compose/Dockerfile
@@ -43,14 +43,14 @@ services:
       - --data=/data/prompt-cache
       - --galaxy=prompt-cache
       - --user=cache
-      - --password=${ROCHE_CACHE_PASSWORD:-change-me}
-      - --secret-key=${ROCHE_CACHE_SECRET_KEY:-change-me-too}
+      - --password=${ORBELIAS_CACHE_PASSWORD:-change-me}
+      - --secret-key=${ORBELIAS_CACHE_SECRET_KEY:-change-me-too}
     ports:
       - "7341:7301"
     volumes:
-      - roche_prompt_cache_local:/data
+      - orbelias_prompt_cache_local:/data
 
-  roche-prompt-cache-remote:
+  orbelias-prompt-cache-remote:
     build:
       context: ../..
       dockerfile: examples/compose/Dockerfile
@@ -60,15 +60,15 @@ services:
       - --data=/data/prompt-cache
       - --galaxy=prompt-cache
       - --user=cache
-      - --password=${ROCHE_CACHE_PASSWORD:-change-me}
-      - --secret-key=${ROCHE_CACHE_SECRET_KEY:-change-me-too}
+      - --password=${ORBELIAS_CACHE_PASSWORD:-change-me}
+      - --secret-key=${ORBELIAS_CACHE_SECRET_KEY:-change-me-too}
     ports:
       - "7351:7301"
     volumes:
-      - roche_prompt_cache_remote:/data
+      - orbelias_prompt_cache_remote:/data
 
 volumes:
-  roche_training_local:
-  roche_training_remote:
-  roche_prompt_cache_local:
-  roche_prompt_cache_remote:
+  orbelias_training_local:
+  orbelias_training_remote:
+  orbelias_prompt_cache_local:
+  orbelias_prompt_cache_remote:

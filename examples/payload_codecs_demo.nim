@@ -1,7 +1,7 @@
 ## Embedded payload codec and prepared selection demo.
 
 import std/[json, os, strutils]
-import ../src/rochedb
+import ../src/orbeliasdb
 
 proc argValue(name, defaultValue: string): string =
   let prefix = "--" & name & "="
@@ -15,11 +15,11 @@ when isMainModule:
   var db = open(dataDir = dataDir)
   try:
     let jsonId = db.put(%*{
-      "title": "RocheDB",
+      "title": "OrbeliasDB",
       "kind": "document",
       "author": {"name": "Ada", "team": "storage"}
     }, ring = "docs/codec")
-    let nifBytes = "(object (title RocheDB) (kind artifact))"
+    let nifBytes = "(object (title OrbeliasDB) (kind artifact))"
     let nifId = db.put(encodedPayload(nifBytes, pcNif), ring = "artifacts/nif")
     let bifBytes = "\x01\x00\x00\x00\x7f"
     let bifId = db.put(encodedPayload(bifBytes, pcBif), ring = "artifacts/bif")

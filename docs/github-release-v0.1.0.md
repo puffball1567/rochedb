@@ -1,12 +1,12 @@
-# RocheDB v0.1.0 Technical Preview
+# OrbeliasDB v0.1.0 Technical Preview
 
-RocheDB v0.1.0 is the first public technical preview of a ring/galaxy-oriented
+OrbeliasDB v0.1.0 is the first public technical preview of a ring/galaxy-oriented
 document and vector database prototype focused on reducing working-set size for
 retrieval-heavy systems.
 
 This is a research OSS release, not a production replacement claim for Redis,
 PostgreSQL, MongoDB, Apache Arrow, or a mature vector database. The useful claim
-for this release is narrower: RocheDB can route reads through explicit rings and
+for this release is narrower: OrbeliasDB can route reads through explicit rings and
 retrieval plans so fewer candidates are scanned and fewer chunks/tokens need to
 reach downstream RAG or application logic under the documented benchmark
 conditions.
@@ -41,11 +41,11 @@ The pre-release verification pass covered:
 - `scripts/driver_compat.sh`
 - Docker-backed PHP / Swift / Kotlin driver smoke
 - `examples/ai_rag_case_study.sh`
-- `roche doctor` for the FAISS bridge
+- `orbelias doctor` for the FAISS bridge
 
 ## Known Gaps
 
-- TLS is not implemented; do not expose `roched` directly on untrusted networks.
+- TLS is not implemented; do not expose `orbeliasd` directly on untrusted networks.
 - Cluster membership is static.
 - node0 remains the cluster transaction landing coordinator.
 - Cluster coordinator redundancy and epoch migration are not implemented.
@@ -59,8 +59,8 @@ The pre-release verification pass covered:
 ## Links
 
 - README: `README.md`
-- Status / roadmap: `docs/rochedb-status.md`
-- Benchmarks: `docs/rochedb-bench.md`
+- Status / roadmap: `docs/orbeliasdb-status.md`
+- Benchmarks: `docs/orbeliasdb-bench.md`
 - Release checklist: `docs/release-checklist.md`
 - Driver installation guide: `docs/driver-installation.md`
 - Threat model: `docs/threat-model.md`

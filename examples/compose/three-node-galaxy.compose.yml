@@ -1,52 +1,52 @@
 services:
-  roche-node0:
+  orbelias-node0:
     build:
       context: ../..
       dockerfile: examples/compose/Dockerfile
     command:
       - --id=0
-      - --peers=roche-node0:7301,roche-node1:7301,roche-node2:7301
+      - --peers=orbelias-node0:7301,orbelias-node1:7301,orbelias-node2:7301
       - --data=/data/training-data
       - --galaxy=training-data
       - --user=train
-      - --password=${ROCHE_TRAIN_PASSWORD:-change-me}
-      - --secret-key=${ROCHE_TRAIN_SECRET_KEY:-change-me-too}
+      - --password=${ORBELIAS_TRAIN_PASSWORD:-change-me}
+      - --secret-key=${ORBELIAS_TRAIN_SECRET_KEY:-change-me-too}
     ports:
       - "7311:7301"
     volumes:
-      - roche_training_node0:/data
+      - orbelias_training_node0:/data
 
-  roche-node1:
+  orbelias-node1:
     build:
       context: ../..
       dockerfile: examples/compose/Dockerfile
     command:
       - --id=1
-      - --peers=roche-node0:7301,roche-node1:7301,roche-node2:7301
+      - --peers=orbelias-node0:7301,orbelias-node1:7301,orbelias-node2:7301
       - --data=/data/training-data
       - --galaxy=training-data
       - --user=train
-      - --password=${ROCHE_TRAIN_PASSWORD:-change-me}
-      - --secret-key=${ROCHE_TRAIN_SECRET_KEY:-change-me-too}
+      - --password=${ORBELIAS_TRAIN_PASSWORD:-change-me}
+      - --secret-key=${ORBELIAS_TRAIN_SECRET_KEY:-change-me-too}
     volumes:
-      - roche_training_node1:/data
+      - orbelias_training_node1:/data
 
-  roche-node2:
+  orbelias-node2:
     build:
       context: ../..
       dockerfile: examples/compose/Dockerfile
     command:
       - --id=2
-      - --peers=roche-node0:7301,roche-node1:7301,roche-node2:7301
+      - --peers=orbelias-node0:7301,orbelias-node1:7301,orbelias-node2:7301
       - --data=/data/training-data
       - --galaxy=training-data
       - --user=train
-      - --password=${ROCHE_TRAIN_PASSWORD:-change-me}
-      - --secret-key=${ROCHE_TRAIN_SECRET_KEY:-change-me-too}
+      - --password=${ORBELIAS_TRAIN_PASSWORD:-change-me}
+      - --secret-key=${ORBELIAS_TRAIN_SECRET_KEY:-change-me-too}
     volumes:
-      - roche_training_node2:/data
+      - orbelias_training_node2:/data
 
 volumes:
-  roche_training_node0:
-  roche_training_node1:
-  roche_training_node2:
+  orbelias_training_node0:
+  orbelias_training_node1:
+  orbelias_training_node2:

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/roche-demo-smoke.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/orbelias-demo-smoke.XXXXXX")"
 LOCALITY_BIN="$WORK/locality_layout_demo"
 
 cleanup() {

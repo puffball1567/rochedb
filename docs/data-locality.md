@@ -1,18 +1,18 @@
 # Data Locality
 
-RocheDB uses rings as logical locality hints, but locality is not only a
+OrbeliasDB uses rings as logical locality hints, but locality is not only a
 logical concept. Persistent embedded stores also expose physical WAL locality
 metrics so users can inspect whether related live records are physically grouped
 after real write patterns.
 
 This document describes the current locality model and the first measurement
-surface. It is intentionally conservative: these metrics describe RocheDB's WAL
+surface. It is intentionally conservative: these metrics describe OrbeliasDB's WAL
 layout, not a universal storage-performance claim.
 
 ## Logical Locality
 
 Applications place records into rings. A ring is not just a directory-like
-route. It is the retrieval unit RocheDB uses to reduce unnecessary scans,
+route. It is the retrieval unit OrbeliasDB uses to reduce unnecessary scans,
 candidate memory, and downstream payload work.
 
 For AI/RAG-style workloads, this means the application can make the natural
@@ -22,7 +22,7 @@ way that matches common reads.
 
 ## Stellar Neighborhood Reads
 
-RocheDB treats nearby rings as a natural read neighborhood. The mental model is
+OrbeliasDB treats nearby rings as a natural read neighborhood. The mental model is
 closer to a telescope than to a late join: when the read is centered on a ring,
 nearby child, parent, and sibling rings can be in the same field of view. Distant
 rings are not forced into the read path.
@@ -31,13 +31,13 @@ For example, an application can store a user profile at `users/123` and then
 place orders and billing records nearby:
 
 ```bash
-roche put --ring=users/123 \
+orbelias put --ring=users/123 \
   --payload='{"kind":"user","name":"Alice"}' --codec=json
 
-roche put --ring=orders --near=users/123 \
+orbelias put --ring=orders --near=users/123 \
   --payload='{"kind":"order","orderNo":"A-001"}' --codec=json
 
-roche put --ring=billing --near=users/123 \
+orbelias put --ring=billing --near=users/123 \
   --payload='{"kind":"billing","plan":"pro"}' --codec=json
 ```
 
@@ -49,37 +49,37 @@ Reading the user ring can naturally return the nearby user, order, and billing
 records:
 
 ```bash
-roche get --ring=users/123
-roche get --stellar=users/123 --filter='{"kind":"order"}' --subring=orders
+orbelias get --ring=users/123
+orbelias get --stellar=users/123 --filter='{"kind":"order"}' --subring=orders
 ```
 
 Reading from the order side also sees the nearby user because the order is in
 the same stellar neighborhood:
 
 ```bash
-roche get --ring=users/123/orders
+orbelias get --ring=users/123/orders
 ```
 
 To narrow the field of view, use `--subring`:
 
 ```bash
-roche get --ring=users/123 --subring=orders,billing
+orbelias get --ring=users/123 --subring=orders,billing
 ```
 
 Existing coordinates can also be attached to or detached from a stellar
 coordinate's lens:
 
 ```bash
-roche stellar attach --stellar=commerce/order/A-001 --ring=users/123
-roche stellar attach --stellar=commerce/order/A-001 --ring=shops/1123
-roche stellar attach --stellar=commerce/order/A-001 --ring=orders/A-001
-roche stellar detach --stellar=commerce/order/A-001 --ring=shops/1123
+orbelias stellar attach --stellar=commerce/order/A-001 --ring=users/123
+orbelias stellar attach --stellar=commerce/order/A-001 --ring=shops/1123
+orbelias stellar attach --stellar=commerce/order/A-001 --ring=orders/A-001
+orbelias stellar detach --stellar=commerce/order/A-001 --ring=shops/1123
 ```
 
 Attach/detach changes visibility metadata only. It does not copy payloads,
 delete payloads, or create a strict relational constraint.
 
-This is not a hidden global join. RocheDB only walks the configured nearby
+This is not a hidden global join. OrbeliasDB only walks the configured nearby
 coordinate neighborhood, controlled by depth and branch budget. If a record is
 far away, such as `users/999/orders`, it is not read when the telescope is
 pointed at `users/123`.
@@ -90,7 +90,7 @@ Persistent embedded stores use an append-only WAL. Before compaction, physical
 record order mostly follows write order. If writes are interleaved across many
 rings, the physical layout can also be interleaved.
 
-Compaction rewrites a compact WAL snapshot from live state. RocheDB writes live
+Compaction rewrites a compact WAL snapshot from live state. OrbeliasDB writes live
 particle records in stable `(ringKey, seq)` order during snapshot creation. That
 makes compaction locality-aware for the primary ring layout:
 
@@ -113,8 +113,8 @@ let report = db.localityReport()
 The CLI exposes the same information:
 
 ```bash
-roche locality --data=/var/lib/rochedb
-roche locality --data=/var/lib/rochedb --metrics
+orbelias locality --data=/var/lib/orbeliasdb
+orbelias locality --data=/var/lib/orbeliasdb --metrics
 ```
 
 Important fields:
@@ -203,7 +203,7 @@ the invariant line:
 
 ## Current Scope
 
-This is not a full LSM-tree, B+ tree, or columnar layout. RocheDB's current
+This is not a full LSM-tree, B+ tree, or columnar layout. OrbeliasDB's current
 layout bet is simpler:
 
 1. Use rings to reduce the logical working set before retrieval.

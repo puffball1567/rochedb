@@ -1,7 +1,7 @@
-## roche/auth の安全比較テスト
+## orbelias/auth の安全比較テスト
 
 import std/unittest
-import ../src/roche/auth
+import ../src/orbelias/auth
 
 suite "auth helpers":
   test "secureEqual matches equal strings":

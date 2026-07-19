@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IMAGE="${PHP_IMAGE:-rochedb-php-ffi:8.3}"
+IMAGE="${PHP_IMAGE:-orbeliasdb-php-ffi:8.3}"
 
 if [[ "${PHP_IMAGE:-}" == "" ]]; then
   docker build -t "$IMAGE" "$ROOT/drivers/php"

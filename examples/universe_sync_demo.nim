@@ -1,5 +1,5 @@
 import std/[json, os, strutils]
-import ../src/rochedb
+import ../src/orbeliasdb
 
 proc requireArg(name: string): string =
   let prefix = "--" & name & "="

@@ -1,11 +1,11 @@
-## 手動結合テスト: roched 3ノード起動後に実行する。
+## 手動結合テスト: orbeliasd 3ノード起動後に実行する。
 
 import std/[json, os, unittest]
-import ../src/rochedb
+import ../src/orbeliasdb
 
 suite "cluster transaction":
   test "landing intent commit 後に owner へ apply される":
-    let peers = getEnv("ROCHE_TEST_PEERS", "127.0.0.1:7411,127.0.0.1:7412,127.0.0.1:7413")
+    let peers = getEnv("ORBELIAS_TEST_PEERS", "127.0.0.1:7411,127.0.0.1:7412,127.0.0.1:7413")
     var db = connect(peers)
     let tx = db.beginTransaction()
     let id = tx.put("cluster tx value", ring = "cluster-tx", vec = @[1.0'f32, 0.0'f32])
@@ -15,13 +15,13 @@ suite "cluster transaction":
     db.close()
 
   test "cluster retrieve は全ノード候補をマージする":
-    let peers = getEnv("ROCHE_TEST_PEERS", "127.0.0.1:7411,127.0.0.1:7412,127.0.0.1:7413")
+    let peers = getEnv("ORBELIAS_TEST_PEERS", "127.0.0.1:7411,127.0.0.1:7412,127.0.0.1:7413")
     var db = connect(peers)
     discard db.put("ret-ai-1", ring = "ret-ai", vec = @[0.0'f32, 1.0'f32])
     discard db.put("ret-ai-2", ring = "ret-ai", vec = @[0.1'f32, 0.9'f32])
     discard db.put("ret-db-1", ring = "ret-db", vec = @[1.0'f32, 0.0'f32])
 
-    var hits: seq[RocheHit] = @[]
+    var hits: seq[OrbeliasHit] = @[]
     for _ in 0 ..< 30:
       hits = db.retrieve(@[0.0'f32, 1.0'f32], ring = "ret-ai", budget = 2)
       if hits.len == 2:
@@ -42,7 +42,7 @@ suite "cluster transaction":
     db.close()
 
   test "cluster transaction preserves payload codec through owner apply":
-    let peers = getEnv("ROCHE_TEST_PEERS", "127.0.0.1:7411,127.0.0.1:7412,127.0.0.1:7413")
+    let peers = getEnv("ORBELIAS_TEST_PEERS", "127.0.0.1:7411,127.0.0.1:7412,127.0.0.1:7413")
     var db = connect(peers)
     let tx = db.beginTransaction()
     let id = tx.put(encodedPayload("(object (kind artifact))", pcNif),
@@ -55,7 +55,7 @@ suite "cluster transaction":
     db.close()
 
   test "cluster update/delete/list/count は landing intent 経由で反映される":
-    let peers = getEnv("ROCHE_TEST_PEERS", "127.0.0.1:7411,127.0.0.1:7412,127.0.0.1:7413")
+    let peers = getEnv("ORBELIAS_TEST_PEERS", "127.0.0.1:7411,127.0.0.1:7412,127.0.0.1:7413")
     var db = connect(peers)
     let a = db.put(%*{"name": "a"}, ring = "cluster-crud")
     let b = db.put(%*{"name": "b"}, ring = "cluster-crud")

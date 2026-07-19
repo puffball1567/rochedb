@@ -6,26 +6,26 @@ title: Public API
 # Public API
 
 This page summarizes the stable user-facing API surface for the current
-technical preview. The canonical Nim definitions live in `src/rochedb.nim`.
+technical preview. The canonical Nim definitions live in `src/orbeliasdb.nim`.
 
 ## Core Types
 
 | Type | Important fields | Meaning |
 |---|---|---|
-| `RocheDb` | opaque handle | Embedded or cluster database handle. |
-| `RocheId` | opaque; printable as `parent:seq` | ID returned by `put`; pass it to `get`, `query`, `locate`, `nextVisit`, and `nextJoin`. |
-| `RocheTx` | opaque transaction handle | Transaction context returned by `beginTransaction`. |
+| `OrbeliasDb` | opaque handle | Embedded or cluster database handle. |
+| `OrbeliasId` | opaque; printable as `parent:seq` | ID returned by `put`; pass it to `get`, `query`, `locate`, `nextVisit`, and `nextJoin`. |
+| `OrbeliasTx` | opaque transaction handle | Transaction context returned by `beginTransaction`. |
 | `GalaxyRouter` | opaque router handle | Holds named galaxy connections for applications that access multiple galaxies. |
-| `RocheRecord` | `id`, `payload` | Lightweight record returned by `listByRing`. |
-| `RocheListPage` | `items`, `nextCursor` | Cursor-paginated list result. Empty `nextCursor` means there is no next page. |
-| `RocheReadOptions` | `filter`, `selection`, `limit`, `cursor`, `pagination`, `page`, `pageLimit`, `sortField`, `sortDirection` | Ring read options shared with CLI semantics. |
-| `RocheReadPage` | `ring`, `count`, `items`, `nextCursor`, `pagination`, `page`, `pageLimit`, `sortField`, `sortDirection` | Ring read result. `count` is the number of returned items; use `countByRing` for the total ring size. |
-| `RocheStellarOptions` | `filter`, `selection`, `limitPerRing`, `maxDepth`, `branchBudget`, `subrings`, `includeRoot`, `sortField`, `sortDirection` | Coordinate-near read options. A root ring behaves like a telescope target; nearby rings are visible unless narrowed by `subrings`. |
-| `RocheStellarPage` | `root`, `ringsVisited`, `count`, `rings` | Grouped result for a stellar neighborhood read. |
-| `RocheLockToken` | `scope`, `coordinate`, `token`, `fence`, `expiresAt`, `keys` | Cooperative opt-in lock token for high-integrity embedded workflows. `fence` is a monotonically increasing handle-local fencing value. |
-| `RocheHit` | `id`, `score`, `payload` | Retrieval hit. `score` is cosine similarity, higher is closer. |
+| `OrbeliasRecord` | `id`, `payload` | Lightweight record returned by `listByRing`. |
+| `OrbeliasListPage` | `items`, `nextCursor` | Cursor-paginated list result. Empty `nextCursor` means there is no next page. |
+| `OrbeliasReadOptions` | `filter`, `selection`, `limit`, `cursor`, `pagination`, `page`, `pageLimit`, `sortField`, `sortDirection` | Ring read options shared with CLI semantics. |
+| `OrbeliasReadPage` | `ring`, `count`, `items`, `nextCursor`, `pagination`, `page`, `pageLimit`, `sortField`, `sortDirection` | Ring read result. `count` is the number of returned items; use `countByRing` for the total ring size. |
+| `OrbeliasStellarOptions` | `filter`, `selection`, `limitPerRing`, `maxDepth`, `branchBudget`, `subrings`, `includeRoot`, `sortField`, `sortDirection` | Coordinate-near read options. A root ring behaves like a telescope target; nearby rings are visible unless narrowed by `subrings`. |
+| `OrbeliasStellarPage` | `root`, `ringsVisited`, `count`, `rings` | Grouped result for a stellar neighborhood read. |
+| `OrbeliasLockToken` | `scope`, `coordinate`, `token`, `fence`, `expiresAt`, `keys` | Cooperative opt-in lock token for high-integrity embedded workflows. `fence` is a monotonically increasing handle-local fencing value. |
+| `OrbeliasHit` | `id`, `score`, `payload` | Retrieval hit. `score` is cosine similarity, higher is closer. |
 
-`RocheId` should normally be treated as opaque. `toRaw` and `fromRaw` exist for
+`OrbeliasId` should normally be treated as opaque. `toRaw` and `fromRaw` exist for
 C ABI / driver boundaries and CLI reproducibility, not as the preferred
 application model.
 
@@ -36,7 +36,7 @@ application model.
 | `RetrieveStats` | `totalVectors`, `scanned`, `skippedVectors`, `returned`, `ringsTouched`, `payloadBytes`, `estimatedTokens`, `candidateReduction` | Explains how much work retrieval avoided or performed. |
 | `RetrievalPlan` | `strategy`, `baseRing`, `amount`, `scope`, `depth`, `budget`, `focus`, `effectiveTopRings`, `selectedRings`, `prunedRings`, `reason` | Human-readable execution plan for retrieval tuning. |
 | `RingMetric` | `ringKey`, `count`, `coherence` | Low-level ring population and coherence metric. |
-| `RocheRingSummary` | `ringKey`, `count`, `centroid`, `score`, `coherence`, `massG` | Ring summary used by atlas/planner-style workflows. |
+| `OrbeliasRingSummary` | `ringKey`, `count`, `centroid`, `score`, `coherence`, `massG` | Ring summary used by atlas/planner-style workflows. |
 | `RetrievalEnvelopeOptions` | `provider`, `galaxy`, `ring`, `requestId`, `sourceType`, `retentionClass`, `plan` | Metadata for RAG/MCP adapters. |
 
 For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
@@ -69,18 +69,18 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 | `BackupStats` | store-defined | Result of backup / verify / restore operations. |
 | `DumpStats` | `bytes`, `records`, `rings`, `documents`, `destination` | JSONL dump summary. |
 | `ImportStats` | `read`, `imported`, `skipped`, `errors`, `rings`, `source`, `defaultRing` | JSONL import summary. |
-| `RocheDurability` | `durBuffered`, `durStrong` | WAL durability mode. |
+| `OrbeliasDurability` | `durBuffered`, `durStrong` | WAL durability mode. |
 
 ## Handles
 
 | API | Purpose |
 |---|---|
-| `open(dataDir = "", nodes = 8, durability = durBuffered)` | Open embedded RocheDB. Omit `dataDir` for memory-only mode. |
-| `connect(peers, username = "", password = "", authToken = "", secretKey = "", galaxy = "")` | Connect to a running `roched` cluster. |
+| `open(dataDir = "", nodes = 8, durability = durBuffered)` | Open embedded OrbeliasDB. Omit `dataDir` for memory-only mode. |
+| `connect(peers, username = "", password = "", authToken = "", secretKey = "", galaxy = "")` | Connect to a running `orbeliasd` cluster. |
 | `close(db)` | Close embedded or cluster resources. |
 | `openGalaxyRouter()` | Create a local router for multiple named galaxies. |
 | `addGalaxy(router, name, peers, ...)` | Register a remote galaxy connection. |
-| `galaxy(router, name)` | Get a `RocheDb` handle for one galaxy. |
+| `galaxy(router, name)` | Get a `OrbeliasDb` handle for one galaxy. |
 
 ## Documents
 
@@ -90,11 +90,11 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 | `put(doc: JsonNode, ring = "default", vec = @[])` | Store a JSON document. |
 | `put(encodedPayload(bytes, codec), ring, vec)` | Store `raw`, `json`, `nif`, or `bif` bytes with format metadata. |
 | `putNear(baseRing, payload/doc/encoded, ring, vec = @[])` | Store under a nearby coordinate derived from `baseRing/ring`, for example `users/123` + `orders` -> `users/123/orders`. The near hint is not stored separately. |
-| `get(id)` | Fetch by RocheDB ID. |
+| `get(id)` | Fetch by OrbeliasDB ID. |
 | `getEncoded(id)` | Fetch payload bytes together with their `PayloadCodec`. |
 | `query(id, selection)` | Fetch a JSON projection using GraphQL-style selection syntax. |
 | `prepareSelection(selection)` / `query(id, prepared)` | Validate and compile a reusable projection before execution. |
-| `rocheFilter().eq(key, value)` / `rocheFilter().id(id)` | Build JSON read filters without string-concatenated query text. |
+| `orbeliasFilter().eq(key, value)` / `orbeliasFilter().id(id)` | Build JSON read filters without string-concatenated query text. |
 | `exists(id)` / `contains(id)` | Check whether an ID exists. |
 | `update(id, payload)` / `update(id, doc)` | Replace an existing document. |
 | `patch(id, patchDoc)` | Apply a JSON merge patch. |
@@ -106,8 +106,8 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 | `batchUpdateAtomic(ids, payloads/docs, vecs)` | Embedded all-or-nothing bulk replace. Every ID must exist before commit. |
 | `batchDeleteAtomic(ids)` | Embedded all-or-nothing bulk delete. |
 
-The C ABI exposes matching additive functions: `roche_put_codec`,
-`roche_put_vec_codec`, and `roche_get_codec`. See [Payload Codecs](payload-codecs.md).
+The C ABI exposes matching additive functions: `orbelias_put_codec`,
+`orbelias_put_vec_codec`, and `orbelias_get_codec`. See [Payload Codecs](payload-codecs.md).
 
 ## Ring Reads
 
@@ -120,8 +120,8 @@ The C ABI exposes matching additive functions: `roche_put_codec`,
 | `timeOrbitProfile(ring)` | Read the effective time-orbit profile for a ring. |
 | `putTime(payload/doc, ring, timestampMs)` | Store a log/event payload into the calculated time-bucket ring. JSON object payloads receive `eventTimeMs` and `ingestTimeMs` when missing. |
 | `readTime(ring, fromMs, toMs, options)` | Calculate the affected time-bucket rings and read only those buckets, using normal read filters/projection inside each bucket. |
-| `defaultReadOptions().withFilter(rocheFilter().eq(...))` | Apply a typed filter builder to ring reads. |
-| `defaultStellarOptions().withFilter(rocheFilter().eq(...))` | Apply a typed filter builder to stellar reads. |
+| `defaultReadOptions().withFilter(orbeliasFilter().eq(...))` | Apply a typed filter builder to ring reads. |
+| `defaultStellarOptions().withFilter(orbeliasFilter().eq(...))` | Apply a typed filter builder to stellar reads. |
 | `nearRing(baseRing, ring)` | Resolve a write-time nearby coordinate, for example `nearRing("users/123", "orders") == "users/123/orders"`. |
 | `countByRing(ring)` | Count records in one ring. |
 | `retrieve(queryVec, ring = "", budget = 8, ...)` | Vector/RAG-style retrieval with ring-aware planning. |
@@ -139,7 +139,7 @@ The C ABI exposes matching additive functions: `roche_put_codec`,
 |---|---|
 | `locate(id, at = -1.0)` | Compute the owning node for an ID at the current or specified time. |
 | `nextVisit(id, node)` | Compute when an ID next visits a node. |
-| `nextJoin(a, b)` | Compute the next co-location time for two RocheDB IDs. |
+| `nextJoin(a, b)` | Compute the next co-location time for two OrbeliasDB IDs. |
 | `stats()` | Return per-node item counts. |
 
 ## Transactions
@@ -201,8 +201,8 @@ or stellar lens.
 | `verifyBackup(backupDir)` | Verify a backup. |
 | `restoreBackup(backupDir, dataDir, overwrite = false, durability = durBuffered)` | Restore into a data directory. |
 | `restoreEncryptedBackup(backupDir, dataDir, passphrase, overwrite = false, durability = durBuffered)` | Restore an encrypted backup into a data directory. |
-| `dump(path = "", includeVectors = true)` | Export `rochedb.dump.v1` JSONL with ring, payload, vector, and codec metadata. |
-| `importJsonl(path, defaultRing = "imported", ...)` | Import RocheDB dump JSONL or external JSONL with ring routing. |
+| `dump(path = "", includeVectors = true)` | Export `orbeliasdb.dump.v1` JSONL with ring, payload, vector, and codec metadata. |
+| `importJsonl(path, defaultRing = "imported", ...)` | Import OrbeliasDB dump JSONL or external JSONL with ring routing. |
 
 ## Universe Sync And Warp
 

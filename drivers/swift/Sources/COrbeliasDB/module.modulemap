@@ -1,0 +1,5 @@
+module COrbeliasDB [system] {
+  header "../../../../include/orbeliasdb.h"
+  link "orbeliasdb"
+  export *
+}

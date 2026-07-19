@@ -1,16 +1,16 @@
-# RocheDB v0.4.0
+# OrbeliasDB v0.4.0
 
-RocheDB v0.4.0 adds TLS transport support and repository-level CI coverage.
+OrbeliasDB v0.4.0 adds TLS transport support and repository-level CI coverage.
 
 Release:
 
-https://github.com/puffball1567/rochedb/releases/tag/v0.4.0
+https://github.com/puffball1567/orbeliasdb/releases/tag/v0.4.0
 
 ## Main Changes
 
-- Added optional TLS transport for `roched`, RocheDB Nim clients, CLI commands,
+- Added optional TLS transport for `orbeliasd`, OrbeliasDB Nim clients, CLI commands,
   and the C ABI.
-- Added `roche_connect_auth_tls` as an additive C ABI entry point.
+- Added `orbelias_connect_auth_tls` as an additive C ABI entry point.
 - Added TLS CLI flags:
   - `--tls`
   - `--tls-ca=FILE`
@@ -37,11 +37,11 @@ https://github.com/puffball1567/rochedb/releases/tag/v0.4.0
 
 ## Build Note
 
-TLS support requires building RocheDB with Nim's SSL support:
+TLS support requires building OrbeliasDB with Nim's SSL support:
 
 ```sh
-nim c -d:ssl -d:release -o:bin/roched src/roched.nim
-nim c -d:ssl -d:release -o:bin/roche src/rochecli.nim
+nim c -d:ssl -d:release -o:bin/orbeliasd src/orbeliasd.nim
+nim c -d:ssl -d:release -o:bin/orbelias src/orbeliascli.nim
 ```
 
 Without `-d:ssl`, non-TLS operation remains available.
@@ -50,13 +50,13 @@ Without `-d:ssl`, non-TLS operation remains available.
 
 Before release, the following checks passed locally or in GitHub Actions:
 
-- `nim check src/rochedb.nim`
-- `nim check src/rochecli.nim`
-- `nim check src/roched.nim`
-- `nim check src/rochedb_capi.nim`
-- `nim check -d:ssl src/rochecli.nim`
-- `nim check -d:ssl src/roched.nim`
-- `nim check -d:ssl src/rochedb_capi.nim`
+- `nim check src/orbeliasdb.nim`
+- `nim check src/orbeliascli.nim`
+- `nim check src/orbeliasd.nim`
+- `nim check src/orbeliasdb_capi.nim`
+- `nim check -d:ssl src/orbeliascli.nim`
+- `nim check -d:ssl src/orbeliasd.nim`
+- `nim check -d:ssl src/orbeliasdb_capi.nim`
 - C ABI contract test
 - `scripts/cluster_tls_smoke.sh`
 - `scripts/test_all_smoke.sh`

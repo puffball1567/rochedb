@@ -1,7 +1,7 @@
 {
-  "name": "rochedb",
+  "name": "orbeliasdb",
   "version": "0.1.0",
-  "description": "Native Node.js and Bun wire driver for RocheDB",
+  "description": "Native Node.js and Bun wire driver for OrbeliasDB",
   "main": "src/index.js",
   "types": "src/index.d.ts",
   "license": "Apache-2.0",

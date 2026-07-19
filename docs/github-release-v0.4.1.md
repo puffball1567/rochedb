@@ -1,10 +1,10 @@
-# RocheDB v0.4.1
+# OrbeliasDB v0.4.1
 
-RocheDB v0.4.1 is a documentation and process patch release.
+OrbeliasDB v0.4.1 is a documentation and process patch release.
 
 Release:
 
-https://github.com/puffball1567/rochedb/releases/tag/v0.4.1
+https://github.com/puffball1567/orbeliasdb/releases/tag/v0.4.1
 
 ## Main Changes
 

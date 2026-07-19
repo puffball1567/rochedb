@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BASE_PORT="${ROCHE_CLUSTER_TEST_BASE_PORT:-17811}"
+BASE_PORT="${ORBELIAS_CLUSTER_TEST_BASE_PORT:-17811}"
 PEERS="127.0.0.1:${BASE_PORT}"
-DATA="${TMPDIR:-/tmp}/rochedb-cluster-rbac-smoke-$$"
+DATA="${TMPDIR:-/tmp}/orbeliasdb-cluster-rbac-smoke-$$"
 PID=""
 
 cleanup() {
@@ -19,14 +19,14 @@ trap cleanup EXIT
 cd "$ROOT"
 mkdir -p "$DATA"
 
-echo "[cluster-rbac] build roched"
-nim c -d:release --nimcache:/tmp/nimcache_roched_rbac -o:src/roched src/roched.nim
+echo "[cluster-rbac] build orbeliasd"
+nim c -d:release --nimcache:/tmp/nimcache_orbeliasd_rbac -o:src/orbeliasd src/orbeliasd.nim
 
-echo "[cluster-rbac] build rochecli"
-nim c -d:release --nimcache:/tmp/nimcache_rochecli_rbac -o:src/rochecli src/rochecli.nim
+echo "[cluster-rbac] build orbeliascli"
+nim c -d:release --nimcache:/tmp/nimcache_orbeliascli_rbac -o:src/orbeliascli src/orbeliascli.nim
 
 echo "[cluster-rbac] start node on $PEERS"
-src/roched --id=0 --peers="$PEERS" --data="$DATA/node0" \
+src/orbeliasd --id=0 --peers="$PEERS" --data="$DATA/node0" \
   --slow-tick=0.05 \
   --role=reader:read:reader:allowed \
   --role=writer:write:writer:allowed \
@@ -35,13 +35,13 @@ PID="$!"
 
 echo "[cluster-rbac] wait for health"
 for _ in $(seq 1 50); do
-  if src/rochecli health --peers="$PEERS" --user=admin --password=admin >/dev/null 2>&1; then
+  if src/orbeliascli health --peers="$PEERS" --user=admin --password=admin >/dev/null 2>&1; then
     break
   fi
   sleep 0.1
 done
 
 echo "[cluster-rbac] run tcluster_rbac"
-ROCHE_TEST_PEERS="$PEERS" nim c --nimcache:/tmp/nimcache_roche_tcluster_rbac -r tests/tcluster_rbac.nim
+ORBELIAS_TEST_PEERS="$PEERS" nim c --nimcache:/tmp/nimcache_orbelias_tcluster_rbac -r tests/tcluster_rbac.nim
 
 echo "[cluster-rbac] OK"
