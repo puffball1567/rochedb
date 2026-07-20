@@ -7,7 +7,7 @@ GLOBAL_BUDGET="${GLOBAL_BUDGET:-8}"
 ROUTED_BUDGET="${ROUTED_BUDGET:-3}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK="${TMPDIR:-/tmp}/rochedb-ai-rag-case-$$"
+WORK="${TMPDIR:-/tmp}/koutendb-ai-rag-case-$$"
 CORPUS="$WORK/corpus.jsonl"
 DATA="$WORK/data"
 
@@ -74,10 +74,10 @@ echo "docs:   $(wc -l < "$CORPUS")"
 echo
 
 echo "== Build case study runner =="
-nim c -d:release --nimcache:/tmp/nimcache_roche_ai_rag_case -o:bin/ai_rag_case_study examples/ai_rag_case_study.nim
+nim c -d:release --nimcache:/tmp/nimcache_kouten_ai_rag_case -o:bin/ai_rag_case_study examples/ai_rag_case_study.nim
 
 echo
-echo "== Run RocheDB AI/RAG case study =="
+echo "== Run KoutenDB AI/RAG case study =="
 bin/ai_rag_case_study \
   --corpus="$CORPUS" \
   --data="$DATA" \

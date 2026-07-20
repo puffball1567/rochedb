@@ -1,20 +1,20 @@
-# RocheDB v0.3.0 Technical Preview
+# KoutenDB v0.3.0 Technical Preview
 
-RocheDB v0.3.0 expands the driver-facing and codec-aware read surface. The
-notable change is C ABI v2 with `roche_read_ring_json`, which gives external
-drivers a stable ring-read page shape similar to the CLI `roche get --ring=...`
+KoutenDB v0.3.0 expands the driver-facing and codec-aware read surface. The
+notable change is C ABI v2 with `kouten_read_ring_json`, which gives external
+drivers a stable ring-read page shape similar to the CLI `kouten get --ring=...`
 workflow.
 
 This is still a technical preview / research OSS release. Do not present it as
 a production replacement for Redis, PostgreSQL, MongoDB, Apache Arrow, or a
-mature vector database. The defensible claim remains narrower: RocheDB can
+mature vector database. The defensible claim remains narrower: KoutenDB can
 reduce working-set size and downstream retrieval input when data is placed in
 meaningful rings, while the implementation is gaining the operational checks
 needed for broader evaluation.
 
 ## Highlights
 
-- C ABI v2 with `roche_read_ring_json` for JSON filters, optional projection,
+- C ABI v2 with `kouten_read_ring_json` for JSON filters, optional projection,
   cursor/page reads, sorting, codec metadata, and stable page-shaped JSON
   responses.
 - Unified ring-oriented CLI read behavior around one result shape for one or
@@ -46,11 +46,11 @@ The v0.3.0 pre-release verification pass included:
 `scripts/test_all_smoke.sh` covers core tests, CLI CRUD, cluster transactions,
 cluster failure, authz/RBAC, wire fuzz, recovery, universe sync failure, and
 remote universe sync. Driver compatibility remains optional through
-`ROCHE_TEST_DRIVERS=1`.
+`KOUTEN_TEST_DRIVERS=1`.
 
 ## Known Gaps
 
-- TLS is not implemented; do not expose `roched` directly on untrusted
+- TLS is not implemented; do not expose `koutend` directly on untrusted
   networks.
 - Cluster membership is static.
 - node0 remains the cluster transaction landing coordinator.
@@ -65,14 +65,14 @@ remote universe sync. Driver compatibility remains optional through
 
 - README: `README.md`
 - Test coverage: `docs/test-coverage.md`
-- Status / roadmap: `docs/rochedb-status.md`
+- Status / roadmap: `docs/koutendb-status.md`
 - Public API: `docs/public-api.md`
 - Configuration reference: `docs/config-reference.md`
 - CLI reference: `docs/cli-reference.md`
 - Payload codecs: `docs/payload-codecs.md`
 - Universe sync: `docs/universe-sync.md`
 - Topology examples: `docs/topology-examples.md`
-- Benchmarks: `docs/rochedb-bench.md`
+- Benchmarks: `docs/koutendb-bench.md`
 - Release checklist: `docs/release-checklist.md`
 - Driver installation guide: `docs/driver-installation.md`
 - Threat model: `docs/threat-model.md`

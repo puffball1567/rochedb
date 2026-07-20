@@ -18,11 +18,11 @@ drivers/**/target/
 drivers/**/.build/
 drivers/**/Cargo.lock
 
-src/roched
-src/rochecli
-src/rochebench
-src/rochesim
-src/rochedb
+src/koutend
+src/koutencli
+src/koutenbench
+src/koutensim
+src/koutendb
 tests/tapi
 tests/tauth
 tests/tcore

@@ -1,13 +1,13 @@
-import org.rochedb.RocheDb
+import org.koutendb.KoutenDb
 
 private fun checkState(condition: Boolean, message: String) {
     if (!condition) error(message)
 }
 
 fun main() {
-    checkState(RocheDb.abiVersion == 2, "unexpected ABI version")
+    checkState(KoutenDb.abiVersion == 2, "unexpected ABI version")
 
-    RocheDb.open(4).use { db ->
+    KoutenDb.open(4).use { db ->
         db.configureRing("docs", 45.0)
         db.setGalaxyDescription("Smoke-test galaxy for Kotlin binding.")
         db.setRingDescription("docs", "Documents used by the Kotlin binding smoke test.")

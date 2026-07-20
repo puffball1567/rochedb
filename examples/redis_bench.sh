@@ -4,26 +4,26 @@ set -euo pipefail
 N="${N:-100000}"
 PAYLOAD_BYTES="${PAYLOAD_BYTES:-100}"
 REDIS_IMAGE="${REDIS_IMAGE:-redis:7-alpine}"
-CONTAINER_NAME="${CONTAINER_NAME:-roche-redis-bench}"
+CONTAINER_NAME="${CONTAINER_NAME:-kouten-redis-bench}"
 NETWORK_MODE="${NETWORK_MODE:-host}"
 REDIS_PORT="${REDIS_PORT:-6379}"
-ROCHED="${ROCHED:-0}"
-ROCHED_PEERS="${ROCHED_PEERS:-127.0.0.1:17301}"
+KOUTEND="${KOUTEND:-0}"
+KOUTEND_PEERS="${KOUTEND_PEERS:-127.0.0.1:17301}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 mkdir -p bin
-nim c -d:release -o:bin/rochecli src/rochecli.nim
-if [[ "$ROCHED" == "1" ]]; then
-  nim c -d:release -o:bin/roched src/roched.nim
+nim c -d:release -o:bin/koutencli src/koutencli.nim
+if [[ "$KOUTEND" == "1" ]]; then
+  nim c -d:release -o:bin/koutend src/koutend.nim
 fi
 
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  if [[ -n "${ROCHED_PID:-}" ]]; then
-    kill "$ROCHED_PID" >/dev/null 2>&1 || true
-    wait "$ROCHED_PID" >/dev/null 2>&1 || true
+  if [[ -n "${KOUTEND_PID:-}" ]]; then
+    kill "$KOUTEND_PID" >/dev/null 2>&1 || true
+    wait "$KOUTEND_PID" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
@@ -45,16 +45,16 @@ for _ in {1..50}; do
   sleep 0.1
 done
 
-ROCHE_ARGS=()
-if [[ "$ROCHED" == "1" ]]; then
-  bin/roched --id=0 --peers="$ROCHED_PEERS" &
-  ROCHED_PID="$!"
+KOUTEN_ARGS=()
+if [[ "$KOUTEND" == "1" ]]; then
+  bin/koutend --id=0 --peers="$KOUTEND_PEERS" &
+  KOUTEND_PID="$!"
   sleep 0.3
-  ROCHE_ARGS+=(--peers="$ROCHED_PEERS")
+  KOUTEN_ARGS+=(--peers="$KOUTEND_PEERS")
 fi
 
-bin/rochecli redis-bench \
+bin/koutencli redis-bench \
   --n="$N" \
   --payload-bytes="$PAYLOAD_BYTES" \
   --redis="$REDIS_ENDPOINT" \
-  "${ROCHE_ARGS[@]}"
+  "${KOUTEN_ARGS[@]}"

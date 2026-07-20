@@ -1,7 +1,7 @@
-## 手動結合テスト: roched 3ノード起動後に実行する。
+## 手動結合テスト: koutend 3ノード起動後に実行する。
 
 import std/[json, net, os, unittest]
-import ../src/roche/wire
+import ../src/kouten/wire
 
 const
   BlockedRing = 9_999_991'u64
@@ -43,7 +43,7 @@ proc universeEventJson(ring, key, payload: string): string =
 
 suite "cluster authz":
   test "allow-ring prefix permits matching named rings and denies others":
-    let peers = getEnv("ROCHE_TEST_PEERS",
+    let peers = getEnv("KOUTEN_TEST_PEERS",
       "127.0.0.1:17611,127.0.0.1:17612,127.0.0.1:17613")
     let ps = parsePeers(peers)
     var c = newClusterClient(ps, username = "alice", password = "secret")
@@ -66,7 +66,7 @@ suite "cluster authz":
     c.close()
 
   test "UAPPLY is idempotent by eventKey":
-    let peers = getEnv("ROCHE_TEST_PEERS",
+    let peers = getEnv("KOUTEN_TEST_PEERS",
       "127.0.0.1:17611,127.0.0.1:17612,127.0.0.1:17613")
     let ps = parsePeers(peers)
     var c = newClusterClient(ps, username = "alice", password = "secret")
@@ -77,7 +77,7 @@ suite "cluster authz":
     c.close()
 
   test "authz denial drains each framed body type and keeps the connection usable":
-    let peers = getEnv("ROCHE_TEST_PEERS",
+    let peers = getEnv("KOUTEN_TEST_PEERS",
       "127.0.0.1:17611,127.0.0.1:17612,127.0.0.1:17613")
     let ps = parsePeers(peers)
     var c = newClusterClient(ps, username = "alice", password = "secret")
@@ -149,7 +149,7 @@ suite "cluster authz":
     c.close()
 
   test "malformed or oversized denied frames close only that connection":
-    let peers = getEnv("ROCHE_TEST_PEERS",
+    let peers = getEnv("KOUTEN_TEST_PEERS",
       "127.0.0.1:17611,127.0.0.1:17612,127.0.0.1:17613")
     let ps = parsePeers(peers)
 

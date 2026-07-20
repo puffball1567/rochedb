@@ -18,10 +18,10 @@ scripts/universe_sync_failure_smoke.sh
 scripts/universe_sync_remote_smoke.sh
 scripts/demo_smoke.sh
 
-if [[ "${ROCHE_TEST_DRIVERS:-0}" == "1" ]]; then
+if [[ "${KOUTEN_TEST_DRIVERS:-0}" == "1" ]]; then
   scripts/driver_compat.sh
 else
-  echo "[test-all-smoke] driver compatibility skipped; set ROCHE_TEST_DRIVERS=1 to run it"
+  echo "[test-all-smoke] driver compatibility skipped; set KOUTEN_TEST_DRIVERS=1 to run it"
 fi
 
 echo "[test-all-smoke] OK"

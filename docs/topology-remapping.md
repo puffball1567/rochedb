@@ -1,11 +1,11 @@
 # Topology Remapping
 
-RocheDB's first owner mapping was intentionally simple: divide the angle space
+KoutenDB's first owner mapping was intentionally simple: divide the angle space
 equally by `nNodes`, then choose the owner from the current angle.
 
 That is useful for a small static cluster, but it has an important weakness:
 changing `nNodes` can move far more data than necessary. v0.6 adds the core
-primitives needed to model safer topology changes without abandoning RocheDB's
+primitives needed to model safer topology changes without abandoning KoutenDB's
 coordinate-based placement model.
 
 ## Arc Tables
@@ -91,7 +91,7 @@ Still future work:
 - staged migration / compaction integration;
 - operational CLI for previewing and applying topology changes.
 
-The design goal is to avoid turning RocheDB into a generic distributed hash
-table. The topology layer should support RocheDB's locality model: records
+The design goal is to avoid turning KoutenDB into a generic distributed hash
+table. The topology layer should support KoutenDB's locality model: records
 remain placed by meaningful coordinates, while cluster membership changes avoid
 unnecessary movement.

@@ -1,10 +1,10 @@
-# How RocheDB Differs From Typical NoSQL
+# How KoutenDB Differs From Typical NoSQL
 
-RocheDB is a NoSQL/document database prototype, but it is not trying to be a
+KoutenDB is a NoSQL/document database prototype, but it is not trying to be a
 MongoDB-compatible document store, an aggregation engine, or a generic
 secondary-index database.
 
-The important distinction is placement. In RocheDB, the `ring` is not merely a
+The important distinction is placement. In KoutenDB, the `ring` is not merely a
 collection label. It is a coordinate used by the read path, the retrieval
 planner, dump/import boundaries, authorization boundaries, and future sync /
 recovery workflows.
@@ -18,7 +18,7 @@ insert flexible documents first
 add filters, indexes, and aggregation later
 ```
 
-RocheDB's model is different:
+KoutenDB's model is different:
 
 ```text
 place documents into meaningful rings first
@@ -28,9 +28,9 @@ use ring locality to avoid reading unrelated data later
 Documents remain flexible. Different records in the same ring may have different
 JSON shapes. The stricter part is not schema; it is placement.
 
-## What RocheDB Does Not Try To Replace
+## What KoutenDB Does Not Try To Replace
 
-RocheDB is not currently a replacement for:
+KoutenDB is not currently a replacement for:
 
 - MongoDB aggregation pipelines;
 - SQL joins and relational constraints;
@@ -42,9 +42,9 @@ RocheDB is not currently a replacement for:
 Those systems are strong when the application needs broad ad-hoc analysis,
 strict relational constraints, or large cross-corpus scans.
 
-## What RocheDB Optimizes Instead
+## What KoutenDB Optimizes Instead
 
-RocheDB is designed for systems where most reads can start from a meaningful
+KoutenDB is designed for systems where most reads can start from a meaningful
 scope:
 
 - tenant, user, account, or organization;
@@ -55,7 +55,7 @@ scope:
 - AI/RAG corpus partition;
 - imported field mapped into a ring.
 
-When this scope is explicit, RocheDB can reduce:
+When this scope is explicit, KoutenDB can reduce:
 
 - records scanned;
 - vectors considered;
@@ -66,7 +66,7 @@ When this scope is explicit, RocheDB can reduce:
 
 ## Collection Versus Ring
 
-| Topic | Typical document collection | RocheDB ring |
+| Topic | Typical document collection | KoutenDB ring |
 |---|---|---|
 | Main role | Store documents of a broad type | Place documents in a meaningful locality |
 | Query path | Filter/index after choosing a collection | Choose a ring or hierarchy before scanning |
@@ -77,7 +77,7 @@ When this scope is explicit, RocheDB can reduce:
 
 ## Insert Philosophy
 
-RocheDB does not need a heavy classifier on every insert.
+KoutenDB does not need a heavy classifier on every insert.
 
 Good ring placement can come from:
 
@@ -92,7 +92,7 @@ make later reads cheaper.
 
 ## Query Philosophy
 
-RocheDB is strongest when the caller can say where to look.
+KoutenDB is strongest when the caller can say where to look.
 
 Examples:
 
@@ -117,7 +117,7 @@ query than to scanning every collection and filtering afterward.
 
 ## Tradeoffs
 
-RocheDB is a poor fit when:
+KoutenDB is a poor fit when:
 
 - the application cannot express meaningful rings;
 - most queries require arbitrary cross-ring aggregation;
@@ -125,7 +125,7 @@ RocheDB is a poor fit when:
 - strict global transaction order is mandatory;
 - the main workload is full-corpus analytics.
 
-RocheDB is a good fit when:
+KoutenDB is a good fit when:
 
 - records naturally belong to tenants, users, topics, regions, dates, or state
   scopes;
@@ -137,10 +137,10 @@ RocheDB is a good fit when:
 
 ## Short Positioning
 
-Use this wording when describing RocheDB:
+Use this wording when describing KoutenDB:
 
 ```text
-RocheDB is a placement-aware NoSQL/document/vector store. It keeps NoSQL-style
+KoutenDB is a placement-aware NoSQL/document/vector store. It keeps NoSQL-style
 document flexibility, but expects meaningful ring placement so reads can avoid
 unrelated working sets.
 ```
@@ -148,7 +148,7 @@ unrelated working sets.
 Avoid this wording:
 
 ```text
-RocheDB is a MongoDB-compatible replacement.
+KoutenDB is a MongoDB-compatible replacement.
 ```
 
 That is not the design goal.

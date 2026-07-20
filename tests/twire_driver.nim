@@ -1,13 +1,13 @@
 ## Driver-facing wire protocol smoke test.
 ##
-## Starts a small local roched cluster and verifies that drivers can use
+## Starts a small local koutend cluster and verifies that drivers can use
 ## ring names without knowing ringKey/period/head derivation rules.
 
 import std/[net, os, osproc, strutils, unittest]
-import ../src/roche/[core, wire]
+import ../src/kouten/[core, wire]
 
 proc startNode(id: int, peers: string): Process =
-  let exe = getCurrentDir() / "src" / "roched"
+  let exe = getCurrentDir() / "src" / "koutend"
   startProcess(exe, args = ["--id=" & $id, "--peers=" & peers,
                             "--slow-tick=1000"],
                options = {poParentStreams})
@@ -27,7 +27,7 @@ proc waitCluster(c: ClusterClient, n: int): bool =
 
 suite "driver wire protocol":
   test "PUTR/GETID/QRYID hide ring internals from external drivers":
-    let peers = getEnv("ROCHE_TEST_PEERS", "127.0.0.1:17631,127.0.0.1:17632")
+    let peers = getEnv("KOUTEN_TEST_PEERS", "127.0.0.1:17631,127.0.0.1:17632")
     let ps = parsePeers(peers)
     check ps.len == 2
 

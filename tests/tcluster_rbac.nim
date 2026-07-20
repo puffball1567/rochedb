@@ -1,11 +1,11 @@
-## Manual integration test: start roched with --role users before running.
+## Manual integration test: start koutend with --role users before running.
 
 import std/[os, strutils, unittest]
-import ../src/roche/wire
+import ../src/kouten/wire
 
 suite "cluster rbac":
   test "reader writer admin roles combine with ring prefixes":
-    let peers = getEnv("ROCHE_TEST_PEERS", "127.0.0.1:17811")
+    let peers = getEnv("KOUTEN_TEST_PEERS", "127.0.0.1:17811")
     let ps = parsePeers(peers)
 
     var writer = newClusterClient(ps, username = "writer", password = "write")

@@ -1,6 +1,6 @@
 # Query Safety
 
-RocheDB does not execute SQL, so its query-safety surface is different from a
+KoutenDB does not execute SQL, so its query-safety surface is different from a
 SQL database.
 
 The two important pieces are:
@@ -9,7 +9,7 @@ The two important pieces are:
 - typed filter builders for read filters.
 
 Both are designed to avoid string-concatenated query text while keeping
-RocheDB's read path centered on a `ring` or `stellar` coordinate.
+KoutenDB's read path centered on a `ring` or `stellar` coordinate.
 
 ## Prepared Selections
 
@@ -35,11 +35,11 @@ interpolated into it.
 Filters are still represented as JSON objects internally and on the wire. That
 keeps the CLI, C ABI, and existing drivers compatible.
 
-For application code, RocheDB also provides a builder so callers do not need to
+For application code, KoutenDB also provides a builder so callers do not need to
 construct filter JSON by string concatenation:
 
 ```nim
-let filter = rocheFilter().eq("status", "draft").eq("kind", "order")
+let filter = koutenFilter().eq("status", "draft").eq("kind", "order")
 
 let page = db.readRing("docs/japan", defaultReadOptions().withFilter(filter))
 ```
@@ -48,14 +48,14 @@ The same filter can be used with stellar reads:
 
 ```nim
 let page = db.readStellar("commerce/order/A-001",
-  defaultStellarOptions().withFilter(rocheFilter().eq("kind", "shop")))
+  defaultStellarOptions().withFilter(koutenFilter().eq("kind", "shop")))
 ```
 
 ID reads can also be built without manually stringifying the ID:
 
 ```nim
 let page = db.readRing("users", defaultReadOptions().withFilter(
-  rocheFilter().id(userId)))
+  koutenFilter().id(userId)))
 ```
 
 Supported builder values:
@@ -65,32 +65,32 @@ Supported builder values:
 - floats;
 - booleans;
 - explicit `JsonNode` values;
-- RocheDB IDs through `id(id)`.
+- KoutenDB IDs through `id(id)`.
 
 ## Scope Comes First
 
-The filter builder is not intended to turn RocheDB into an ad-hoc global query
+The filter builder is not intended to turn KoutenDB into an ad-hoc global query
 engine.
 
-RocheDB's read model remains:
+KoutenDB's read model remains:
 
 1. choose a `ring` or `stellar` coordinate;
 2. optionally narrow with `subring`;
 3. apply typed filters inside that local scope;
 4. project only the requested fields.
 
-This keeps query safety aligned with the main RocheDB idea: avoid unrelated
+This keeps query safety aligned with the main KoutenDB idea: avoid unrelated
 working sets before downstream work begins.
 
 ## Server-Side Cost Guards
 
-`roched` also enforces bounded network query work. `RETRIEVE` requests have a
+`koutend` also enforces bounded network query work. `RETRIEVE` requests have a
 maximum result budget and a maximum vector scan count. If a request crosses
 those bounds, the server returns a stable `ERR bad-request` instead of keeping
 the single-threaded server busy indefinitely.
 
 The normal fix is not to raise the cap first. Prefer a `ring`, `stellar`, child
-scope, or narrower retrieval plan so RocheDB can reduce the candidate set before
+scope, or narrower retrieval plan so KoutenDB can reduce the candidate set before
 scoring. This turns unsafe broad scans into an observable tuning problem instead
 of hiding them behind a slow global query.
 
@@ -99,12 +99,12 @@ of hiding them behind a slow global query.
 These two forms are equivalent:
 
 ```nim
-let a = db.readRing("docs", RocheReadOptions(
+let a = db.readRing("docs", KoutenReadOptions(
   filter: %*{"status": "draft"},
   selection: "{ title }"))
 
 let b = db.readRing("docs", defaultReadOptions()
-  .withFilter(rocheFilter().eq("status", "draft")))
+  .withFilter(koutenFilter().eq("status", "draft")))
 ```
 
 The builder-produced filter is a defensive JSON object copy. It can be passed

@@ -4,20 +4,20 @@ set -euo pipefail
 N="${N:-10000}"
 PAYLOAD_BYTES="${PAYLOAD_BYTES:-100}"
 POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:14}"
-ROCHED_IMAGE="${ROCHED_IMAGE:-rochedb-bench:local}"
-NETWORK="${NETWORK:-rochedb-postgres-bench-$$}"
-PG_CONTAINER="${PG_CONTAINER:-roche-postgres-bench-$$}"
-ROCHED_PREFIX="${ROCHED_PREFIX:-roche-pg-roched-$$}"
+KOUTEND_IMAGE="${KOUTEND_IMAGE:-koutendb-bench:local}"
+NETWORK="${NETWORK:-koutendb-postgres-bench-$$}"
+PG_CONTAINER="${PG_CONTAINER:-kouten-postgres-bench-$$}"
+KOUTEND_PREFIX="${KOUTEND_PREFIX:-kouten-pg-koutend-$$}"
 BUILD_IMAGE="${BUILD_IMAGE:-1}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TMP_ROOT="${ROCHE_BENCH_TMP:-$ROOT/.tmp/rochedb-postgres-docker-bench-$$}"
-ROCHE_DATA="$TMP_ROOT/roche"
+TMP_ROOT="${KOUTEN_BENCH_TMP:-$ROOT/.tmp/koutendb-postgres-docker-bench-$$}"
+KOUTEN_DATA="$TMP_ROOT/kouten"
 POSTGRES_DATA="$TMP_ROOT/postgres"
-PEERS="${ROCHED_PREFIX}0:17301,${ROCHED_PREFIX}1:17301,${ROCHED_PREFIX}2:17301"
+PEERS="${KOUTEND_PREFIX}0:17301,${KOUTEND_PREFIX}1:17301,${KOUTEND_PREFIX}2:17301"
 
 cleanup() {
-  docker rm -f "$PG_CONTAINER" "${ROCHED_PREFIX}0" "${ROCHED_PREFIX}1" "${ROCHED_PREFIX}2" >/dev/null 2>&1 || true
+  docker rm -f "$PG_CONTAINER" "${KOUTEND_PREFIX}0" "${KOUTEND_PREFIX}1" "${KOUTEND_PREFIX}2" >/dev/null 2>&1 || true
   docker network rm "$NETWORK" >/dev/null 2>&1 || true
   rm -rf "$TMP_ROOT"
 }
@@ -31,35 +31,35 @@ fi
 cd "$ROOT"
 
 if [[ "$BUILD_IMAGE" == "1" ]]; then
-  echo "[postgres-docker-bench] build RocheDB image $ROCHED_IMAGE"
-  docker build -f examples/compose/Dockerfile -t "$ROCHED_IMAGE" .
+  echo "[postgres-docker-bench] build KoutenDB image $KOUTEND_IMAGE"
+  docker build -f examples/compose/Dockerfile -t "$KOUTEND_IMAGE" .
 fi
 
 cleanup
 docker network create "$NETWORK" >/dev/null
-mkdir -p "$ROCHE_DATA" "$POSTGRES_DATA"
+mkdir -p "$KOUTEN_DATA" "$POSTGRES_DATA"
 
-echo "[postgres-docker-bench] start RocheDB cluster on Docker network $NETWORK"
+echo "[postgres-docker-bench] start KoutenDB cluster on Docker network $NETWORK"
 for id in 0 1 2; do
-  mkdir -p "$ROCHE_DATA/node$id"
-  docker run -d --rm --network "$NETWORK" --name "${ROCHED_PREFIX}${id}" \
-    -v "$ROCHE_DATA/node$id:/data" \
-    "$ROCHED_IMAGE" --id="$id" --peers="$PEERS" --slow-tick=0.05 >/dev/null
+  mkdir -p "$KOUTEN_DATA/node$id"
+  docker run -d --rm --network "$NETWORK" --name "${KOUTEND_PREFIX}${id}" \
+    -v "$KOUTEN_DATA/node$id:/data" \
+    "$KOUTEND_IMAGE" --id="$id" --peers="$PEERS" --slow-tick=0.05 >/dev/null
 done
 
 for _ in $(seq 1 50); do
-  if docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/rochecli \
-    "$ROCHED_IMAGE" health --peers="$PEERS" >/dev/null 2>&1; then
+  if docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/koutencli \
+    "$KOUTEND_IMAGE" health --peers="$PEERS" >/dev/null 2>&1; then
     break
   fi
   sleep 0.1
 done
-docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/rochecli \
-  "$ROCHED_IMAGE" health --peers="$PEERS" >/dev/null
+docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/koutencli \
+  "$KOUTEND_IMAGE" health --peers="$PEERS" >/dev/null
 
-echo "[postgres-docker-bench] RocheDB cluster benchmark"
-docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/rochecli \
-  "$ROCHED_IMAGE" bench --peers="$PEERS" --n="$N"
+echo "[postgres-docker-bench] KoutenDB cluster benchmark"
+docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/koutencli \
+  "$KOUTEND_IMAGE" bench --peers="$PEERS" --n="$N"
 
 echo "[postgres-docker-bench] start PostgreSQL container"
 docker run -d --rm --network "$NETWORK" --name "$PG_CONTAINER" \

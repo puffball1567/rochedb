@@ -1,33 +1,33 @@
 ---
 layout: home
-title: RocheDB Documentation
+title: KoutenDB Documentation
 ---
 
-# RocheDB Documentation
+# KoutenDB Documentation
 
-RocheDB is a ring-oriented NoSQL database prototype. It stores data with a
+KoutenDB is a ring-oriented NoSQL database prototype. It stores data with a
 coordinate-like `ring` and uses that placement at read time to reduce the amount
 of data that must be searched, transferred, held in memory, and passed to
 downstream AI/RAG or application logic.
 
 ## Start Here
 
-- [Concept](rochedb-concept.md)
+- [Concept](koutendb-concept.md)
 - [Installation](installation.md)
 - [Public API](public-api.md)
 - [Configuration Reference](config-reference.md)
 - [CLI Reference](cli-reference.md)
-- [How RocheDB Differs From Typical NoSQL](nosql-positioning.md)
+- [How KoutenDB Differs From Typical NoSQL](nosql-positioning.md)
 - [Unique Data Model And Operating Patterns](unique-data-model.md)
 - [Use Case Recipes](use-case-recipes.md)
 - [Technical FAQ](technical-faq.md)
-- [Feature Status / Roadmap](rochedb-status.md)
-- [Benchmark Notes](rochedb-bench.md)
+- [Feature Status / Roadmap](koutendb-status.md)
+- [Benchmark Notes](koutendb-bench.md)
 - [Benchmark Comparison Tables](benchmark-comparison.md)
 
 ## Core Guides
 
-- [Detailed Design](rochedb-design.md)
+- [Detailed Design](koutendb-design.md)
 - [Topology Configuration](topology-config.md)
 - [Topology Pattern Catalog](topology-examples.md)
 - [Topology Remapping](topology-remapping.md)
@@ -44,7 +44,7 @@ downstream AI/RAG or application logic.
 ## Drivers And Protocol
 
 - [Driver Installation](driver-installation.md)
-- [Driver / FFI Roadmap](rochedb-driver-roadmap.md)
+- [Driver / FFI Roadmap](koutendb-driver-roadmap.md)
 - [Protocol Compatibility](protocol-compatibility.md)
 - [TLS Transport](tls-transport.md)
 - [Query Safety](query-safety.md)

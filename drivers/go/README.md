@@ -1,9 +1,9 @@
-# RocheDB Go Driver
+# KoutenDB Go Driver
 
-Minimal Go wrapper over the RocheDB C ABI.
+Minimal Go wrapper over the KoutenDB C ABI.
 
 ```go
-db, err := rochedb.Open(8)
+db, err := koutendb.Open(8)
 if err != nil {
     panic(err)
 }
@@ -23,7 +23,7 @@ _, _ = value, atlas
 _ = ok
 ```
 
-Build the RocheDB shared library first:
+Build the KoutenDB shared library first:
 
 ```bash
 scripts/build_capi.sh

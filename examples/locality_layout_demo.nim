@@ -1,7 +1,7 @@
-## Physical locality demo for RocheDB's WAL layout.
+## Physical locality demo for KoutenDB's WAL layout.
 
 import std/[algorithm, json, os, strformat, strutils, tempfiles, times]
-import ../src/rochedb
+import ../src/koutendb
 
 proc argValue(name, defaultValue: string): string =
   let prefix = "--" & name & "="
@@ -24,13 +24,13 @@ proc pickRing(i, rings: int): int =
   let x = (int64(i) * 1103515245'i64 + 12345'i64) and 0x7fffffff'i64
   int(x mod int64(rings))
 
-proc measureReadUs(db: RocheDb, ring: string, iters: int): float =
+proc measureReadUs(db: KoutenDb, ring: string, iters: int): float =
   if iters <= 0:
     return 0.0
   let start = cpuTime()
   var consumed = 0
   for _ in 0 ..< iters:
-    let page = db.readRing(ring, RocheReadOptions(
+    let page = db.readRing(ring, KoutenReadOptions(
       filter: newJObject(),
       limit: 100,
       sortField: "id",
@@ -41,11 +41,11 @@ proc measureReadUs(db: RocheDb, ring: string, iters: int): float =
     echo "" # keep the loop observable to the optimizer
   elapsed * 1_000_000.0 / float(iters)
 
-proc logicalSignature(db: RocheDb, ring: string): seq[string] =
+proc logicalSignature(db: KoutenDb, ring: string): seq[string] =
   ## Stable signature for invariant checks: compaction may rewrite physical
   ## layout, but the logical ring query must return the same records.
   let n = max(1, db.countByRing(ring))
-  let page = db.readRing(ring, RocheReadOptions(
+  let page = db.readRing(ring, KoutenReadOptions(
     filter: newJObject(),
     limit: n,
     sortField: "id",
@@ -64,7 +64,7 @@ when isMainModule:
   let explicitDataDir = argValue("data", "")
   let dataDir =
     if explicitDataDir.len > 0: explicitDataDir
-    else: createTempDir("rochedb", "locality-layout-demo")
+    else: createTempDir("koutendb", "locality-layout-demo")
   let cleanup = explicitDataDir.len == 0
 
   if dirExists(dataDir):
@@ -73,7 +73,7 @@ when isMainModule:
 
   var db = open(dataDir = dataDir)
   try:
-    var ids: seq[seq[RocheId]] = newSeq[seq[RocheId]](rings)
+    var ids: seq[seq[KoutenId]] = newSeq[seq[KoutenId]](rings)
     let total = rings * perRing
 
     case workload

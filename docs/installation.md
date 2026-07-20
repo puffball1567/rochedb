@@ -5,11 +5,11 @@ title: Installation
 
 # Installation
 
-RocheDB installs command-line binaries named `roche`, `roched`, `rochecli`,
-`rochebench`, and `rochesim`.
+KoutenDB installs command-line binaries named `kouten`, `koutend`, `koutencli`,
+`koutenbench`, and `koutensim`.
 
-For normal use, the command should be available as `roche`, not as
-`bin/roche`. The `bin/` form is only for source-tree development and smoke
+For normal use, the command should be available as `kouten`, not as
+`bin/kouten`. The `bin/` form is only for source-tree development and smoke
 tests.
 
 ## Prerequisites
@@ -21,23 +21,23 @@ tests.
 
 ## User Install
 
-Install RocheDB from Nimble:
+Install KoutenDB from Nimble:
 
 ```sh
-nimble install rochedb
+nimble install koutendb
 ```
 
 Use a source checkout when you want to run the full test suite, examples, or
 driver smoke tests:
 
 ```sh
-git clone https://github.com/puffball1567/rochedb.git
-cd rochedb
+git clone https://github.com/puffball1567/koutendb.git
+cd koutendb
 nimble install -y
 ```
 
 Nimble installs binaries into `~/.nimble/bin` by default. Add it to your shell
-PATH if `roche --help` is not found:
+PATH if `kouten --help` is not found:
 
 ```sh
 export PATH="$HOME/.nimble/bin:$PATH"
@@ -52,8 +52,8 @@ printf '\nexport PATH="$HOME/.nimble/bin:$PATH"\n' >> ~/.profile
 Then verify:
 
 ```sh
-roche --help
-roched --help
+kouten --help
+koutend --help
 ```
 
 ## System Install
@@ -65,32 +65,32 @@ binaries.
 Build repo-local binaries:
 
 ```sh
-nim c -d:release --nimcache:/tmp/nimcache_roche -o:bin/roche src/rochecli.nim
-nim c -d:release --nimcache:/tmp/nimcache_roched -o:bin/roched src/roched.nim
+nim c -d:release --nimcache:/tmp/nimcache_kouten -o:bin/kouten src/koutencli.nim
+nim c -d:release --nimcache:/tmp/nimcache_koutend -o:bin/koutend src/koutend.nim
 ```
 
 Install them onto the system PATH:
 
 ```sh
-sudo install -m 0755 bin/roche /usr/local/bin/roche
-sudo install -m 0755 bin/roched /usr/local/bin/roched
+sudo install -m 0755 bin/kouten /usr/local/bin/kouten
+sudo install -m 0755 bin/koutend /usr/local/bin/koutend
 ```
 
 Optional development and benchmark tools:
 
 ```sh
-nim c -d:release --nimcache:/tmp/nimcache_rochebench -o:bin/rochebench src/rochebench.nim
-nim c -d:release --nimcache:/tmp/nimcache_rochesim -o:bin/rochesim src/rochesim.nim
-sudo install -m 0755 bin/rochebench /usr/local/bin/rochebench
-sudo install -m 0755 bin/rochesim /usr/local/bin/rochesim
+nim c -d:release --nimcache:/tmp/nimcache_koutenbench -o:bin/koutenbench src/koutenbench.nim
+nim c -d:release --nimcache:/tmp/nimcache_koutensim -o:bin/koutensim src/koutensim.nim
+sudo install -m 0755 bin/koutenbench /usr/local/bin/koutenbench
+sudo install -m 0755 bin/koutensim /usr/local/bin/koutensim
 ```
 
 Verify:
 
 ```sh
-command -v roche
-command -v roched
-roche --help
+command -v kouten
+command -v koutend
+kouten --help
 ```
 
 ## Source-Tree Development
@@ -99,9 +99,9 @@ Use repo-local binaries only when you explicitly want to test the current
 checkout without installing it:
 
 ```sh
-nim c -d:release --nimcache:/tmp/nimcache_roche -o:bin/roche src/rochecli.nim
-bin/roche --help
+nim c -d:release --nimcache:/tmp/nimcache_kouten -o:bin/kouten src/koutencli.nim
+bin/kouten --help
 ```
 
-Documentation and examples use `roche` for installed usage. Test scripts may use
-`bin/roche` to avoid depending on the user's PATH.
+Documentation and examples use `kouten` for installed usage. Test scripts may use
+`bin/kouten` to avoid depending on the user's PATH.

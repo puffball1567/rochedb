@@ -1,19 +1,19 @@
 # TLS Transport
 
-RocheDB supports standard TLS for `roched` TCP connections when the server and
+KoutenDB supports standard TLS for `koutend` TCP connections when the server and
 client are built with Nim's SSL support:
 
 ```sh
-nim c -d:ssl -d:release -o:src/roched src/roched.nim
-nim c -d:ssl -d:release -o:src/rochecli src/rochecli.nim
+nim c -d:ssl -d:release -o:src/koutend src/koutend.nim
+nim c -d:ssl -d:release -o:src/koutencli src/koutencli.nim
 ```
 
-TLS is a transport layer. It is separate from RocheDB's username/password
+TLS is a transport layer. It is separate from KoutenDB's username/password
 authentication, secret-key challenge response, and libsodium-backed secure frame
 mode. They can be combined:
 
 ```text
-TCP -> TLS -> RocheDB wire protocol -> AUTH / AUTHCHAL -> optional secure frames
+TCP -> TLS -> KoutenDB wire protocol -> AUTH / AUTHCHAL -> optional secure frames
 ```
 
 For public or VPC deployments, prefer TLS plus username/password plus
@@ -21,19 +21,19 @@ For public or VPC deployments, prefer TLS plus username/password plus
 
 ## Server
 
-Start `roched` with a certificate and private key:
+Start `koutend` with a certificate and private key:
 
 ```sh
-src/roched \
+src/koutend \
   --id=0 \
   --peers=127.0.0.1:7301 \
-  --data=/var/lib/rochedb \
+  --data=/var/lib/koutendb \
   --user=alice \
-  --password-file=/run/secrets/roche_password \
-  --secret-key-file=/run/secrets/roche_secret_key \
-  --tls-cert=/etc/rochedb/server.crt \
-  --tls-key=/etc/rochedb/server.key \
-  --tls-ca=/etc/rochedb/ca.crt
+  --password-file=/run/secrets/kouten_password \
+  --secret-key-file=/run/secrets/kouten_secret_key \
+  --tls-cert=/etc/koutendb/server.crt \
+  --tls-key=/etc/koutendb/server.key \
+  --tls-ca=/etc/koutendb/ca.crt
 ```
 
 `--tls-ca`, `--tls-server-name`, and `--tls-insecure-skip-verify` are used by
@@ -43,26 +43,26 @@ should match the peer certificate policy.
 
 ## CLI Client
 
-Use `--tls` to connect to a TLS-enabled `roched`:
+Use `--tls` to connect to a TLS-enabled `koutend`:
 
 ```sh
-src/rochecli health \
+src/koutencli health \
   --peers=127.0.0.1:7301 \
   --user=alice \
-  --password-file=/run/secrets/roche_password \
-  --secret-key-file=/run/secrets/roche_secret_key \
+  --password-file=/run/secrets/kouten_password \
+  --secret-key-file=/run/secrets/kouten_secret_key \
   --tls \
-  --tls-ca=/etc/rochedb/ca.crt
+  --tls-ca=/etc/koutendb/ca.crt
 ```
 
 For local self-signed experiments only:
 
 ```sh
-src/rochecli health \
+src/koutencli health \
   --peers=127.0.0.1:7301 \
   --user=alice \
-  --password-file=/run/secrets/roche_password \
-  --secret-key-file=/run/secrets/roche_secret_key \
+  --password-file=/run/secrets/kouten_password \
+  --secret-key-file=/run/secrets/kouten_secret_key \
   --tls \
   --tls-insecure-skip-verify
 ```
@@ -70,19 +70,19 @@ src/rochecli health \
 Do not use `--tls-insecure-skip-verify` for production deployments.
 For local smoke tests, direct `--password` / `--secret-key` values are accepted.
 For shared systems, prefer `--password-file`, `--secret-key-file`, or the
-`ROCHE_PASSWORD` / `ROCHE_SECRET_KEY` environment variables so secrets do not
+`KOUTEN_PASSWORD` / `KOUTEN_SECRET_KEY` environment variables so secrets do not
 appear in shell history or process listings.
 
 ## C ABI
 
-The C ABI exposes `roche_connect_auth_tls` for native drivers and FFI wrappers.
-The existing `roche_connect` and `roche_connect_auth` entry points remain
+The C ABI exposes `kouten_connect_auth_tls` for native drivers and FFI wrappers.
+The existing `kouten_connect` and `kouten_connect_auth` entry points remain
 available for non-TLS and backward-compatible use.
 
 ## Smoke Test
 
 The TLS smoke test builds TLS-enabled binaries, generates a short-lived
-self-signed certificate, starts `roched`, verifies authenticated TLS health,
+self-signed certificate, starts `koutend`, verifies authenticated TLS health,
 writes and reads JSON over TLS, and confirms that a plain TCP client cannot talk
 to the TLS listener:
 

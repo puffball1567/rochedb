@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-WORK="${TMPDIR:-/tmp}/roche-cli-crud-smoke-$$"
-BASE_PORT="${ROCHE_CLI_CRUD_BASE_PORT:-17991}"
+WORK="${TMPDIR:-/tmp}/kouten-cli-crud-smoke-$$"
+BASE_PORT="${KOUTEN_CLI_CRUD_BASE_PORT:-17991}"
 PIDS=()
 cleanup() {
   if ((${#PIDS[@]} > 0)); then
@@ -17,19 +17,19 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$WORK" "$ROOT/bin"
-export ROCHE_DATA="$WORK/data"
+export KOUTEN_DATA="$WORK/data"
 
-echo "[cli-crud] build roche"
-nim c -d:release --nimcache:/tmp/nimcache_roche_cli_crud \
-  -o:bin/roche src/rochecli.nim >/dev/null
-nim c -d:release --nimcache:/tmp/nimcache_roched_cli_crud \
-  -o:src/roched src/roched.nim >/dev/null
+echo "[cli-crud] build kouten"
+nim c -d:release --nimcache:/tmp/nimcache_kouten_cli_crud \
+  -o:bin/kouten src/koutencli.nim >/dev/null
+nim c -d:release --nimcache:/tmp/nimcache_koutend_cli_crud \
+  -o:src/koutend src/koutend.nim >/dev/null
 
 echo "[cli-crud] help"
-bin/roche --help | grep -q "roche put"
+bin/kouten --help | grep -q "kouten put"
 
 echo "[cli-crud] put"
-put_out="$(bin/roche put --ring=docs/japan \
+put_out="$(bin/kouten put --ring=docs/japan \
   --payload='{"title":"Hello","status":"draft"}' --codec=json)"
 grep -q "put OK" <<<"$put_out"
 raw_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$put_out")"
@@ -39,72 +39,72 @@ if [[ -z "$raw_id" ]]; then
 fi
 
 echo "[cli-crud] count/list/get/query"
-bin/roche count-ring --ring=docs/japan |
+bin/kouten count-ring --ring=docs/japan |
   grep -q "count=1"
-bin/roche get --ring=docs/japan |
+bin/kouten get --ring=docs/japan |
   grep -q '"status": "draft"'
-bin/roche get --ring=docs/japan --limit=1 --rsort=time |
+bin/kouten get --ring=docs/japan --limit=1 --rsort=time |
   grep -q '"items"'
-bin/roche get --ring=docs/japan --limit=1 --sort=id |
+bin/kouten get --ring=docs/japan --limit=1 --sort=id |
   grep -q '"sort": "id"'
-bin/roche get --ring=docs/japan --limit=1 --sort=id |
+bin/kouten get --ring=docs/japan --limit=1 --sort=id |
   grep -q '"sortDirection": "asc"'
-bin/roche list-ring --ring=docs/japan |
+bin/kouten list-ring --ring=docs/japan |
   grep -q '"rawId"'
-bin/roche get --ring=docs/japan --filter="{\"id\":\"$raw_id\"}" |
+bin/kouten get --ring=docs/japan --filter="{\"id\":\"$raw_id\"}" |
   grep -q '"status": "draft"'
-bin/roche get --ring=docs/japan --filter='{"status":"draft"}' --selection='{ title }' |
+bin/kouten get --ring=docs/japan --filter='{"status":"draft"}' --selection='{ title }' |
   grep -q '"title": "Hello"'
-bin/roche query --ring=docs/japan --filter="{\"id\":\"$raw_id\"}" --selection='{ title }' |
+bin/kouten query --ring=docs/japan --filter="{\"id\":\"$raw_id\"}" --selection='{ title }' |
   grep -q '"title": "Hello"'
 
 echo "[cli-crud] stellar-near ring reads"
-bin/roche put --ring=users/123 \
+bin/kouten put --ring=users/123 \
   --payload='{"kind":"user","name":"Alice"}' --codec=json >/dev/null
-bin/roche put --ring=orders --near=users/123 \
+bin/kouten put --ring=orders --near=users/123 \
   --payload='{"kind":"order","orderNo":"A-001"}' --codec=json >/dev/null
-bin/roche put --ring=billing --near=users/123 \
+bin/kouten put --ring=billing --near=users/123 \
   --payload='{"kind":"billing","plan":"pro"}' --codec=json >/dev/null
-bin/roche put --ring=users/999/orders \
+bin/kouten put --ring=users/999/orders \
   --payload='{"kind":"order","orderNo":"B-999"}' --codec=json >/dev/null
-stellar_user="$(bin/roche get --ring=users/123 --limit=10)"
+stellar_user="$(bin/kouten get --ring=users/123 --limit=10)"
 grep -q '"ring": "users/123/orders"' <<<"$stellar_user"
 grep -q '"ring": "users/123/billing"' <<<"$stellar_user"
 if grep -q 'B-999' <<<"$stellar_user"; then
   echo "stellar user read included a distant ring" >&2
   exit 1
 fi
-stellar_order="$(bin/roche get --ring=users/123/orders --limit=10)"
+stellar_order="$(bin/kouten get --ring=users/123/orders --limit=10)"
 grep -q '"ring": "users/123"' <<<"$stellar_order"
 grep -q '"orderNo": "A-001"' <<<"$stellar_order"
-stellar_subring="$(bin/roche get --ring=users/123 --subring=orders --limit=10)"
+stellar_subring="$(bin/kouten get --ring=users/123 --subring=orders --limit=10)"
 grep -q '"ring": "users/123/orders"' <<<"$stellar_subring"
 if grep -q '"ring": "users/123/billing"' <<<"$stellar_subring"; then
   echo "subring read included billing" >&2
   exit 1
 fi
-stellar_named="$(bin/roche get --stellar=users/123 --filter='{"kind":"order"}' --subring=orders --limit=10)"
+stellar_named="$(bin/kouten get --stellar=users/123 --filter='{"kind":"order"}' --subring=orders --limit=10)"
 grep -q '"ring": "users/123/orders"' <<<"$stellar_named"
 grep -q '"orderNo": "A-001"' <<<"$stellar_named"
 if grep -q '"ring": "users/123/billing"' <<<"$stellar_named"; then
   echo "stellar read included billing" >&2
   exit 1
 fi
-bin/roche put --ring=shops/1123 \
+bin/kouten put --ring=shops/1123 \
   --payload='{"kind":"shop","name":"Shop 1123"}' --codec=json >/dev/null
-bin/roche put --ring=orders/A-002 \
+bin/kouten put --ring=orders/A-002 \
   --payload='{"kind":"order","orderNo":"A-002","userId":"123","shopId":"1123"}' --codec=json >/dev/null
-bin/roche stellar attach --stellar=commerce/order/A-002 --ring=users/123 |
+bin/kouten stellar attach --stellar=commerce/order/A-002 --ring=users/123 |
   grep -q '"status": "attached"'
-bin/roche stellar attach --stellar=commerce/order/A-002 --ring=shops/1123 |
+bin/kouten stellar attach --stellar=commerce/order/A-002 --ring=shops/1123 |
   grep -q '"status": "attached"'
-bin/roche stellar attach --stellar=commerce/order/A-002 --ring=orders/A-002 |
+bin/kouten stellar attach --stellar=commerce/order/A-002 --ring=orders/A-002 |
   grep -q '"status": "attached"'
-stellar_attached="$(bin/roche get --stellar=commerce/order/A-002 --filter='{"kind":"shop"}' --limit=10)"
+stellar_attached="$(bin/kouten get --stellar=commerce/order/A-002 --filter='{"kind":"shop"}' --limit=10)"
 grep -q '"ring": "shops/1123"' <<<"$stellar_attached"
-bin/roche stellar detach --stellar=commerce/order/A-002 --ring=shops/1123 |
+bin/kouten stellar detach --stellar=commerce/order/A-002 --ring=shops/1123 |
   grep -q '"status": "detached"'
-stellar_detached="$(bin/roche get --stellar=commerce/order/A-002 --filter='{"kind":"shop"}' --limit=10)"
+stellar_detached="$(bin/kouten get --stellar=commerce/order/A-002 --filter='{"kind":"shop"}' --limit=10)"
 if grep -q '"ring": "shops/1123"' <<<"$stellar_detached"; then
   echo "detached stellar member remained visible" >&2
   exit 1
@@ -112,33 +112,33 @@ fi
 
 echo "[cli-crud] explicit and profile-driven codecs"
 printf '(object (title "NIF text"))' >"$WORK/payload.nif"
-nif_out="$(bin/roche put --ring=artifacts/nif \
+nif_out="$(bin/kouten put --ring=artifacts/nif \
   --in="$WORK/payload.nif" --codec=nif)"
 nif_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$nif_out")"
-bin/roche get --ring=artifacts/nif --filter="{\"id\":\"$nif_id\"}" |
+bin/kouten get --ring=artifacts/nif --filter="{\"id\":\"$nif_id\"}" |
   grep -q '"codec": "nif"'
-bin/roche get --ring=artifacts/nif --filter="{\"id\":\"$nif_id\"}" |
+bin/kouten get --ring=artifacts/nif --filter="{\"id\":\"$nif_id\"}" |
   grep -q '"encoding": "text"'
 
-bin/roche ring-profile --ring=artifacts/auto-nif \
+bin/kouten ring-profile --ring=artifacts/auto-nif \
   --codec=nif --charset=UTF-8 --format-version=1 |
   grep -q '"defaultCodec": "nif"'
-auto_nif_out="$(bin/roche put --ring=artifacts/auto-nif \
+auto_nif_out="$(bin/kouten put --ring=artifacts/auto-nif \
   --payload='(object (title "Auto NIF"))' --codec=auto)"
 auto_nif_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$auto_nif_out")"
-bin/roche get --ring=artifacts/auto-nif --filter="{\"id\":\"$auto_nif_id\"}" |
+bin/kouten get --ring=artifacts/auto-nif --filter="{\"id\":\"$auto_nif_id\"}" |
   grep -q '"codec": "nif"'
 
 echo "[cli-crud] time orbit"
-bin/roche time-orbit --ring=logs/api --bucket-ms=1000 --bits=60 --phase=100 --salt=api |
+bin/kouten time-orbit --ring=logs/api --bucket-ms=1000 --bits=60 --phase=100 --salt=api |
   grep -q '"bucketMs": 1000'
-bin/roche time-put --ring=logs/api --time-ms=1200 \
+bin/kouten time-put --ring=logs/api --time-ms=1200 \
   --payload='{"level":"info","message":"boot"}' >/dev/null
-bin/roche time-put --ring=logs/api --time-ms=2500 \
+bin/kouten time-put --ring=logs/api --time-ms=2500 \
   --payload='{"level":"error","message":"timeout"}' >/dev/null
-bin/roche time-put --ring=logs/api --time-ms=4200 \
+bin/kouten time-put --ring=logs/api --time-ms=4200 \
   --payload='{"level":"error","message":"too-late"}' >/dev/null
-time_page="$(bin/roche time-get --ring=logs/api --from-ms=1000 --to-ms=3000 \
+time_page="$(bin/kouten time-get --ring=logs/api --from-ms=1000 --to-ms=3000 \
   --filter='{"level":"error"}' --selection='{ level message eventTimeMs }' --limit=10 --sort=time)"
 grep -q '"bucketsVisited": 3' <<<"$time_page"
 grep -q '"logs/api/@time/102"' <<<"$time_page"
@@ -148,21 +148,21 @@ if grep -q 'too-late' <<<"$time_page"; then
   exit 1
 fi
 
-raw_out="$(bin/roche put --ring=logs/raw --payload='plain text payload' --codec=raw)"
+raw_out="$(bin/kouten put --ring=logs/raw --payload='plain text payload' --codec=raw)"
 raw_text_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$raw_out")"
-bin/roche get --ring=logs/raw --filter="{\"id\":\"$raw_text_id\"}" |
+bin/kouten get --ring=logs/raw --filter="{\"id\":\"$raw_text_id\"}" |
   grep -q '"codec": "raw"'
 
 echo "[cli-crud] binary codec display"
 printf '\001\002\003\004' >"$WORK/payload.bif"
-bif_out="$(bin/roche put --ring=artifacts/bif \
+bif_out="$(bin/kouten put --ring=artifacts/bif \
   --in="$WORK/payload.bif" --codec=bif)"
 bif_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$bif_out")"
-bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
+bin/kouten get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
   grep -q '"codec": "bif"'
-bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
+bin/kouten get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
   grep -q '"encoding": "base64"'
-bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" --view=hex |
+bin/kouten get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" --view=hex |
   grep -q '"encoding": "hex"'
 cat >"$WORK/fake_nif_tool" <<'TOOL'
 #!/usr/bin/env bash
@@ -182,38 +182,38 @@ fi
 printf '(decoded "from adapter")' >"$out"
 TOOL
 chmod +x "$WORK/fake_nif_tool"
-ROCHEDB_NIF_TOOL="$WORK/fake_nif_tool" \
-  bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
+KOUTENDB_NIF_TOOL="$WORK/fake_nif_tool" \
+  bin/kouten get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
   grep -q '"encoding": "nif"'
-ROCHEDB_NIF_TOOL="$WORK/fake_nif_tool" \
-  bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
+KOUTENDB_NIF_TOOL="$WORK/fake_nif_tool" \
+  bin/kouten get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
   grep -q '"adapter": "nif"'
-ROCHEDB_NIF_TOOL="$WORK/fake_nif_tool" \
-  bin/roche get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
+KOUTENDB_NIF_TOOL="$WORK/fake_nif_tool" \
+  bin/kouten get --ring=artifacts/bif --filter="{\"id\":\"$bif_id\"}" |
   grep -q 'decoded'
 
 echo "[cli-crud] read validation"
-bad_filter_out="$(bin/roche get --ring=docs/japan --filter='[]' 2>&1 >/dev/null || true)"
+bad_filter_out="$(bin/kouten get --ring=docs/japan --filter='[]' 2>&1 >/dev/null || true)"
 grep -q 'filter must be a JSON object' <<<"$bad_filter_out"
-bad_sort_out="$(bin/roche get --ring=docs/japan --sort=payload 2>&1 >/dev/null || true)"
+bad_sort_out="$(bin/kouten get --ring=docs/japan --sort=payload 2>&1 >/dev/null || true)"
 grep -q 'sort field must be id, time, or write' <<<"$bad_sort_out"
-bad_selection_out="$(bin/roche get --ring=artifacts/bif --selection='{ title }' 2>&1 >/dev/null || true)"
+bad_selection_out="$(bin/kouten get --ring=artifacts/bif --selection='{ title }' 2>&1 >/dev/null || true)"
 grep -q 'payload codec bif does not support JSON projection' <<<"$bad_selection_out"
 
 echo "[cli-crud] dump/import JSONL roundtrip"
-bin/roche dump --data="$ROCHE_DATA" --out="$WORK/rochedb-dump.jsonl" |
+bin/kouten dump --data="$KOUTEN_DATA" --out="$WORK/koutendb-dump.jsonl" |
   grep -q "dump OK"
-bin/roche import-jsonl --data="$WORK/imported" --in="$WORK/rochedb-dump.jsonl" |
+bin/kouten import-jsonl --data="$WORK/imported" --in="$WORK/koutendb-dump.jsonl" |
   grep -q "import-jsonl OK"
-bin/roche get --data="$WORK/imported" --ring=docs/japan --limit=1 |
+bin/kouten get --data="$WORK/imported" --ring=docs/japan --limit=1 |
   grep -q '"status": "draft"'
-bin/roche get --data="$WORK/imported" --ring=artifacts/nif --limit=1 |
+bin/kouten get --data="$WORK/imported" --ring=artifacts/nif --limit=1 |
   grep -q '"codec": "nif"'
-bin/roche get --data="$WORK/imported" --ring=artifacts/bif --limit=1 |
+bin/kouten get --data="$WORK/imported" --ring=artifacts/bif --limit=1 |
   grep -q '"codec": "bif"'
 
 echo "[cli-crud] shell"
-shell_out="$(bin/roche shell --data="$WORK/shell" <<'SHELL'
+shell_out="$(bin/kouten shell --data="$WORK/shell" <<'SHELL'
 put docs/japan {"title":"Shell","status":"ok"}
 count docs/japan
 list docs/japan
@@ -221,19 +221,19 @@ atlas
 exit
 SHELL
 )"
-grep -q "RocheDB shell" <<<"$shell_out"
+grep -q "KoutenDB shell" <<<"$shell_out"
 grep -q "put OK" <<<"$shell_out"
 grep -q "count=1" <<<"$shell_out"
 grep -q '"title":"Shell"' <<<"$shell_out"
-grep -q '"schema": "rochedb.atlas.v1"' <<<"$shell_out"
+grep -q '"schema": "koutendb.atlas.v1"' <<<"$shell_out"
 
 echo "[cli-crud] auth error is user-facing"
-src/roched --id=0 --peers="127.0.0.1:${BASE_PORT}" \
+src/koutend --id=0 --peers="127.0.0.1:${BASE_PORT}" \
   --data="$WORK/auth-server" --user=app --password=right \
   --secret-key=secret --slow-tick=0.05 >"$WORK/auth-server.log" 2>&1 &
 PIDS+=("$!")
 for _ in $(seq 1 50); do
-  if bin/roche health --peers="127.0.0.1:${BASE_PORT}" \
+  if bin/kouten health --peers="127.0.0.1:${BASE_PORT}" \
       --user=app --password=right --secret-key=secret >/dev/null 2>&1; then
     break
   fi
@@ -251,21 +251,21 @@ cat >"$WORK/cluster-config.json" <<CONFIG
   "tls": false
 }
 CONFIG
-bin/roche health --config="$WORK/cluster-config.json" |
+bin/kouten health --config="$WORK/cluster-config.json" |
   grep -q "node=0"
-ROCHE_CONFIG="$WORK/cluster-config.json" bin/roche health |
+KOUTEN_CONFIG="$WORK/cluster-config.json" bin/kouten health |
   grep -q "node=0"
-config_put="$(bin/roche put --config="$WORK/cluster-config.json" \
+config_put="$(bin/kouten put --config="$WORK/cluster-config.json" \
   --ring=cluster/config-demo --payload='{"kind":"config"}' --codec=json)"
 config_raw_id="$(sed -n 's/.*rawId=\([^ ]*\).*/\1/p' <<<"$config_put")"
-bin/roche get --config="$WORK/cluster-config.json" \
+bin/kouten get --config="$WORK/cluster-config.json" \
   --ring=cluster/config-demo --filter="{\"id\":\"$config_raw_id\"}" |
   grep -q '"kind": "config"'
-ROCHE_CONFIG="$WORK/cluster-config.json" bin/roche get \
+KOUTEN_CONFIG="$WORK/cluster-config.json" bin/kouten get \
   --ring=cluster/config-demo --filter="{\"id\":\"$config_raw_id\"}" |
   grep -q '"kind": "config"'
 
-auth_out="$(bin/roche health --peers="127.0.0.1:${BASE_PORT}" \
+auth_out="$(bin/kouten health --peers="127.0.0.1:${BASE_PORT}" \
   --user=app --password=wrong --secret-key=secret 2>&1 >/dev/null || true)"
 grep -q '^error: AUTHRESP failed: ERR auth-required$' <<<"$auth_out"
 

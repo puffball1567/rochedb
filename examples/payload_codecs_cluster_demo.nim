@@ -1,8 +1,8 @@
 ## Cluster payload codec and legacy wire-header compatibility demo.
 
 import std/[net, os, sequtils, strutils]
-import ../src/roche/core
-import ../src/roche/[wire]
+import ../src/kouten/core
+import ../src/kouten/[wire]
 
 proc requireArg(name: string): string =
   let prefix = "--" & name & "="

@@ -1,9 +1,9 @@
-# RocheDB Driver Installation Guide
+# KoutenDB Driver Installation Guide
 
 This document shows the current technical-preview setup for each language. The
 English README and this file are the canonical driver installation references.
 
-RocheDB drivers currently use two paths:
+KoutenDB drivers currently use two paths:
 
 - Native TCP wire drivers for cluster-oriented use.
 - C ABI wrappers for embedded/local use and language binding stability.
@@ -11,15 +11,15 @@ RocheDB drivers currently use two paths:
 The CLI provides a small driver discovery surface:
 
 ```sh
-roche driver list
-roche driver info rust
-roche driver install rust
-roche driver install rust --manifest-path=/path/to/Cargo.toml
+kouten driver list
+kouten driver info rust
+kouten driver install rust
+kouten driver install rust --manifest-path=/path/to/Cargo.toml
 ```
 
 `driver install` prints the official package/repository path and setup command.
 For Rust, target selection is shell-friendly: use `--manifest-path=FILE`,
-`--project-dir=DIR`, `ROCHE_DRIVER_MANIFEST`, or `ROCHE_DRIVER_PROJECT`.
+`--project-dir=DIR`, `KOUTEN_DRIVER_MANIFEST`, or `KOUTEN_DRIVER_PROJECT`.
 It does not execute package-manager commands unless `--execute` is passed.
 
 The Nim package is available through Nimble. Rust, JavaScript / TypeScript, PHP,
@@ -36,31 +36,31 @@ and build FAISS after cloning:
 scripts/fetch_faiss.sh
 scripts/setup_faiss_toolchain.sh   # only needed when system CMake is too old
 scripts/build_faiss_bridge.sh
-roche doctor
+kouten doctor
 ```
 
 By default, `scripts/fetch_faiss.sh` fetches the configured FAISS tag and records
 the actual commit in `third_party/faiss.version`. To pin an exact commit for a
-reproducible build, set `ROCHE_FAISS_COMMIT`. See
+reproducible build, set `KOUTEN_FAISS_COMMIT`. See
 [faiss-versioning.md](./faiss-versioning.md).
 
 ## Build the Native Library
 
-Most C ABI wrappers need `lib/librochedb.so`:
+Most C ABI wrappers need `lib/libkoutendb.so`:
 
 ```sh
 scripts/build_capi.sh
 ```
 
-This is the canonical C ABI build. It compiles `lib/librochedb.so` with
-`-d:ssl`, so `roche_connect_auth_tls` is available to Rust, Node native addons,
+This is the canonical C ABI build. It compiles `lib/libkoutendb.so` with
+`-d:ssl`, so `kouten_connect_auth_tls` is available to Rust, Node native addons,
 PHP FFI, C++, C#, Swift, Kotlin, Go, and other wrappers without each driver
 duplicating Nim flags.
 
-For native wire driver tests, build `roched`:
+For native wire driver tests, build `koutend`:
 
 ```sh
-nim c -d:release --nimcache:/tmp/nimcache_roched -o:src/roched src/roched.nim
+nim c -d:release --nimcache:/tmp/nimcache_koutend -o:src/koutend src/koutend.nim
 ```
 
 ## Nim
@@ -68,16 +68,16 @@ nim c -d:release --nimcache:/tmp/nimcache_roched -o:src/roched src/roched.nim
 Install from Nimble:
 
 ```sh
-nimble install rochedb
-roche --help
+nimble install koutendb
+kouten --help
 ```
 
 Then import the public API:
 
 ```nim
-import rochedb
+import koutendb
 
-var db = rochedb.open(dataDir = "data")
+var db = koutendb.open(dataDir = "data")
 let id = db.put("hello", ring = "docs")
 echo db.get(id)
 ```
@@ -90,20 +90,20 @@ scripts/test_core.sh
 
 ## C ABI
 
-Include `include/rochedb.h` and link `lib/librochedb.so`:
+Include `include/koutendb.h` and link `lib/libkoutendb.so`:
 
 ```sh
 scripts/build_capi.sh
-gcc examples/cabi_contract.c -Iinclude -Llib -lrochedb -Wl,-rpath,'$ORIGIN/../lib' -o bin/cabi_contract
+gcc examples/cabi_contract.c -Iinclude -Llib -lkoutendb -Wl,-rpath,'$ORIGIN/../lib' -o bin/cabi_contract
 LD_LIBRARY_PATH=lib bin/cabi_contract
 ```
 
 Thread-safety contract:
 
-- `roche_init()` is idempotent.
-- `roche_last_error()` returns text owned by RocheDB. Copy it before the next
-  RocheDB C ABI call on the same thread.
-- Do not call `roche_close()` concurrently with any other operation on the same
+- `kouten_init()` is idempotent.
+- `kouten_last_error()` returns text owned by KoutenDB. Copy it before the next
+  KoutenDB C ABI call on the same thread.
+- Do not call `kouten_close()` concurrently with any other operation on the same
   handle.
 - If a driver shares one handle across threads, serialize calls around that
   handle. Separate handles may be used independently.
@@ -112,21 +112,21 @@ Thread-safety contract:
 
 The Python driver is released as a separate native TCP wire driver:
 
-- repository: [`puffball1567/rochedb-python` v0.1.3](https://github.com/puffball1567/rochedb-python)
-- mode: pure Python TCP driver for `roched`
-- PyPI: [`rochedb` v0.1.3](https://pypi.org/project/rochedb/)
+- repository: [`puffball1567/koutendb-python` v0.1.3](https://github.com/puffball1567/koutendb-python)
+- mode: pure Python TCP driver for `koutend`
+- PyPI: [`koutendb` v0.1.3](https://pypi.org/project/koutendb/)
 
 ```sh
-python3 -m pip install rochedb
-ROCHEDB_CORE_DIR=/path/to/rochedb python3 -m unittest discover -s tests
+python3 -m pip install koutendb
+KOUTENDB_CORE_DIR=/path/to/koutendb python3 -m unittest discover -s tests
 ```
 
 Example:
 
 ```python
-from rochedb import RocheClient
+from koutendb import KoutenClient
 
-db = RocheClient.connect("127.0.0.1:17301")
+db = KoutenClient.connect("127.0.0.1:17301")
 doc_id = db.put("docs", b'{"title":"hello"}')
 print(db.get(doc_id))
 db.close()
@@ -135,25 +135,25 @@ db.close()
 ## JavaScript / TypeScript
 
 The published JavaScript / TypeScript driver is a Node-API wrapper over the
-RocheDB C ABI:
+KoutenDB C ABI:
 
-- npm: [`rochedb` v0.1.3](https://www.npmjs.com/package/rochedb)
-- repository: [`puffball1567/rochedb-js`](https://github.com/puffball1567/rochedb-js)
+- npm: [`koutendb` v0.1.3](https://www.npmjs.com/package/koutendb)
+- repository: [`puffball1567/koutendb-js`](https://github.com/puffball1567/koutendb-js)
 
 Install it in an application:
 
 ```sh
-npm install rochedb
+npm install koutendb
 ```
 
-Build the RocheDB core shared library first and set `ROCHEDB_CORE_DIR` during
+Build the KoutenDB core shared library first and set `KOUTENDB_CORE_DIR` during
 install/rebuild. See the driver repository README for the full setup flow.
 
 The core repository also keeps a repository-local native TCP wire driver used
 for protocol smoke tests:
 
 ```sh
-nim c -d:release --nimcache:/tmp/nimcache_roched -o:src/roched src/roched.nim
+nim c -d:release --nimcache:/tmp/nimcache_koutend -o:src/koutend src/koutend.nim
 node --test drivers/node/test/*.test.js
 bun test drivers/node/test-bun/*.test.ts
 ```
@@ -161,9 +161,9 @@ bun test drivers/node/test-bun/*.test.ts
 Repository-local wire-driver example:
 
 ```js
-import { RocheClient } from "./drivers/node/src/index.js";
+import { KoutenClient } from "./drivers/node/src/index.js";
 
-const db = RocheClient.connect("127.0.0.1:17301");
+const db = KoutenClient.connect("127.0.0.1:17301");
 const id = await db.put("docs", Buffer.from('{"title":"hello"}'));
 console.log((await db.get(id)).toString("utf8"));
 await db.close();
@@ -173,23 +173,23 @@ await db.close();
 
 The Rust driver is published as a C ABI wrapper:
 
-- crates.io: [`rochedb` v0.1.3](https://crates.io/crates/rochedb)
-- repository: [`puffball1567/rochedb-rust`](https://github.com/puffball1567/rochedb-rust)
+- crates.io: [`koutendb` v0.1.3](https://crates.io/crates/koutendb)
+- repository: [`puffball1567/koutendb-rust`](https://github.com/puffball1567/koutendb-rust)
 
 Install it in a Rust project:
 
 ```sh
-cargo add rochedb
+cargo add koutendb
 ```
 
-Or ask the RocheDB CLI to print the official setup command:
+Or ask the KoutenDB CLI to print the official setup command:
 
 ```sh
-roche driver install rust --manifest-path=/path/to/Cargo.toml
+kouten driver install rust --manifest-path=/path/to/Cargo.toml
 ```
 
-Build the RocheDB core shared library first and set `ROCHEDB_CORE_DIR` or
-`ROCHEDB_LIB_DIR` when building/testing the Rust project. See the Rust driver
+Build the KoutenDB core shared library first and set `KOUTENDB_CORE_DIR` or
+`KOUTENDB_LIB_DIR` when building/testing the Rust project. See the Rust driver
 repository README for the full setup flow.
 
 ## Go
@@ -199,13 +199,13 @@ The Go driver is a C ABI wrapper.
 ```sh
 scripts/build_capi.sh
 cd drivers/go
-GOCACHE="${GOCACHE:-/tmp/roche-go-cache}" go test ./...
+GOCACHE="${GOCACHE:-/tmp/kouten-go-cache}" go test ./...
 ```
 
 Use a local module replace until publication:
 
 ```text
-replace github.com/rochedb/rochedb-go => ../drivers/go
+replace github.com/koutendb/koutendb-go => ../drivers/go
 ```
 
 ## PHP
@@ -213,39 +213,39 @@ replace github.com/rochedb/rochedb-go => ../drivers/go
 The PHP driver uses FFI over the C ABI. Local PHP must have `ext-ffi` enabled.
 It is published on Packagist:
 
-- Packagist: [`rochedb/rochedb` v0.1.2](https://packagist.org/packages/rochedb/rochedb)
-- repository: [`puffball1567/rochedb-php`](https://github.com/puffball1567/rochedb-php)
-- package name: `rochedb/rochedb`
+- Packagist: [`koutendb/koutendb` v0.1.2](https://packagist.org/packages/koutendb/koutendb)
+- repository: [`puffball1567/koutendb-php`](https://github.com/puffball1567/koutendb-php)
+- package name: `koutendb/koutendb`
 
 Install it in a Composer project:
 
 ```sh
-composer require rochedb/rochedb:^0.1
+composer require koutendb/koutendb:^0.1
 ```
 
-Build the RocheDB core shared library first and point the PHP driver at it:
+Build the KoutenDB core shared library first and point the PHP driver at it:
 
 ```sh
 scripts/build_capi.sh
-export ROCHEDB_CORE_DIR=/path/to/rochedb
+export KOUTENDB_CORE_DIR=/path/to/koutendb
 ```
 
-For local driver development from a checkout of `rochedb-php`, use the Docker
+For local driver development from a checkout of `koutendb-php`, use the Docker
 smoke test:
 
 ```sh
-ROCHEDB_CORE_DIR=/path/to/rochedb ./docker-test.sh
+KOUTENDB_CORE_DIR=/path/to/koutendb ./docker-test.sh
 ```
 
-For Composer path development against a local `rochedb-php` checkout:
+For Composer path development against a local `koutendb-php` checkout:
 
 ```json
 {
   "repositories": [
-    { "type": "path", "url": "../rochedb-php" }
+    { "type": "path", "url": "../koutendb-php" }
   ],
   "require": {
-    "rochedb/rochedb": "*"
+    "koutendb/koutendb": "*"
   }
 }
 ```
@@ -281,7 +281,7 @@ dotnet run --project drivers/csharp/ContractSmoke/ContractSmoke.csproj
 Use a project reference until NuGet publication:
 
 ```xml
-<ProjectReference Include="../drivers/csharp/RocheDB/RocheDB.csproj" />
+<ProjectReference Include="../drivers/csharp/KoutenDB/KoutenDB.csproj" />
 ```
 
 Unity-specific lifecycle, editor tooling, and asset packaging are intentionally
@@ -291,15 +291,15 @@ separate from this generic OSS driver.
 
 The C++ driver is released as a separate C++17 wrapper over the C ABI:
 
-- repository: [`puffball1567/rochedb-cpp` v0.1.1](https://github.com/puffball1567/rochedb-cpp)
-- mode: C++17 RAII wrapper over `librochedb.so`
+- repository: [`puffball1567/koutendb-cpp` v0.1.1](https://github.com/puffball1567/koutendb-cpp)
+- mode: C++17 RAII wrapper over `libkoutendb.so`
 
 ```sh
-git clone https://github.com/puffball1567/rochedb-cpp.git
-cd rochedb-cpp
-cmake -S . -B build -DROCHEDB_CORE_DIR=/path/to/rochedb
+git clone https://github.com/puffball1567/koutendb-cpp.git
+cd koutendb-cpp
+cmake -S . -B build -DKOUTENDB_CORE_DIR=/path/to/koutendb
 cmake --build build
-./build/rochedb_cpp_contract_smoke
+./build/koutendb_cpp_contract_smoke
 ```
 
 Unreal-specific module packaging, Blueprint bindings, editor tooling, and
@@ -329,11 +329,11 @@ scripts/driver_compat.sh
 Run Docker-backed PHP / Swift / Kotlin checks:
 
 ```sh
-ROCHE_COMPAT_DOCKER=1 scripts/driver_compat.sh
+KOUTEN_COMPAT_DOCKER=1 scripts/driver_compat.sh
 ```
 
 Skip wire checks when only C ABI and Docker wrapper checks are needed:
 
 ```sh
-ROCHE_COMPAT_DOCKER=1 ROCHE_COMPAT_WIRE=0 scripts/driver_compat.sh
+KOUTEN_COMPAT_DOCKER=1 KOUTEN_COMPAT_WIRE=0 scripts/driver_compat.sh
 ```

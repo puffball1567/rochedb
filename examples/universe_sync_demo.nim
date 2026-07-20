@@ -1,5 +1,5 @@
 import std/[json, os, strutils]
-import ../src/rochedb
+import ../src/koutendb
 
 proc requireArg(name: string): string =
   let prefix = "--" & name & "="

@@ -1,20 +1,20 @@
 ## Cluster failure smoke:
-## - start 3 local roched nodes
+## - start 3 local koutend nodes
 ## - create a cluster tx whose owner is not node0
 ## - kill the owner before commit
 ## - verify node0 keeps the committed intent pending
 ## - restart the owner and verify retry applies the value
 
 import std/[json, os, osproc, strutils, unittest]
-import ../src/rochedb
-import ../src/roche/wire
+import ../src/koutendb
+import ../src/kouten/wire
 
 type NodeProc = object
   id: int
   procHandle: Process
 
 proc startNode(id: int, peers, dataRoot: string, slowTick = "0.05"): NodeProc =
-  let exe = getCurrentDir() / "src" / "roched"
+  let exe = getCurrentDir() / "src" / "koutend"
   let p = startProcess(exe,
                        args = ["--id=" & $id, "--peers=" & peers,
                                "--data=" & (dataRoot / ("node" & $id)),
@@ -76,15 +76,15 @@ proc waitNode0Metric(c: ClusterClient, name: string, value: int): bool =
 
 suite "cluster transaction failure recovery":
   test "committed landing intent retries after owner node crash and restart":
-    let basePort = parseInt(getEnv("ROCHE_CLUSTER_FAILURE_BASE_PORT", "17511"))
+    let basePort = parseInt(getEnv("KOUTEN_CLUSTER_FAILURE_BASE_PORT", "17511"))
     let peers = "127.0.0.1:" & $basePort & ",127.0.0.1:" & $(basePort + 1) &
                 ",127.0.0.1:" & $(basePort + 2)
-    let dataRoot = getTempDir() / ("rochedb-cluster-failure-" & $getCurrentProcessId())
+    let dataRoot = getTempDir() / ("koutendb-cluster-failure-" & $getCurrentProcessId())
     createDir(dataRoot)
 
     var nodes: seq[NodeProc] = @[]
     var c = newClusterClient(parsePeers(peers))
-    var db: RocheDb = nil
+    var db: KoutenDb = nil
     try:
       for id in 0 ..< 3:
         nodes.add startNode(id, peers, dataRoot)
@@ -92,8 +92,8 @@ suite "cluster transaction failure recovery":
 
       db = connect(peers)
 
-      var tx: RocheTx = nil
-      var id: RocheId
+      var tx: KoutenTx = nil
+      var id: KoutenId
       var owner = 0
       for i in 0 ..< 32:
         let ring = "cluster/failure/" & $i

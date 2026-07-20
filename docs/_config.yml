@@ -1,4 +1,4 @@
-title: RocheDB
+title: KoutenDB
 description: Ring-oriented NoSQL storage for smaller working sets.
 theme: minima
 markdown: kramdown
@@ -8,8 +8,8 @@ header_pages:
   - public-api.md
   - config-reference.md
   - cli-reference.md
-  - rochedb-status.md
-  - rochedb-bench.md
+  - koutendb-status.md
+  - koutendb-bench.md
   - topology-examples.md
 
 exclude:

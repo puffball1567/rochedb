@@ -2,15 +2,15 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="${ROOT}/lib/libroche_faiss.so"
-SRC="${ROOT}/src/roche/faiss_bridge.cpp"
+OUT="${ROOT}/lib/libkouten_faiss.so"
+SRC="${ROOT}/src/kouten/faiss_bridge.cpp"
 FAISS_SRC="${ROOT}/third_party/faiss"
 FAISS_BUILD="${FAISS_SRC}/build"
 PY_TOOLS="${ROOT}/.tools/python"
 
 run_cmake() {
-  if [[ -n "${ROCHE_CMAKE:-}" ]]; then
-    "${ROCHE_CMAKE}" "$@"
+  if [[ -n "${KOUTEN_CMAKE:-}" ]]; then
+    "${KOUTEN_CMAKE}" "$@"
   elif [[ -d "${PY_TOOLS}" ]]; then
     PYTHONPATH="${PY_TOOLS}:${PYTHONPATH:-}" python3 -m cmake "$@"
   else
@@ -31,18 +31,18 @@ if pkg-config --exists faiss; then
   pkg_flags=($(pkg-config --cflags --libs faiss))
 elif [[ -d "${FAISS_SRC}" ]]; then
   if [[ ! -f "${FAISS_BUILD}/faiss/libfaiss.so" && ! -f "${FAISS_BUILD}/faiss/libfaiss.a" ]]; then
-    blas_libs="${ROCHE_BLAS_LIBRARIES:-$(find_ldconfig_lib libopenblas.so.0)}"
+    blas_libs="${KOUTEN_BLAS_LIBRARIES:-$(find_ldconfig_lib libopenblas.so.0)}"
     if [[ -z "${blas_libs}" ]]; then
-      blas_libs="${ROCHE_BLAS_LIBRARIES:-$(find_ldconfig_lib libblas.so.3)}"
+      blas_libs="${KOUTEN_BLAS_LIBRARIES:-$(find_ldconfig_lib libblas.so.3)}"
     fi
-    lapack_libs="${ROCHE_LAPACK_LIBRARIES:-$(find_ldconfig_lib liblapack.so.3)}"
+    lapack_libs="${KOUTEN_LAPACK_LIBRARIES:-$(find_ldconfig_lib liblapack.so.3)}"
     if [[ -z "${lapack_libs}" ]]; then
-      lapack_libs="${ROCHE_LAPACK_LIBRARIES:-$(find_ldconfig_lib liblapack_atlas.so.3)}"
+      lapack_libs="${KOUTEN_LAPACK_LIBRARIES:-$(find_ldconfig_lib liblapack_atlas.so.3)}"
     fi
     if [[ -z "${blas_libs}" || -z "${lapack_libs}" ]]; then
       echo "FAISS requires BLAS/LAPACK. Install OpenBLAS/LAPACK dev packages or set:" >&2
-      echo "  ROCHE_BLAS_LIBRARIES=/path/to/libblas.so" >&2
-      echo "  ROCHE_LAPACK_LIBRARIES=/path/to/liblapack.so" >&2
+      echo "  KOUTEN_BLAS_LIBRARIES=/path/to/libblas.so" >&2
+      echo "  KOUTEN_LAPACK_LIBRARIES=/path/to/liblapack.so" >&2
       exit 1
     fi
     run_cmake -S "${FAISS_SRC}" -B "${FAISS_BUILD}" \

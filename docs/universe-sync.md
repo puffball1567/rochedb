@@ -1,13 +1,13 @@
 # Universe Sync
 
-Universe sync is RocheDB's eventual-convergence boundary for copying selected
-writes from one RocheDB universe into another. It is designed for AI datasets,
+Universe sync is KoutenDB's eventual-convergence boundary for copying selected
+writes from one KoutenDB universe into another. It is designed for AI datasets,
 prompt/context stores, regional read models, and other workloads where local
 reads should stay fast while remote convergence may happen slightly later.
 
 It is not a strict global transaction protocol. If a workload requires immediate
 cross-region finality for every write, keep that workload in a stronger
-transactional system or isolate it into a small RocheDB deployment with stricter
+transactional system or isolate it into a small KoutenDB deployment with stricter
 operational controls.
 
 ## Model
@@ -27,7 +27,7 @@ The applied-key set is bounded by a retention policy. Older applied keys are
 pruned after the configured retention count, and the prune is WAL-recorded so
 restart and compact keep the same idempotency window.
 
-Source event ids are monotonic across pruning. RocheDB persists the next source
+Source event ids are monotonic across pruning. KoutenDB persists the next source
 outbox sequence separately from the currently live events, so pruning every
 acknowledged event and restarting the source does not reuse old ids.
 
@@ -36,7 +36,7 @@ acknowledged event and restarting the source does not reuse old ids.
 For offline or batch movement between two data directories:
 
 ```bash
-roche universe-sync --data=/var/lib/roche/source --target=/var/lib/roche/target
+kouten universe-sync --data=/var/lib/kouten/source --target=/var/lib/kouten/target
 ```
 
 Use `--prune-acked` only after the target state is considered durable enough for
@@ -47,12 +47,12 @@ your recovery policy.
 For a running cluster:
 
 ```bash
-roche universe-sync \
-  --data=/var/lib/roche/source \
+kouten universe-sync \
+  --data=/var/lib/kouten/source \
   --peers=127.0.0.1:17611,127.0.0.1:17612,127.0.0.1:17613 \
   --user=admin \
-  --password-file=/run/secrets/roche_password \
-  --secret-key-file=/run/secrets/roche_secret_key \
+  --password-file=/run/secrets/kouten_password \
+  --secret-key-file=/run/secrets/kouten_secret_key \
   --galaxy=main
 ```
 
@@ -63,7 +63,7 @@ target cluster's internal placement details.
 ## Delayed And Latest-Only Writes
 
 Some workloads only need the latest value for a logical key. Others need a short
-delay window so events can be applied in timestamp order. RocheDB supports both
+delay window so events can be applied in timestamp order. KoutenDB supports both
 patterns at the outbox level:
 
 - latest-only pending coalescing keeps only the newest pending event for a key.
@@ -90,7 +90,7 @@ Delivery failures are tracked on the source event:
 - `deadLetter`
 - `error`
 
-When a delivery attempt throws or the remote target cannot be reached, RocheDB
+When a delivery attempt throws or the remote target cannot be reached, KoutenDB
 increments `attempts`, stores a backoff `retryAt`, and leaves the event pending.
 After the retry budget is exhausted, the event becomes `deadLetter=true`. Dead
 letters are not acknowledged and are not pruned by `--prune-acked`; an operator
@@ -101,19 +101,19 @@ or future scheduler adapter must inspect or requeue them explicitly.
 Source outbox status:
 
 ```bash
-roche universe-status --data=/var/lib/roche/source
+kouten universe-status --data=/var/lib/kouten/source
 ```
 
 Remote apply status:
 
 ```bash
-roche universe-status --peers=127.0.0.1:17611,127.0.0.1:17612
+kouten universe-status --peers=127.0.0.1:17611,127.0.0.1:17612
 ```
 
 Metrics format:
 
 ```bash
-roche universe-status --peers=127.0.0.1:17611,127.0.0.1:17612 --metrics
+kouten universe-status --peers=127.0.0.1:17611,127.0.0.1:17612 --metrics
 ```
 
 Remote status reports both durable applied event keys and process-local apply
@@ -142,5 +142,5 @@ idempotency and the source can acknowledge the event safely. If the retry budget
 is exhausted, the event remains in the outbox as a dead letter instead of being
 silently dropped.
 
-This gives RocheDB a durable scheduler boundary without introducing a global
+This gives KoutenDB a durable scheduler boundary without introducing a global
 coordinator. The tradeoff is that remote visibility is eventual, not immediate.

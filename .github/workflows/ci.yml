@@ -39,22 +39,22 @@ jobs:
 
       - name: Nim semantic checks
         run: |
-          nim check src/rochedb.nim
-          nim check src/rochecli.nim
-          nim check src/roched.nim
-          nim check src/rochedb_capi.nim
+          nim check src/koutendb.nim
+          nim check src/koutencli.nim
+          nim check src/koutend.nim
+          nim check src/koutendb_capi.nim
 
       - name: Nim semantic checks with TLS enabled
         run: |
-          nim check -d:ssl src/rochecli.nim
-          nim check -d:ssl src/roched.nim
-          nim check -d:ssl src/rochedb_capi.nim
+          nim check -d:ssl src/koutencli.nim
+          nim check -d:ssl src/koutend.nim
+          nim check -d:ssl src/koutendb_capi.nim
 
       - name: C ABI contract
         run: |
-          ROCHEDB_CAPI_NIMCACHE=/tmp/nimcache_roche_capi_ci scripts/build_capi.sh
-          gcc examples/cabi_contract.c -Iinclude -Llib -lrochedb -Wl,-rpath,'$ORIGIN/../lib' -o /tmp/roche_cabi_contract
-          LD_LIBRARY_PATH=lib /tmp/roche_cabi_contract
+          KOUTENDB_CAPI_NIMCACHE=/tmp/nimcache_kouten_capi_ci scripts/build_capi.sh
+          gcc examples/cabi_contract.c -Iinclude -Llib -lkoutendb -Wl,-rpath,'$ORIGIN/../lib' -o /tmp/kouten_cabi_contract
+          LD_LIBRARY_PATH=lib /tmp/kouten_cabi_contract
 
       - name: C ABI TLS contract
         run: scripts/cabi_tls_smoke.sh
@@ -79,7 +79,7 @@ jobs:
         run: nimble install -y --depsOnly
 
       - name: Build TLS-enabled C ABI library
-        run: ROCHEDB_CAPI_NIMCACHE=/tmp/nimcache_roche_capi_macos scripts/build_capi.sh
+        run: KOUTENDB_CAPI_NIMCACHE=/tmp/nimcache_kouten_capi_macos scripts/build_capi.sh
 
   core-tests:
     name: Core test suite

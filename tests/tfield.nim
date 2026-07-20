@@ -1,7 +1,7 @@
-## roche/field の単体テスト
+## kouten/field の単体テスト
 
 import std/[math, tables, unittest]
-import ../src/roche/[field, store]
+import ../src/kouten/[field, store]
 
 proc vec2(x, y: float32): seq[float32] =
   normalize(@[x, y])

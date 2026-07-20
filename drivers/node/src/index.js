@@ -1,13 +1,13 @@
 import net from "node:net";
 
-class RocheError extends Error {
+class KoutenError extends Error {
   constructor(message) {
     super(message);
-    this.name = "RocheError";
+    this.name = "KoutenError";
   }
 }
 
-class RocheId {
+class KoutenId {
   constructor(parent, epoch, seq, tWrite, period, head) {
     this.parent = BigInt(parent);
     this.epoch = Number(epoch);
@@ -21,9 +21,9 @@ class RocheId {
   static parse(text) {
     const parts = String(text).split(":");
     if (parts.length !== 6) {
-      throw new RocheError("RocheId text must have 6 ':'-separated fields");
+      throw new KoutenError("KoutenId text must have 6 ':'-separated fields");
     }
-    return new RocheId(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]);
+    return new KoutenId(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]);
   }
 
   toString() {
@@ -44,12 +44,12 @@ function parsePeers(peers) {
     const text = String(value);
     const idx = text.lastIndexOf(":");
     if (idx <= 0 || idx === text.length - 1) {
-      throw new RocheError(`invalid peer '${text}', expected host:port`);
+      throw new KoutenError(`invalid peer '${text}', expected host:port`);
     }
     return { host: text.slice(0, idx), port: Number(text.slice(idx + 1)) };
   });
   if (parsed.length === 0) {
-    throw new RocheError("peers must not be empty");
+    throw new KoutenError("peers must not be empty");
   }
   return parsed;
 }
@@ -69,7 +69,7 @@ function vectorBuffer(vector) {
   return buf;
 }
 
-class RocheConnection {
+class KoutenConnection {
   constructor(peer, timeoutMs) {
     this.peer = peer;
     this.timeoutMs = timeoutMs;
@@ -136,7 +136,7 @@ class RocheConnection {
       const onError = (err) => finish(err);
       sock.once("connect", onConnect);
       sock.once("error", onError);
-      sock.setTimeout(this.timeoutMs, () => finish(new RocheError("connection timeout")));
+      sock.setTimeout(this.timeoutMs, () => finish(new KoutenError("connection timeout")));
     });
     this.socket.setNoDelay(true);
     this.socket.setTimeout(this.timeoutMs);
@@ -176,7 +176,7 @@ class RocheConnection {
       }
       await this.waitForData();
       if (!this.socket || this.socket.destroyed) {
-        throw new RocheError("connection closed");
+        throw new KoutenError("connection closed");
       }
     }
   }
@@ -185,7 +185,7 @@ class RocheConnection {
     while (this.buffer.length < n) {
       await this.waitForData();
       if (!this.socket || this.socket.destroyed) {
-        throw new RocheError("connection closed");
+        throw new KoutenError("connection closed");
       }
     }
     const out = this.buffer.subarray(0, n);
@@ -194,7 +194,7 @@ class RocheConnection {
   }
 }
 
-class RocheClient {
+class KoutenClient {
   constructor(peers, options = {}) {
     this.peers = parsePeers(peers);
     this.timeoutMs = options.timeoutMs ?? options.timeout ?? 10_000;
@@ -202,7 +202,7 @@ class RocheClient {
   }
 
   static connect(peers, options = {}) {
-    return new RocheClient(peers, options);
+    return new KoutenClient(peers, options);
   }
 
   async close() {
@@ -222,9 +222,9 @@ class RocheClient {
       Buffer.concat([ringBuf, payloadBuf, vecBuf])
     );
     if (parts[0] !== "ID" || parts.length !== 7) {
-      throw new RocheError("PUTR failed: " + parts.join(" "));
+      throw new KoutenError("PUTR failed: " + parts.join(" "));
     }
-    return new RocheId(parts[1], parts[2], parts[3], parts[4], parts[5], parts[6]);
+    return new KoutenId(parts[1], parts[2], parts[3], parts[4], parts[5], parts[6]);
   }
 
   async get(id, options = {}) {
@@ -238,7 +238,7 @@ class RocheClient {
   async health(node = 0) {
     const parts = await this.rpc(node, "HEALTH");
     if (parts[0] !== "OK") {
-      throw new RocheError("HEALTH failed: " + parts.join(" "));
+      throw new KoutenError("HEALTH failed: " + parts.join(" "));
     }
     return parts.slice(1).join(" ");
   }
@@ -253,21 +253,21 @@ class RocheClient {
       return null;
     }
     if (parts[0] === "ERR") {
-      throw new RocheError(parts.slice(1).join(" "));
+      throw new KoutenError(parts.slice(1).join(" "));
     }
     if (parts[0] === "FWD") {
       if (parts.length !== 7) {
-        throw new RocheError("invalid FWD response: " + parts.join(" "));
+        throw new KoutenError("invalid FWD response: " + parts.join(" "));
       }
       return this.readId(
         op,
-        new RocheId(parts[1], parts[2], parts[3], parts[4], parts[5], parts[6]),
+        new KoutenId(parts[1], parts[2], parts[3], parts[4], parts[5], parts[6]),
         selection,
         node
       );
     }
     if (parts[0] !== "VAL" || parts.length !== 3) {
-      throw new RocheError(`${op} failed: ${parts.join(" ")}`);
+      throw new KoutenError(`${op} failed: ${parts.join(" ")}`);
     }
     return this.connectionFor(node).readExact(Number(parts[2]));
   }
@@ -295,11 +295,11 @@ class RocheClient {
 
   connectionFor(node) {
     if (node < 0 || node >= this.peers.length) {
-      throw new RocheError(`node out of range: ${node}`);
+      throw new KoutenError(`node out of range: ${node}`);
     }
     let conn = this.connections.get(node);
     if (!conn) {
-      conn = new RocheConnection(this.peers[node], this.timeoutMs);
+      conn = new KoutenConnection(this.peers[node], this.timeoutMs);
       this.connections.set(node, conn);
     }
     return conn;
@@ -307,7 +307,7 @@ class RocheClient {
 }
 
 export {
-  RocheClient,
-  RocheError,
-  RocheId,
+  KoutenClient,
+  KoutenError,
+  KoutenId,
 };

@@ -3,15 +3,15 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { RocheClient, RocheId } from "../src/index.js";
+import { KoutenClient, KoutenId } from "../src/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
-const peers = process.env.ROCHE_TEST_PEERS || "127.0.0.1:17931,127.0.0.1:17932";
+const peers = process.env.KOUTEN_TEST_PEERS || "127.0.0.1:17931,127.0.0.1:17932";
 
 function startNode(id) {
   return spawn(
-    path.join(root, "src", "roched"),
+    path.join(root, "src", "koutend"),
     [`--id=${id}`, `--peers=${peers}`, "--slow-tick=1000"],
     { cwd: root, stdio: "inherit" }
   );
@@ -28,12 +28,12 @@ async function waitCluster(client) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
-  throw new Error("roched test cluster did not start");
+  throw new Error("koutend test cluster did not start");
 }
 
 test("Node driver roundtrips", async (t) => {
   const procs = [startNode(0), startNode(1)];
-  const client = RocheClient.connect(peers, { timeoutMs: 1000 });
+  const client = KoutenClient.connect(peers, { timeoutMs: 1000 });
   t.after(async () => {
     await client.close();
     for (const proc of procs) {
@@ -49,7 +49,7 @@ test("Node driver roundtrips", async (t) => {
     { vector: [1.0, 0.0] }
   );
 
-  assert.ok(id instanceof RocheId);
+  assert.ok(id instanceof KoutenId);
   assert.equal(
     (await client.get(id)).toString("utf8"),
     '{"title":"Shinjuku","country":"JP"}'
@@ -57,6 +57,6 @@ test("Node driver roundtrips", async (t) => {
   assert.equal((await client.query(id, "{ title }")).toString("utf8"), '{"title":"Shinjuku"}');
 
   const textId = await client.put("tenant/acme/orders", "order-1");
-  assert.deepEqual(RocheId.parse(String(textId)), textId);
+  assert.deepEqual(KoutenId.parse(String(textId)), textId);
   assert.equal((await client.get(textId)).toString("utf8"), "order-1");
 });

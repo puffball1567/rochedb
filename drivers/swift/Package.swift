@@ -3,28 +3,28 @@
 import PackageDescription
 
 let package = Package(
-    name: "RocheDB",
+    name: "KoutenDB",
     platforms: [
         .macOS(.v13)
     ],
     products: [
-        .library(name: "RocheDB", targets: ["RocheDB"])
+        .library(name: "KoutenDB", targets: ["KoutenDB"])
     ],
     targets: [
         .systemLibrary(
-            name: "CRocheDB",
-            path: "Sources/CRocheDB"
+            name: "CKoutenDB",
+            path: "Sources/CKoutenDB"
         ),
         .target(
-            name: "RocheDB",
-            dependencies: ["CRocheDB"],
+            name: "KoutenDB",
+            dependencies: ["CKoutenDB"],
             linkerSettings: [
                 .unsafeFlags(["-L../../lib"])
             ]
         ),
         .testTarget(
-            name: "RocheDBTests",
-            dependencies: ["RocheDB"]
+            name: "KoutenDBTests",
+            dependencies: ["KoutenDB"]
         )
     ]
 )

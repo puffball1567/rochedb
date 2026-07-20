@@ -1,3 +1,3 @@
-module github.com/rochedb/rochedb-go
+module github.com/koutendb/koutendb-go
 
 go 1.23

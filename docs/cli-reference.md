@@ -8,18 +8,18 @@ title: CLI Reference
 Install the command:
 
 ```sh
-nimble install rochedb
-roche --help
+nimble install koutendb
+kouten --help
 ```
 
 When working from a source checkout, install the local package onto your PATH:
 
 ```sh
 nimble install -y
-roche --help
+kouten --help
 ```
 
-Nimble installs binaries into `~/.nimble/bin` by default. If `roche` is not
+Nimble installs binaries into `~/.nimble/bin` by default. If `kouten` is not
 found, add it to your shell PATH:
 
 ```sh
@@ -35,31 +35,31 @@ printf '\nexport PATH="$HOME/.nimble/bin:$PATH"\n' >> ~/.profile
 For server-style installs, use `/usr/local/bin`:
 
 ```sh
-nim c -d:release --nimcache:/tmp/nimcache_roche -o:bin/roche src/rochecli.nim
-nim c -d:release --nimcache:/tmp/nimcache_roched -o:bin/roched src/roched.nim
-sudo install -m 0755 bin/roche /usr/local/bin/roche
-sudo install -m 0755 bin/roched /usr/local/bin/roched
+nim c -d:release --nimcache:/tmp/nimcache_kouten -o:bin/kouten src/koutencli.nim
+nim c -d:release --nimcache:/tmp/nimcache_koutend -o:bin/koutend src/koutend.nim
+sudo install -m 0755 bin/kouten /usr/local/bin/kouten
+sudo install -m 0755 bin/koutend /usr/local/bin/koutend
 ```
 
 For repo-local development without installing, you can also build and run a
 local binary:
 
 ```sh
-nim c -d:release --nimcache:/tmp/nimcache_roche -o:bin/roche src/rochecli.nim
-bin/roche --help
+nim c -d:release --nimcache:/tmp/nimcache_kouten -o:bin/kouten src/koutencli.nim
+bin/kouten --help
 ```
 
 ## Common Cluster Flags
 
 | Flag | Meaning |
 |---|---|
-| `--config=FILE` | Load cluster connection defaults from JSON. CLI flags override the file. `ROCHE_CONFIG` can point to the same file. |
+| `--config=FILE` | Load cluster connection defaults from JSON. CLI flags override the file. `KOUTEN_CONFIG` can point to the same file. |
 | `--peers=host:port,...` | Target cluster. |
-| `--user=NAME` / `--password=TEXT` | Username/password auth. Prefer `--password-file` or `ROCHE_PASSWORD` outside local smoke tests. |
+| `--user=NAME` / `--password=TEXT` | Username/password auth. Prefer `--password-file` or `KOUTEN_PASSWORD` outside local smoke tests. |
 | `--password-file=FILE` | Read password from a file. Trailing whitespace is stripped. |
-| `--auth-token=TEXT` | Token-style auth. Prefer `--auth-token-file` or `ROCHE_AUTH_TOKEN` outside local smoke tests. |
+| `--auth-token=TEXT` | Token-style auth. Prefer `--auth-token-file` or `KOUTEN_AUTH_TOKEN` outside local smoke tests. |
 | `--auth-token-file=FILE` | Read token-style auth value from a file. |
-| `--secret-key=TEXT` | Secret-key gate. Prefer `--secret-key-file` or `ROCHE_SECRET_KEY` outside local smoke tests. |
+| `--secret-key=TEXT` | Secret-key gate. Prefer `--secret-key-file` or `KOUTEN_SECRET_KEY` outside local smoke tests. |
 | `--secret-key-file=FILE` | Read the secret-key gate value from a file. |
 | `--galaxy=NAME` | Expected remote galaxy. |
 | `--tls` | Use standard TLS for the TCP transport. Requires TLS-enabled binaries built with `-d:ssl`. |
@@ -74,16 +74,16 @@ Example:
 {
   "peers": ["127.0.0.1:7301"],
   "user": "alice",
-  "passwordFile": "/run/secrets/roche_password",
-  "secretKeyFile": "/run/secrets/roche_secret_key",
+  "passwordFile": "/run/secrets/kouten_password",
+  "secretKeyFile": "/run/secrets/kouten_secret_key",
   "tls": true,
-  "tlsCaFile": "/etc/rochedb/ca.crt"
+  "tlsCaFile": "/etc/koutendb/ca.crt"
 }
 ```
 
 ```sh
-roche health --config=/etc/rochedb/client.json
-roche get --config=/etc/rochedb/client.json --ring=docs/japan
+kouten health --config=/etc/koutendb/client.json
+kouten get --config=/etc/koutendb/client.json --ring=docs/japan
 ```
 
 ## Cluster Commands
@@ -99,15 +99,15 @@ roche get --config=/etc/rochedb/client.json --ring=docs/japan
 
 ## Driver Commands
 
-RocheDB keeps language drivers small and publishable as language-native
+KoutenDB keeps language drivers small and publishable as language-native
 packages. External drivers can live outside the core repository while the
-`roche` CLI keeps the discovery path consistent.
+`kouten` CLI keeps the discovery path consistent.
 
 ```sh
-roche driver list
-roche driver info rust
-roche driver install rust
-roche driver install rust --manifest-path=/path/to/Cargo.toml
+kouten driver list
+kouten driver info rust
+kouten driver install rust
+kouten driver install rust --manifest-path=/path/to/Cargo.toml
 ```
 
 `driver install` currently prints the official repository/package path and
@@ -115,13 +115,13 @@ package-manager command. It does not execute remote scripts or download code.
 For Rust it resolves the target `Cargo.toml` in this order:
 
 1. `--manifest-path=FILE`
-2. `ROCHE_DRIVER_MANIFEST`
+2. `KOUTEN_DRIVER_MANIFEST`
 3. `--project-dir=DIR`
-4. `ROCHE_DRIVER_PROJECT`
+4. `KOUTEN_DRIVER_PROJECT`
 5. `Cargo.toml` in the current directory
 
 Pass `--execute` to run the package-manager command when the selected driver is
-published and the target project can be resolved. RocheDB refuses to execute
+published and the target project can be resolved. KoutenDB refuses to execute
 package-manager commands for unpublished drivers and prints the command
 instead.
 
@@ -135,45 +135,45 @@ instead.
 
 These commands work with `--data=DIR` for embedded mode and `--peers=...` for a
 running cluster. When `--data=DIR` is omitted, embedded commands use
-`ROCHE_DATA` if set, otherwise `./data`.
+`KOUTEN_DATA` if set, otherwise `./data`.
 
 ```sh
-roche put --ring=docs/japan --payload='{"title":"Hello"}' --codec=json
-roche get --ring=docs/japan
-roche put --ring=orders --near=users/123 --payload='{"orderNo":"A-001"}' --codec=json
-roche get --ring=users/123 --subring=orders
-roche get --stellar=users/123 --filter='{"kind":"order"}' --subring=orders
-roche stellar attach --stellar=commerce/order/A-001 --ring=users/123
-roche stellar detach --stellar=commerce/order/A-001 --ring=users/123
-roche get --ring=docs/japan --limit=1 --rsort=time
-roche get --ring=docs/japan --pagination=on --page=2 --pagelimit=20 --sort=id
-roche get --ring=docs/japan --filter='{"id":"RAW_ID"}' --selection='{ title }'
-roche get --ring=docs/japan --filter='{"status":"draft"}' --selection='{ title }'
-roche count-ring --ring=docs/japan
+kouten put --ring=docs/japan --payload='{"title":"Hello"}' --codec=json
+kouten get --ring=docs/japan
+kouten put --ring=orders --near=users/123 --payload='{"orderNo":"A-001"}' --codec=json
+kouten get --ring=users/123 --subring=orders
+kouten get --stellar=users/123 --filter='{"kind":"order"}' --subring=orders
+kouten stellar attach --stellar=commerce/order/A-001 --ring=users/123
+kouten stellar detach --stellar=commerce/order/A-001 --ring=users/123
+kouten get --ring=docs/japan --limit=1 --rsort=time
+kouten get --ring=docs/japan --pagination=on --page=2 --pagelimit=20 --sort=id
+kouten get --ring=docs/japan --filter='{"id":"RAW_ID"}' --selection='{ title }'
+kouten get --ring=docs/japan --filter='{"status":"draft"}' --selection='{ title }'
+kouten count-ring --ring=docs/japan
 ```
 
-Codec is explicit at write time. If you do not pass a codec, RocheDB stores the
+Codec is explicit at write time. If you do not pass a codec, KoutenDB stores the
 payload as `raw` bytes unless `--codec=auto` resolves to a ring profile.
 
 ```sh
 # JSON document: projection and JSON filters can be used later.
-roche put --ring=docs/japan --payload='{"title":"Hello","status":"draft"}' --codec=json
-roche get --ring=docs/japan --filter='{"status":"draft"}' --selection='{ title }'
+kouten put --ring=docs/japan --payload='{"title":"Hello","status":"draft"}' --codec=json
+kouten get --ring=docs/japan --filter='{"status":"draft"}' --selection='{ title }'
 
-# NIF text: stored as NIF-tagged bytes. RocheDB does not parse it as JSON.
-roche put --ring=docs/nif --in=sample.nif --codec=nif
-roche get --ring=docs/nif --limit=1
+# NIF text: stored as NIF-tagged bytes. KoutenDB does not parse it as JSON.
+kouten put --ring=docs/nif --in=sample.nif --codec=nif
+kouten get --ring=docs/nif --limit=1
 
 # BIF binary: stored as BIF-tagged bytes. `auto` view decodes through an
 # optional adapter when available; otherwise it returns base64.
-roche put --ring=docs/bif --in=sample.bif --codec=bif
-roche get --ring=docs/bif --limit=1
-roche get --ring=docs/bif --limit=1 --view=base64
-roche get --ring=docs/bif --limit=1 --view=hex
+kouten put --ring=docs/bif --in=sample.bif --codec=bif
+kouten get --ring=docs/bif --limit=1
+kouten get --ring=docs/bif --limit=1 --view=base64
+kouten get --ring=docs/bif --limit=1 --view=hex
 
 # Plain raw bytes or text.
-roche put --ring=logs/raw --payload='plain text payload' --codec=raw
-roche get --ring=logs/raw --limit=1
+kouten put --ring=logs/raw --payload='plain text payload' --codec=raw
+kouten get --ring=logs/raw --limit=1
 ```
 
 | Command | Required flags | Purpose |
@@ -194,8 +194,8 @@ roche get --ring=logs/raw --limit=1
 For example:
 
 ```sh
-roche ring-profile --ring=docs/nif --codec=nif --charset=UTF-8 --format-version=1
-roche put --ring=docs/nif --payload='(example)' # codec=nif via the profile
+kouten ring-profile --ring=docs/nif --codec=nif --charset=UTF-8 --format-version=1
+kouten put --ring=docs/nif --payload='(example)' # codec=nif via the profile
 ```
 
 The profile is advisory. Every record keeps its explicit codec, so a later
@@ -205,10 +205,10 @@ administration is not available in this release.
 Time orbit is an embedded PoC for log/event/time-series placement:
 
 ```sh
-roche time-orbit --ring=logs/api --bucket-ms=1000 --bits=60 --phase=100 --salt=api
-roche time-put --ring=logs/api --time-ms=1784376000000 \
+kouten time-orbit --ring=logs/api --bucket-ms=1000 --bits=60 --phase=100 --salt=api
+kouten time-put --ring=logs/api --time-ms=1784376000000 \
   --payload='{"level":"error","message":"timeout"}'
-roche time-get --ring=logs/api --from-ms=1784376000000 --to-ms=1784376300000 \
+kouten time-get --ring=logs/api --from-ms=1784376000000 --to-ms=1784376300000 \
   --filter='{"level":"error"}' --selection='{ level message eventTimeMs }'
 ```
 
@@ -217,14 +217,14 @@ other top-level fields filter JSON records in the selected ring. `--where` is
 accepted as a compatibility alias for `--filter`.
 
 `--near` is a write-time placement hint, not a persistent relationship field.
-For example, `roche put --near=users/123 --ring=orders ...` writes the record to
+For example, `kouten put --near=users/123 --ring=orders ...` writes the record to
 `users/123/orders`. Later reads use the coordinate itself:
 
 ```sh
-roche get --ring=users/123
-roche get --stellar=users/123 --filter='{"kind":"order"}' --subring=orders
-roche get --ring=users/123/orders
-roche get --ring=users/123 --subring=orders
+kouten get --ring=users/123
+kouten get --stellar=users/123 --filter='{"kind":"order"}' --subring=orders
+kouten get --ring=users/123/orders
+kouten get --ring=users/123 --subring=orders
 ```
 
 This is similar to pointing a telescope at a ring. Nearby satellites are in the
@@ -235,16 +235,16 @@ join.
 data already exists:
 
 ```sh
-roche put --ring=users/123 --payload='{"kind":"user"}' --codec=json
-roche put --ring=shops/1123 --payload='{"kind":"shop"}' --codec=json
-roche put --ring=orders/A-001 --payload='{"kind":"order"}' --codec=json
+kouten put --ring=users/123 --payload='{"kind":"user"}' --codec=json
+kouten put --ring=shops/1123 --payload='{"kind":"shop"}' --codec=json
+kouten put --ring=orders/A-001 --payload='{"kind":"order"}' --codec=json
 
-roche stellar attach --stellar=commerce/order/A-001 --ring=users/123
-roche stellar attach --stellar=commerce/order/A-001 --ring=shops/1123
-roche stellar attach --stellar=commerce/order/A-001 --ring=orders/A-001
+kouten stellar attach --stellar=commerce/order/A-001 --ring=users/123
+kouten stellar attach --stellar=commerce/order/A-001 --ring=shops/1123
+kouten stellar attach --stellar=commerce/order/A-001 --ring=orders/A-001
 
-roche get --stellar=commerce/order/A-001 --filter='{"kind":"shop"}'
-roche stellar detach --stellar=commerce/order/A-001 --ring=shops/1123
+kouten get --stellar=commerce/order/A-001 --filter='{"kind":"shop"}'
+kouten stellar detach --stellar=commerce/order/A-001 --ring=shops/1123
 ```
 
 This is a lens relationship, not a copy operation. Compaction can later use the
@@ -258,7 +258,7 @@ prefer cursor-based reads with `--cursor` because deep pages must skip earlier
 filtered matches.
 
 For BIF payloads, the default `auto` view looks for an optional adapter in this
-order: `ROCHEDB_NIF_TOOL`, `rochedb-nif`, then `nif_file_tool`. The adapter
+order: `KOUTENDB_NIF_TOOL`, `koutendb-nif`, then `nif_file_tool`. The adapter
 command must support:
 
 ```sh
@@ -274,11 +274,11 @@ Use the `rawId` printed by `put` for scripts and reproducible examples.
 
 ## Interactive Shell
 
-`roche shell` provides a small MySQL-like interactive command surface for manual
+`kouten shell` provides a small MySQL-like interactive command surface for manual
 exploration:
 
 ```sh
-roche shell
+kouten shell
 ```
 
 Minimal shell commands:
@@ -295,7 +295,7 @@ help
 exit
 ```
 
-The shell intentionally uses RocheDB terms directly. It is not an SQL parser.
+The shell intentionally uses KoutenDB terms directly. It is not an SQL parser.
 For scripts and reproducible examples, prefer the single-shot commands above.
 
 ## Local Data Commands
@@ -313,9 +313,9 @@ For scripts and reproducible examples, prefer the single-shot commands above.
 | `describe-galaxy` | `--data=DIR --description=TEXT` | Set galaxy map description. |
 | `describe-ring` | `--data=DIR --ring=RING --description=TEXT` | Set ring map description. |
 
-`dump` / `import-jsonl` are the portable migration boundary while RocheDB's
+`dump` / `import-jsonl` are the portable migration boundary while KoutenDB's
 pre-v1.0 internal WAL format can still evolve. `import-jsonl` recognizes
-`rochedb.dump.v1` files produced by `dump`, and can also route external JSONL
+`koutendb.dump.v1` files produced by `dump`, and can also route external JSONL
 exports through `--ring-field`, `--payload-field`, and `--vec-field`. See
 [Data Migration](data-migration.md).
 

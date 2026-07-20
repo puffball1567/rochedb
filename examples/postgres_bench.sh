@@ -3,15 +3,15 @@ set -euo pipefail
 
 N="${N:-10000}"
 PAYLOAD_BYTES="${PAYLOAD_BYTES:-100}"
-BASE_PORT="${ROCHE_BENCH_BASE_PORT:-17311}"
+BASE_PORT="${KOUTEN_BENCH_BASE_PORT:-17311}"
 PGPORT="${PGPORT:-55432}"
 PGHOST="${PGHOST:-127.0.0.1}"
-TMP_ROOT="${TMPDIR:-/tmp}/rochedb-postgres-bench-$$"
+TMP_ROOT="${TMPDIR:-/tmp}/koutendb-postgres-bench-$$"
 PG_BIN="${PG_BIN:-}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PEERS="127.0.0.1:${BASE_PORT},127.0.0.1:$((BASE_PORT + 1)),127.0.0.1:$((BASE_PORT + 2))"
-ROCHE_DATA="$TMP_ROOT/roche"
+KOUTEN_DATA="$TMP_ROOT/kouten"
 PGDATA="$TMP_ROOT/pgdata"
 PGLOG="$TMP_ROOT/postgres.log"
 PIDS=()
@@ -80,32 +80,32 @@ need_path psql PSQL
 need_path pgbench PGBENCH
 
 cd "$ROOT"
-mkdir -p "$ROCHE_DATA" bin
+mkdir -p "$KOUTEN_DATA" bin
 
 payload="$(printf "%${PAYLOAD_BYTES}s" "" | tr " " "a")"
 select_sql="$TMP_ROOT/select.sql"
 write_sql="$TMP_ROOT/write.sql"
 
-echo "[postgres-bench] build RocheDB binaries"
-nim c -d:release --nimcache:/tmp/nimcache_roched -o:bin/roched src/roched.nim
-nim c -d:release --nimcache:/tmp/nimcache_rochecli -o:bin/roche src/rochecli.nim
+echo "[postgres-bench] build KoutenDB binaries"
+nim c -d:release --nimcache:/tmp/nimcache_koutend -o:bin/koutend src/koutend.nim
+nim c -d:release --nimcache:/tmp/nimcache_koutencli -o:bin/kouten src/koutencli.nim
 
-echo "[postgres-bench] start RocheDB cluster on $PEERS"
+echo "[postgres-bench] start KoutenDB cluster on $PEERS"
 for id in 0 1 2; do
-  bin/roched --id="$id" --peers="$PEERS" --data="$ROCHE_DATA/node$id" --slow-tick=0.05 &
+  bin/koutend --id="$id" --peers="$PEERS" --data="$KOUTEN_DATA/node$id" --slow-tick=0.05 &
   PIDS+=("$!")
 done
 
 for _ in $(seq 1 50); do
-  if bin/roche health --peers="$PEERS" >/dev/null 2>&1; then
+  if bin/kouten health --peers="$PEERS" >/dev/null 2>&1; then
     break
   fi
   sleep 0.1
 done
-bin/roche health --peers="$PEERS" >/dev/null
+bin/kouten health --peers="$PEERS" >/dev/null
 
-echo "[postgres-bench] RocheDB cluster benchmark"
-bin/roche bench --peers="$PEERS" --n="$N"
+echo "[postgres-bench] KoutenDB cluster benchmark"
+bin/kouten bench --peers="$PEERS" --n="$N"
 
 echo "[postgres-bench] init temporary PostgreSQL cluster on $PGHOST:$PGPORT"
 "$INITDB" -A trust -D "$PGDATA" >/dev/null

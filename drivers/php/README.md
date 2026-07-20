@@ -1,12 +1,12 @@
-# RocheDB PHP Driver
+# KoutenDB PHP Driver
 
-Minimal PHP FFI wrapper over the RocheDB C ABI.
+Minimal PHP FFI wrapper over the KoutenDB C ABI.
 
 ```php
 <?php
-use RocheDB\RocheDB;
+use KoutenDB\KoutenDB;
 
-$db = RocheDB::open(8);
+$db = KoutenDB::open(8);
 $db->setGalaxyDescription("Product and support knowledge");
 $db->setRingDescription("docs", "Documentation ring");
 
@@ -16,15 +16,15 @@ $atlas = $db->atlas([1.0, 0.0], 8);
 $db->close();
 ```
 
-Build the RocheDB shared library first:
+Build the KoutenDB shared library first:
 
 ```bash
 scripts/build_capi.sh
 drivers/php/docker-test.sh
 ```
 
-The build script enables TLS support in `lib/librochedb.so`, which is required
-for `roche_connect_auth_tls`-based drivers.
+The build script enables TLS support in `lib/libkoutendb.so`, which is required
+for `kouten_connect_auth_tls`-based drivers.
 
 Local PHP must have `ext-ffi` enabled. If it does not, use `drivers/php/docker-test.sh`;
 it builds a small `php:8.3-cli` based image with FFI enabled.

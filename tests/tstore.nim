@@ -1,7 +1,7 @@
-## roche/store の永続化テスト
+## kouten/store の永続化テスト
 
 import std/[algorithm, os, osproc, strutils, tables, tempfiles, unittest]
-import ../src/roche/store
+import ../src/kouten/store
 
 if paramCount() == 2 and paramStr(1) == "--lock-child":
   let dir = paramStr(2)
@@ -22,7 +22,7 @@ proc ringSignature(st: Store, ring: uint64): seq[string] =
 
 suite "store persistence":
   test "persistent data dirs are locked across processes":
-    let dir = createTempDir("roche-store", "lock")
+    let dir = createTempDir("kouten-store", "lock")
     let child = startProcess(getAppFilename(), args = ["--lock-child", dir])
     try:
       for _ in 0 ..< 50:
@@ -42,7 +42,7 @@ suite "store persistence":
       removeDir(dir)
 
   test "Particle vec は E レコードで復元される":
-    let dir = createTempDir("roche-store", "vec")
+    let dir = createTempDir("kouten-store", "vec")
     var st = openStore(dir)
     st.upsert Particle(parent: 11'u64, seq: 3'u32, period: 60.0, head: 1.2,
                        tWrite: 4.5, payload: "payload",
@@ -56,10 +56,10 @@ suite "store persistence":
     removeDir(dir)
 
   test "payload codec survives WAL replay while legacy records default to raw":
-    let dir = createTempDir("roche-store", "payload-codec")
+    let dir = createTempDir("kouten-store", "payload-codec")
     var st = openStore(dir)
     st.upsert Particle(parent: 12'u64, seq: 0'u32, period: 60.0, head: 0.0,
-                       tWrite: 1.0, payload: "(object (name RocheDB))",
+                       tWrite: 1.0, payload: "(object (name KoutenDB))",
                        codec: pcNif)
     st.close()
 
@@ -68,8 +68,8 @@ suite "store persistence":
     restored.close()
     removeDir(dir)
 
-    let legacyDir = createTempDir("roche-store", "legacy-payload-codec")
-    writeFile(legacyDir / "roche.log",
+    let legacyDir = createTempDir("kouten-store", "legacy-payload-codec")
+    writeFile(legacyDir / "kouten.log",
               "P 13 0 60.0 0.0 1.0 5 0\nhello\n")
     var legacy = openStore(legacyDir)
     check legacy.items[(13'u64, 0'u32)].codec == pcRaw
@@ -77,7 +77,7 @@ suite "store persistence":
     removeDir(legacyDir)
 
   test "stellar map blobs are validated before write and replay":
-    let dir = createTempDir("roche-store", "stellar-map-validate")
+    let dir = createTempDir("kouten-store", "stellar-map-validate")
     var st = openStore(dir)
     st.putStellarMap("commerce/order/A-001",
                      """{"stellar":"commerce/order/A-001","members":["users/123","shops/1123"]}""")
@@ -96,15 +96,15 @@ suite "store persistence":
     restored.close()
     removeDir(dir)
 
-    let legacyDir = createTempDir("roche-store", "stellar-map-bad-replay")
+    let legacyDir = createTempDir("kouten-store", "stellar-map-bad-replay")
     let malformed = """{"stellar":"commerce/order/A-001","members":[123]}"""
-    writeFile(legacyDir / "roche.log", "SM " & $malformed.len & "\n" & malformed & "\n")
+    writeFile(legacyDir / "kouten.log", "SM " & $malformed.len & "\n" & malformed & "\n")
     expect IOError:
       discard openStore(legacyDir)
     removeDir(legacyDir)
 
   test "time orbit profile survives WAL replay and compact":
-    let dir = createTempDir("roche-store", "time-orbit")
+    let dir = createTempDir("kouten-store", "time-orbit")
     var st = openStore(dir)
     let profile = TimeOrbitProfile(bits: 60, bucketMs: 1000'i64,
                                    phase: 1234'u64, salt: "logs-api")
@@ -123,7 +123,7 @@ suite "store persistence":
 
   when declared(poisonWritesForTest):
     test "poisoned write path rejects later persistent mutations":
-      let dir = createTempDir("roche-store", "poison")
+      let dir = createTempDir("kouten-store", "poison")
       var st = openStore(dir, durability = durStrong)
       st.upsert Particle(parent: 20'u64, seq: 0'u32, period: 60.0,
                          head: 0.0, tWrite: 1.0, payload: "before")
@@ -136,15 +136,15 @@ suite "store persistence":
       removeDir(dir)
 
   test "new WAL records have magic header and checksums":
-    let dir = createTempDir("roche-store", "wal-v2")
+    let dir = createTempDir("kouten-store", "wal-v2")
     var st = openStore(dir)
     st.upsert Particle(parent: 14'u64, seq: 0'u32, period: 60.0, head: 0.0,
                        tWrite: 1.0, payload: "checksummed",
                        codec: pcJson)
     st.close()
 
-    let raw = readFile(dir / "roche.log")
-    check raw.startsWith("!ROCHEDB-WAL 2\n@ ")
+    let raw = readFile(dir / "kouten.log")
+    check raw.startsWith("!KOUTENDB-WAL 2\n@ ")
     check raw.contains("\nP 14 0 ")
 
     var restored = openStore(dir)
@@ -154,13 +154,13 @@ suite "store persistence":
     removeDir(dir)
 
   test "versioned WAL checksum mismatch refuses open without repair":
-    let dir = createTempDir("roche-store", "wal-v2-corrupt")
+    let dir = createTempDir("kouten-store", "wal-v2-corrupt")
     var st = openStore(dir)
     st.upsert Particle(parent: 15'u64, seq: 0'u32, period: 60.0, head: 0.0,
                        tWrite: 1.0, payload: "checksum")
     st.close()
 
-    let path = dir / "roche.log"
+    let path = dir / "kouten.log"
     let raw = readFile(path)
     writeFile(path, raw.replace("checksum", "checksux"))
 
@@ -170,13 +170,13 @@ suite "store persistence":
     removeDir(dir)
 
   test "versioned WAL torn tail repairs to last checked record":
-    let dir = createTempDir("roche-store", "wal-v2-tail")
+    let dir = createTempDir("kouten-store", "wal-v2-tail")
     var st = openStore(dir)
     st.upsert Particle(parent: 16'u64, seq: 0'u32, period: 60.0, head: 0.0,
                        tWrite: 1.0, payload: "stable")
     st.close()
 
-    let path = dir / "roche.log"
+    let path = dir / "kouten.log"
     let good = readFile(path)
     writeFile(path, good & "@ 80 0\nP 16 1 60.0 0.0 2.0 7 0 raw\npartial")
 
@@ -189,7 +189,7 @@ suite "store persistence":
     removeDir(dir)
 
   test "Forwarder は F レコードで復元される":
-    let dir = createTempDir("roche-store", "fwd")
+    let dir = createTempDir("kouten-store", "fwd")
     var st = openStore(dir)
     st.putForwarder(0'u64, 7'u32,
                     Forwarder(newParent: 99'u64, newSeq: 2'u32,
@@ -206,7 +206,7 @@ suite "store persistence":
     removeDir(dir)
 
   test "Warp job snapshot は WJ レコードで復元される":
-    let dir = createTempDir("roche-store", "warp")
+    let dir = createTempDir("kouten-store", "warp")
     var st = openStore(dir)
     st.putWarpJob(42'u64, """{"id":42,"status":"wsPending"}""")
     st.close()
@@ -233,7 +233,7 @@ suite "store persistence":
     removeDir(dir)
 
   test "Universe sync event は UJ/UA/UD レコードで復元される":
-    let dir = createTempDir("roche-store", "universe-sync")
+    let dir = createTempDir("kouten-store", "universe-sync")
     var st = openStore(dir)
     st.putUniverseSyncEvent(7'u64, """{"id":7,"eventKey":"tokyo|social|posts|p1","ring":"posts"}""")
     st.markUniverseSyncEventApplied("tokyo|social|posts|p1")
@@ -258,7 +258,7 @@ suite "store persistence":
     removeDir(dir)
 
   test "Universe sync sequence は prune 後も UQ レコードで巻き戻らない":
-    let dir = createTempDir("roche-store", "universe-seq")
+    let dir = createTempDir("kouten-store", "universe-seq")
     var st = openStore(dir)
     st.putUniverseSyncEvent(1'u64, """{"id":1,"eventKey":"e1","ring":"r"}""")
     st.setNextUniverseSyncId(9'u64)
@@ -278,7 +278,7 @@ suite "store persistence":
     removeDir(dir)
 
   test "Universe sync applied dedup set can be pruned with WAL replay":
-    let dir = createTempDir("roche-store", "universe-applied-prune")
+    let dir = createTempDir("kouten-store", "universe-applied-prune")
     var st = openStore(dir)
     st.markUniverseSyncEventApplied("event-1")
     st.markUniverseSyncEventApplied("event-2")
@@ -297,7 +297,7 @@ suite "store persistence":
     removeDir(dir)
 
   test "Universe sync event は store transaction commit まで可視化されない":
-    let dir = createTempDir("roche-store", "universe-tx")
+    let dir = createTempDir("kouten-store", "universe-tx")
     var st = openStore(dir)
     var tx = st.beginTxn()
     tx.putUniverseSyncEvent(3'u64, """{"id":3,"eventKey":"e3","ring":"r"}""")
@@ -318,7 +318,7 @@ suite "store persistence":
     removeDir(dir)
 
   test "transaction commit は atomic に復元される":
-    let dir = createTempDir("roche-store", "tx")
+    let dir = createTempDir("kouten-store", "tx")
     var st = openStore(dir)
     let tx = st.beginTxn()
     tx.upsert Particle(parent: 1'u64, seq: 0'u32, period: 30.0, head: 0.5,
@@ -337,7 +337,7 @@ suite "store persistence":
     removeDir(dir)
 
   test "strong durability は単発 write と transaction を再open後も復元する":
-    let dir = createTempDir("roche-store", "strong")
+    let dir = createTempDir("kouten-store", "strong")
     var st = openStore(dir, durability = durStrong)
     st.upsert Particle(parent: 10'u64, seq: 0'u32, period: 30.0, head: 0.1,
                        tWrite: 1.0, payload: "single",
@@ -356,8 +356,8 @@ suite "store persistence":
     removeDir(dir)
 
   test "commit marker のない transaction は replay で無視される":
-    let dir = createTempDir("roche-store", "tx-partial")
-    writeFile(dir / "roche.log",
+    let dir = createTempDir("kouten-store", "tx-partial")
+    writeFile(dir / "kouten.log",
               "T 7\n" &
               "XP 7 2 0 60.0 0.0 1.0 5 0\nhello\n")
     var st = openStore(dir)
@@ -366,9 +366,9 @@ suite "store persistence":
     removeDir(dir)
 
   test "WAL 末尾の不完全レコードは最後の完全レコードまで repair される":
-    let dir = createTempDir("roche-store", "torn-tail")
+    let dir = createTempDir("kouten-store", "torn-tail")
     let good = "P 2 0 60.0 0.0 1.0 5\nhello\n"
-    writeFile(dir / "roche.log",
+    writeFile(dir / "kouten.log",
               good &
               "P 2 1 60.0 0.0 2.0 11\npartial")
 
@@ -376,7 +376,7 @@ suite "store persistence":
     check st.count() == 1
     check st.items[(2'u64, 0'u32)].payload == "hello"
     check not st.contains(2'u64, 1'u32)
-    check readFile(dir / "roche.log") == good
+    check readFile(dir / "kouten.log") == good
     st.upsert Particle(parent: 2'u64, seq: 2'u32, period: 60.0, head: 0.0,
                        tWrite: 3.0, payload: "after")
     st.close()
@@ -390,9 +390,9 @@ suite "store persistence":
     removeDir(dir)
 
   test "WAL 末尾の不正な長さ指定は repair される":
-    let dir = createTempDir("roche-store", "bad-len-tail")
+    let dir = createTempDir("kouten-store", "bad-len-tail")
     let good = "P 2 0 60.0 0.0 1.0 5\nhello\n"
-    writeFile(dir / "roche.log",
+    writeFile(dir / "kouten.log",
               good &
               "P 2 1 60.0 0.0 2.0 -1 0\n")
 
@@ -400,14 +400,14 @@ suite "store persistence":
     check st.count() == 1
     check st.items[(2'u64, 0'u32)].payload == "hello"
     check not st.contains(2'u64, 1'u32)
-    check readFile(dir / "roche.log") == good
+    check readFile(dir / "kouten.log") == good
     st.close()
     removeDir(dir)
 
   test "WAL 末尾の不正な vector 次元は repair される":
-    let dir = createTempDir("roche-store", "bad-vec-tail")
+    let dir = createTempDir("kouten-store", "bad-vec-tail")
     let good = "P 2 0 60.0 0.0 1.0 5\nhello\n"
-    writeFile(dir / "roche.log",
+    writeFile(dir / "kouten.log",
               good &
               "E 2 0 -1\n")
 
@@ -415,26 +415,26 @@ suite "store persistence":
     check st.count() == 1
     check st.items[(2'u64, 0'u32)].payload == "hello"
     check st.items[(2'u64, 0'u32)].vec.len == 0
-    check readFile(dir / "roche.log") == good
+    check readFile(dir / "kouten.log") == good
     st.close()
     removeDir(dir)
 
   test "WAL 中間破損は tail repair せず起動を拒否する":
-    let dir = createTempDir("roche-store", "mid-corrupt")
+    let dir = createTempDir("kouten-store", "mid-corrupt")
     let wal = "P 2 0 60.0 0.0 1.0 5\nhello\n" &
               "P 2 1 60.0 0.0 2.0 -1 0\n" &
               "P 2 2 60.0 0.0 3.0 5 0\nlater\n"
-    writeFile(dir / "roche.log", wal)
+    writeFile(dir / "kouten.log", wal)
 
     expect IOError:
       discard openStore(dir)
-    check readFile(dir / "roche.log") == wal
+    check readFile(dir / "kouten.log") == wal
     removeDir(dir)
 
   test "commit marker が torn tail の transaction は repair 後も適用されない":
-    let dir = createTempDir("roche-store", "tx-torn-tail")
+    let dir = createTempDir("kouten-store", "tx-torn-tail")
     let good = "P 1 0 60.0 0.0 1.0 4\nbase\n"
-    writeFile(dir / "roche.log",
+    writeFile(dir / "kouten.log",
               good &
               "T 12\n" &
               "XP 12 1 1 60.0 0.0 2.0 6 0\ninside\n" &
@@ -444,7 +444,7 @@ suite "store persistence":
     check st.count() == 1
     check st.items[(1'u64, 0'u32)].payload == "base"
     check not st.contains(1'u64, 1'u32)
-    check readFile(dir / "roche.log") == good &
+    check readFile(dir / "kouten.log") == good &
       "T 12\n" &
       "XP 12 1 1 60.0 0.0 2.0 6 0\ninside\n"
     st.close()
@@ -456,7 +456,7 @@ suite "store persistence":
     removeDir(dir)
 
   test "cluster transaction intent は applied まで保持される":
-    let dir = createTempDir("roche-store", "cluster-tx")
+    let dir = createTempDir("kouten-store", "cluster-tx")
     var st = openStore(dir)
     st.putClusterTxIntent ClusterTxIntent(
       id: 9'u64,
@@ -479,8 +479,8 @@ suite "store persistence":
     removeDir(dir)
 
   test "compact 中断で tmp だけ残った場合は tmp を正規 WAL として復旧する":
-    let dir = createTempDir("roche-store", "compact-tmp")
-    writeFile(dir / "roche.log.compact",
+    let dir = createTempDir("kouten-store", "compact-tmp")
+    writeFile(dir / "kouten.log.compact",
               "G 11\nrecover-tmp\n" &
               "P 5 0 60.0 0.0 1.0 4\nlive\n")
 
@@ -488,41 +488,41 @@ suite "store persistence":
     check st.galaxy == "recover-tmp"
     check st.count() == 1
     check st.items[(5'u64, 0'u32)].payload == "live"
-    check fileExists(dir / "roche.log")
-    check not fileExists(dir / "roche.log.compact")
+    check fileExists(dir / "kouten.log")
+    check not fileExists(dir / "kouten.log.compact")
     st.close()
     removeDir(dir)
 
   test "compact 中断で正規 WAL と tmp が両方ある場合は正規 WAL を優先する":
-    let dir = createTempDir("roche-store", "compact-log-tmp")
-    writeFile(dir / "roche.log",
+    let dir = createTempDir("kouten-store", "compact-log-tmp")
+    writeFile(dir / "kouten.log",
               "P 6 0 60.0 0.0 1.0 4\nkeep\n")
-    writeFile(dir / "roche.log.compact",
+    writeFile(dir / "kouten.log.compact",
               "P 6 1 60.0 0.0 2.0 4\ndrop\n")
 
     var st = openStore(dir)
     check st.count() == 1
     check st.items[(6'u64, 0'u32)].payload == "keep"
     check not st.contains(6'u64, 1'u32)
-    check not fileExists(dir / "roche.log.compact")
+    check not fileExists(dir / "kouten.log.compact")
     st.close()
     removeDir(dir)
 
   test "compact 中断で bak だけ残った場合は bak を正規 WAL として復旧する":
-    let dir = createTempDir("roche-store", "compact-bak")
-    writeFile(dir / "roche.log.bak",
+    let dir = createTempDir("kouten-store", "compact-bak")
+    writeFile(dir / "kouten.log.bak",
               "P 7 0 60.0 0.0 1.0 4\nback\n")
 
     var st = openStore(dir)
     check st.count() == 1
     check st.items[(7'u64, 0'u32)].payload == "back"
-    check fileExists(dir / "roche.log")
-    check not fileExists(dir / "roche.log.bak")
+    check fileExists(dir / "kouten.log")
+    check not fileExists(dir / "kouten.log.bak")
     st.close()
     removeDir(dir)
 
   test "compact は生存レコードだけで WAL を再構築する":
-    let dir = createTempDir("roche-store", "compact")
+    let dir = createTempDir("kouten-store", "compact")
     var st = openStore(dir)
     st.setGalaxy("compact-galaxy")
     st.putGalaxyDescription("compact galaxy description")
@@ -559,7 +559,7 @@ suite "store persistence":
     removeDir(dir)
 
   test "bare delete replay keeps itemsByRing consistent":
-    let dir = createTempDir("roche-store", "delete-replay-index")
+    let dir = createTempDir("kouten-store", "delete-replay-index")
     var st = openStore(dir)
     st.upsert Particle(parent: 30'u64, seq: 0'u32, period: 60.0, head: 0.0,
                        tWrite: 1.0, payload: "deleted")
@@ -577,7 +577,7 @@ suite "store persistence":
     removeDir(dir)
 
   test "locality report は interleaved WAL と compact 後の ring grouping を測る":
-    let dir = createTempDir("roche-store", "locality")
+    let dir = createTempDir("kouten-store", "locality")
     var st = openStore(dir)
     for i in 0'u32 ..< 12'u32:
       let ring = uint64((i mod 3) + 1)
@@ -605,7 +605,7 @@ suite "store persistence":
     removeDir(dir)
 
   test "locality report は上書き済み particle record を dead として数える":
-    let dir = createTempDir("roche-store", "locality-dead")
+    let dir = createTempDir("kouten-store", "locality-dead")
     var st = openStore(dir)
     st.upsert Particle(parent: 7'u64, seq: 0'u32, period: 60.0,
                        head: 0.0, tWrite: 1.0, payload: "old",
@@ -621,7 +621,7 @@ suite "store persistence":
     removeDir(dir)
 
   test "locality report matrix covers delete and backfill fragmentation":
-    let dir = createTempDir("roche-store", "locality-matrix")
+    let dir = createTempDir("kouten-store", "locality-matrix")
     var st = openStore(dir)
 
     for i in 0'u32 ..< 24'u32:
@@ -668,7 +668,7 @@ suite "store persistence":
     removeDir(dir)
 
   test "strong durability の compact 後も WAL は復元できる":
-    let dir = createTempDir("roche-store", "strong-compact")
+    let dir = createTempDir("kouten-store", "strong-compact")
     var st = openStore(dir, durability = durStrong)
     for i in 0'u32 ..< 10'u32:
       st.upsert Particle(parent: 8'u64, seq: i, period: 60.0, head: 0.0,
@@ -687,9 +687,9 @@ suite "store persistence":
     removeDir(dir)
 
   test "backup/restore は compact 済み WAL として別 dir に復元できる":
-    let dir = createTempDir("roche-store", "backup-src")
-    let backupDir = createTempDir("roche-store", "backup")
-    let restoredDir = createTempDir("roche-store", "restore")
+    let dir = createTempDir("kouten-store", "backup-src")
+    let backupDir = createTempDir("kouten-store", "backup")
+    let restoredDir = createTempDir("kouten-store", "restore")
     var st = openStore(dir)
     st.setGalaxy("backup-galaxy")
     st.putRingName(3'u64, "docs/ai")
@@ -707,7 +707,7 @@ suite "store persistence":
                        tWrite: 3.0, payload: "second-live")
     let backupStats2 = st.backup(backupDir)
     check backupStats2.items == 2
-    check not fileExists(backupDir / "roche.log.tmp")
+    check not fileExists(backupDir / "kouten.log.tmp")
     let verifyStats = verifyBackup(backupDir)
     check verifyStats.items == 2
     st.close()
@@ -716,7 +716,7 @@ suite "store persistence":
     let restoreStats = restoreBackup(backupDir, restoredDir,
                                      durability = durStrong)
     check restoreStats.items == 2
-    check not fileExists(restoredDir / "roche.log.restore")
+    check not fileExists(restoredDir / "kouten.log.restore")
     var restored = openStore(restoredDir, durability = durStrong)
     check restored.galaxy == "backup-galaxy"
     check restored.ringNames[3'u64] == "docs/ai"
@@ -730,15 +730,15 @@ suite "store persistence":
       discard restoreBackup(backupDir, restoredDir)
     discard restoreBackup(backupDir, restoredDir, overwrite = true,
                           durability = durStrong)
-    check not fileExists(restoredDir / "roche.log.restore")
+    check not fileExists(restoredDir / "kouten.log.restore")
     removeDir(dir)
     removeDir(backupDir)
     removeDir(restoredDir)
 
   test "壊れた plain backup は restore 前に拒否され target を壊さない":
-    let srcDir = createTempDir("roche-store", "backup-corrupt-src")
-    let backupDir = createTempDir("roche-store", "backup-corrupt")
-    let targetDir = createTempDir("roche-store", "backup-corrupt-target")
+    let srcDir = createTempDir("kouten-store", "backup-corrupt-src")
+    let backupDir = createTempDir("kouten-store", "backup-corrupt")
+    let targetDir = createTempDir("kouten-store", "backup-corrupt-target")
 
     var src = openStore(srcDir)
     src.upsert Particle(parent: 10'u64, seq: 0'u32, period: 60.0, head: 0.0,
@@ -747,10 +747,10 @@ suite "store persistence":
     src.close()
 
     createDir(targetDir)
-    writeFile(targetDir / "roche.log",
+    writeFile(targetDir / "kouten.log",
               "P 9 0 60.0 0.0 1.0 6 0\nstable\n")
-    writeFile(backupDir / "roche.log",
-              readFile(backupDir / "roche.log") &
+    writeFile(backupDir / "kouten.log",
+              readFile(backupDir / "kouten.log") &
               "P 10 1 60.0 0.0 2.0 7 0\npartial")
 
     expect IOError:
@@ -769,9 +769,9 @@ suite "store persistence":
     removeDir(targetDir)
 
   test "encrypted backup/restore は passphrase が一致すると復元できる":
-    let dir = createTempDir("roche-store", "enc-backup-src")
-    let backupDir = createTempDir("roche-store", "enc-backup")
-    let restoredDir = createTempDir("roche-store", "enc-restore")
+    let dir = createTempDir("kouten-store", "enc-backup-src")
+    let backupDir = createTempDir("kouten-store", "enc-backup")
+    let restoredDir = createTempDir("kouten-store", "enc-restore")
     var st = openStore(dir)
     st.setGalaxy("encrypted-galaxy")
     st.upsert Particle(parent: 4'u64, seq: 0'u32, period: 60.0, head: 0.1,
@@ -781,10 +781,10 @@ suite "store persistence":
     check backupStats.items == 1
     let verifyStats = verifyEncryptedBackup(backupDir, "correct-passphrase")
     check verifyStats.items == 1
-    check fileExists(backupDir / "roche.backup")
-    check not fileExists(backupDir / "roche.verify.tmp")
-    check not fileExists(backupDir / "roche.log.tmp")
-    check not readFile(backupDir / "roche.backup").contains("secret")
+    check fileExists(backupDir / "kouten.backup")
+    check not fileExists(backupDir / "kouten.verify.tmp")
+    check not fileExists(backupDir / "kouten.log.tmp")
+    check not readFile(backupDir / "kouten.backup").contains("secret")
     st.close()
 
     removeDir(restoredDir)
@@ -794,7 +794,7 @@ suite "store persistence":
                                               "correct-passphrase",
                                               durability = durStrong)
     check restoreStats.items == 1
-    check not fileExists(restoredDir / "roche.log.restore")
+    check not fileExists(restoredDir / "kouten.log.restore")
     var restored = openStore(restoredDir, durability = durStrong)
     check restored.galaxy == "encrypted-galaxy"
     check restored.items[(4'u64, 0'u32)].payload == "secret"
@@ -805,12 +805,12 @@ suite "store persistence":
     removeDir(restoredDir)
 
   test "壊れた encrypted backup は restore 前に拒否され target を壊さない":
-    let backupDir = createTempDir("roche-store", "enc-corrupt-backup")
-    let targetDir = createTempDir("roche-store", "enc-corrupt-target")
+    let backupDir = createTempDir("kouten-store", "enc-corrupt-backup")
+    let targetDir = createTempDir("kouten-store", "enc-corrupt-target")
 
-    writeFile(backupDir / "roche.backup", "not-a-rochedb-encrypted-backup")
+    writeFile(backupDir / "kouten.backup", "not-a-koutendb-encrypted-backup")
     createDir(targetDir)
-    writeFile(targetDir / "roche.log",
+    writeFile(targetDir / "kouten.log",
               "P 11 0 60.0 0.0 1.0 6 0\nstable\n")
 
     expect IOError:
@@ -828,7 +828,7 @@ suite "store persistence":
     removeDir(targetDir)
 
   test "galaxy は data dir に固定され、違う galaxy では開けない":
-    let dir = createTempDir("roche-store", "galaxy")
+    let dir = createTempDir("kouten-store", "galaxy")
     var st = openStore(dir)
     st.setGalaxy("andromeda")
     st.close()

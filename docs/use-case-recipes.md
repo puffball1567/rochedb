@@ -1,7 +1,7 @@
 # Use Case Recipes
 
-This page shows practical RocheDB layouts for ordinary applications. The goal
-is not to replace every database pattern. It is to show where RocheDB's
+This page shows practical KoutenDB layouts for ordinary applications. The goal
+is not to replace every database pattern. It is to show where KoutenDB's
 coordinate-first model removes broad scans, avoids manual join plumbing, or
 keeps high-integrity workflows explicit.
 
@@ -19,18 +19,18 @@ map to the Nim API and external drivers:
 
 ## List To Detail
 
-Many web screens have a broad list view and a focused detail view. In RocheDB,
+Many web screens have a broad list view and a focused detail view. In KoutenDB,
 the list can live at a broader coordinate while the detail view reads the
 specific coordinate and nearby subrings.
 
 ```sh
-roche put --ring=users --payload='{"id":"u123","name":"Ada","status":"active"}' --codec=json
-roche put --near=users/123 --ring=profile --payload='{"kind":"profile","name":"Ada","tier":"pro"}' --codec=json
-roche put --near=users/123 --ring=orders --payload='{"kind":"order","orderNo":"A-001","total":120}' --codec=json
-roche put --near=users/123 --ring=billing --payload='{"kind":"billing","plan":"annual"}' --codec=json
+kouten put --ring=users --payload='{"id":"u123","name":"Ada","status":"active"}' --codec=json
+kouten put --near=users/123 --ring=profile --payload='{"kind":"profile","name":"Ada","tier":"pro"}' --codec=json
+kouten put --near=users/123 --ring=orders --payload='{"kind":"order","orderNo":"A-001","total":120}' --codec=json
+kouten put --near=users/123 --ring=billing --payload='{"kind":"billing","plan":"annual"}' --codec=json
 
-roche get --ring=users --limit=20 --selection='{ id name status }'
-roche get --ring=users/123 --subring=profile,orders,billing --selection='{ kind name tier orderNo total plan }'
+kouten get --ring=users --limit=20 --selection='{ id name status }'
+kouten get --ring=users/123 --subring=profile,orders,billing --selection='{ kind name tier orderNo total plan }'
 ```
 
 The detail read starts from `users/123`. It does not need to scan every order or
@@ -54,13 +54,13 @@ Account data often has a natural owner coordinate. Put account-scoped records
 near the account, then narrow by subring or filter.
 
 ```sh
-roche put --ring=accounts/acme --payload='{"kind":"account","name":"Acme"}' --codec=json
-roche put --near=accounts/acme --ring=members --payload='{"kind":"member","user":"u1","role":"owner"}' --codec=json
-roche put --near=accounts/acme --ring=members --payload='{"kind":"member","user":"u2","role":"viewer"}' --codec=json
-roche put --near=accounts/acme --ring=audit --payload='{"kind":"audit","event":"member.invited","user":"u2"}' --codec=json
+kouten put --ring=accounts/acme --payload='{"kind":"account","name":"Acme"}' --codec=json
+kouten put --near=accounts/acme --ring=members --payload='{"kind":"member","user":"u1","role":"owner"}' --codec=json
+kouten put --near=accounts/acme --ring=members --payload='{"kind":"member","user":"u2","role":"viewer"}' --codec=json
+kouten put --near=accounts/acme --ring=audit --payload='{"kind":"audit","event":"member.invited","user":"u2"}' --codec=json
 
-roche get --ring=accounts/acme --subring=members --filter='{"role":"owner"}'
-roche get --ring=accounts/acme --subring=audit --limit=10
+kouten get --ring=accounts/acme --subring=members --filter='{"role":"owner"}'
+kouten get --ring=accounts/acme --subring=audit --limit=10
 ```
 
 This is a good fit for SaaS systems where most screens are scoped by tenant,
@@ -68,22 +68,22 @@ account, workspace, project, or user.
 
 ## Inventory With A Cooperative Lock
 
-RocheDB should not be positioned as a financial ledger. But ordinary inventory
+KoutenDB should not be positioned as a financial ledger. But ordinary inventory
 or status updates can use an opt-in coordinate lock plus an atomic batch so that
 application code does not accidentally perform partial writes.
 
 CLI sketch:
 
 ```sh
-roche put --ring=shops/1123/products/sku-9 --payload='{"kind":"stock","sku":"sku-9","available":12}' --codec=json
-roche get --ring=shops/1123/products/sku-9 --limit=1
+kouten put --ring=shops/1123/products/sku-9 --payload='{"kind":"stock","sku":"sku-9","available":12}' --codec=json
+kouten get --ring=shops/1123/products/sku-9 --limit=1
 ```
 
 Nim API shape:
 
 ```nim
 db.withRingLock("shops/1123/products/sku-9", proc() =
-  db.transaction(proc(tx: var RocheTx) =
+  db.transaction(proc(tx: var KoutenTx) =
     tx.update(stockId, %*{
       "kind": "stock",
       "sku": "sku-9",
@@ -104,7 +104,7 @@ Keep the lightweight path for normal reads and writes.
 ## Webhook Idempotency
 
 Webhook handlers often need to accept retries without duplicating effects. A
-simple RocheDB pattern is to keep the idempotency key in a dedicated ring and
+simple KoutenDB pattern is to keep the idempotency key in a dedicated ring and
 wrap the handler in a ring lock.
 
 ```nim
@@ -114,7 +114,7 @@ db.withRingLock(keyRing, proc() =
   if db.countByRing(keyRing) > 0:
     return
 
-  db.transaction(proc(tx: var RocheTx) =
+  db.transaction(proc(tx: var KoutenTx) =
     tx.put(%*{"kind": "webhook-seen", "event": "evt_123"}, ring = keyRing)
     tx.put(%*{"kind": "order-event", "event": "paid"}, ring = "orders/A-001/events")
   )
@@ -131,12 +131,12 @@ dumps, imports, backup scopes, and operational reasoning line up with the same
 boundary.
 
 ```sh
-roche put --ring=tenant/acme/users --payload='{"id":"u1","name":"Ada"}' --codec=json
-roche put --ring=tenant/acme/orders/2026 --payload='{"orderNo":"A-001","total":120}' --codec=json
-roche put --ring=tenant/globex/users --payload='{"id":"u9","name":"Grace"}' --codec=json
+kouten put --ring=tenant/acme/users --payload='{"id":"u1","name":"Ada"}' --codec=json
+kouten put --ring=tenant/acme/orders/2026 --payload='{"orderNo":"A-001","total":120}' --codec=json
+kouten put --ring=tenant/globex/users --payload='{"id":"u9","name":"Grace"}' --codec=json
 
-roche get --ring=tenant/acme/users --limit=50
-roche get --ring=tenant/acme --subring=users,orders
+kouten get --ring=tenant/acme/users --limit=50
+kouten get --ring=tenant/acme --subring=users,orders
 ```
 
 When stronger isolation is needed, use separate galaxies with separate
@@ -150,18 +150,18 @@ example, an order may be related to a user, a shop, and a product. Store each
 coordinate naturally, then attach them to one stellar lens.
 
 ```sh
-roche put --ring=users/123 --payload='{"kind":"user","name":"Ada"}' --codec=json
-roche put --ring=shops/1123 --payload='{"kind":"shop","name":"North Shop"}' --codec=json
-roche put --ring=products/sku-9 --payload='{"kind":"product","name":"Keyboard"}' --codec=json
-roche put --ring=orders/A-001 --payload='{"kind":"order","orderNo":"A-001"}' --codec=json
+kouten put --ring=users/123 --payload='{"kind":"user","name":"Ada"}' --codec=json
+kouten put --ring=shops/1123 --payload='{"kind":"shop","name":"North Shop"}' --codec=json
+kouten put --ring=products/sku-9 --payload='{"kind":"product","name":"Keyboard"}' --codec=json
+kouten put --ring=orders/A-001 --payload='{"kind":"order","orderNo":"A-001"}' --codec=json
 
-roche stellar attach --stellar=commerce/order/A-001 --ring=users/123
-roche stellar attach --stellar=commerce/order/A-001 --ring=shops/1123
-roche stellar attach --stellar=commerce/order/A-001 --ring=products/sku-9
-roche stellar attach --stellar=commerce/order/A-001 --ring=orders/A-001
+kouten stellar attach --stellar=commerce/order/A-001 --ring=users/123
+kouten stellar attach --stellar=commerce/order/A-001 --ring=shops/1123
+kouten stellar attach --stellar=commerce/order/A-001 --ring=products/sku-9
+kouten stellar attach --stellar=commerce/order/A-001 --ring=orders/A-001
 
-roche get --stellar=commerce/order/A-001
-roche get --stellar=commerce/order/A-001 --filter='{"kind":"shop"}'
+kouten get --stellar=commerce/order/A-001
+kouten get --stellar=commerce/order/A-001 --filter='{"kind":"shop"}'
 ```
 
 This is the "telescope" model: the stellar coordinate defines the field of
@@ -174,21 +174,21 @@ retrieval scope. This can reduce candidates before reranking, prompting, or
 token construction.
 
 ```sh
-roche put --ring=docs/security/passwords --payload='{"title":"Password reset","text":"..."}' --codec=json
-roche put --ring=docs/security/oauth --payload='{"title":"OAuth setup","text":"..."}' --codec=json
-roche put --ring=docs/billing/invoices --payload='{"title":"Invoice download","text":"..."}' --codec=json
+kouten put --ring=docs/security/passwords --payload='{"title":"Password reset","text":"..."}' --codec=json
+kouten put --ring=docs/security/oauth --payload='{"title":"OAuth setup","text":"..."}' --codec=json
+kouten put --ring=docs/billing/invoices --payload='{"title":"Invoice download","text":"..."}' --codec=json
 
-roche get --ring=docs/security --subring=passwords,oauth --selection='{ title text }'
-roche retrieve --ring=docs/security --budget=8
+kouten get --ring=docs/security --subring=passwords,oauth --selection='{ title text }'
+kouten retrieve --ring=docs/security --budget=8
 ```
 
-The point is not that RocheDB magically understands documents. The application,
-import rule, or pipeline gives RocheDB useful coordinates, and RocheDB makes
+The point is not that KoutenDB magically understands documents. The application,
+import rule, or pipeline gives KoutenDB useful coordinates, and KoutenDB makes
 those coordinates part of the read path.
 
 ## When Not To Use These Patterns
 
-Avoid forcing RocheDB into workflows that need:
+Avoid forcing KoutenDB into workflows that need:
 
 - globally strict serializable transactions across unrelated coordinates;
 - large analytical scans where a columnar engine is the correct tool;
@@ -196,6 +196,6 @@ Avoid forcing RocheDB into workflows that need:
 - payment-ledger semantics where an external proven ledger/payment system is
   the right boundary.
 
-RocheDB works best when the application already has meaningful locality:
+KoutenDB works best when the application already has meaningful locality:
 tenant, account, user, product, region, topic, time, corpus section, or workflow
 coordinate.

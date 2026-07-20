@@ -1,6 +1,6 @@
-# RocheDB C++ Driver
+# KoutenDB C++ Driver
 
-Minimal C++17 wrapper for RocheDB through the stable C ABI.
+Minimal C++17 wrapper for KoutenDB through the stable C ABI.
 
 This package is intentionally generic. Unreal-specific module packaging,
 Blueprint bindings, editor tooling, and engine lifecycle integration should live
@@ -9,7 +9,7 @@ in a separate commercial Unreal plugin.
 ## Requirements
 
 - C++17 compiler
-- `lib/librochedb.so` built from `src/rochedb_capi.nim`
+- `lib/libkoutendb.so` built from `src/koutendb_capi.nim`
 
 Build the native library from the repository root:
 
@@ -17,13 +17,13 @@ Build the native library from the repository root:
 scripts/build_capi.sh
 ```
 
-The script builds `lib/librochedb.so` with TLS support enabled for the C ABI.
+The script builds `lib/libkoutendb.so` with TLS support enabled for the C ABI.
 
 Build and run the smoke test:
 
 ```sh
-g++ -std=c++17 -Iinclude -Idrivers/cpp/include drivers/cpp/examples/contract_smoke.cpp -Llib -lrochedb -Wl,-rpath,'$ORIGIN/../../../lib' -o /tmp/roche_cpp_smoke
-LD_LIBRARY_PATH=lib /tmp/roche_cpp_smoke
+g++ -std=c++17 -Iinclude -Idrivers/cpp/include drivers/cpp/examples/contract_smoke.cpp -Llib -lkoutendb -Wl,-rpath,'$ORIGIN/../../../lib' -o /tmp/kouten_cpp_smoke
+LD_LIBRARY_PATH=lib /tmp/kouten_cpp_smoke
 ```
 
 ## Status
