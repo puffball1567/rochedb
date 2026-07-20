@@ -11,7 +11,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 mkdir -p bin
-nim c -d:release --nimcache:/tmp/nimcache_orbelias_vector_backend_bench \
+nim c -d:release --nimcache:/tmp/nimcache_kouten_vector_backend_bench \
   -o:bin/vector_backend_bench examples/vector_backend_bench.nim
 
 bin/vector_backend_bench \

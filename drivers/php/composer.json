@@ -1,6 +1,6 @@
 {
-  "name": "orbeliasdb/orbeliasdb",
-  "description": "PHP FFI driver for OrbeliasDB",
+  "name": "koutendb/koutendb",
+  "description": "PHP FFI driver for KoutenDB",
   "type": "library",
   "license": "Apache-2.0",
   "require": {
@@ -9,7 +9,7 @@
   },
   "autoload": {
     "psr-4": {
-      "OrbeliasDB\\": "src/"
+      "KoutenDB\\": "src/"
     }
   }
 }

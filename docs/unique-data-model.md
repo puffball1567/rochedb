@@ -1,11 +1,11 @@
 # Unique Data Model And Operating Patterns
 
-OrbeliasDB's current direction is not only "a faster key/value path". Its more
+KoutenDB's current direction is not only "a faster key/value path". Its more
 important direction is a placement-aware data model: the application stores
 records at meaningful coordinates, and those coordinates become part of the
 read path, maintenance path, dump/import boundary, and recovery topology.
 
-This document describes the OrbeliasDB-specific shapes that are emerging from the
+This document describes the KoutenDB-specific shapes that are emerging from the
 current implementation.
 
 ## Core Idea
@@ -17,11 +17,11 @@ Most databases separate these concerns:
 - how a query is tuned;
 - how data is dumped, restored, synchronized, or isolated.
 
-OrbeliasDB tries to make those concerns line up. A `ring` is not just a collection
+KoutenDB tries to make those concerns line up. A `ring` is not just a collection
 name. It is a coordinate that can reduce the working set before filtering,
 reranking, projection, or LLM/context processing.
 
-## OrbeliasDB-Specific Shapes
+## KoutenDB-Specific Shapes
 
 | Shape | What It Expresses | Why It Matters |
 |---|---|---|
@@ -43,46 +43,46 @@ users.id = orders.user_id
 shops.id = orders.shop_id
 ```
 
-OrbeliasDB can store the same facts as separate coordinates:
+KoutenDB can store the same facts as separate coordinates:
 
 ```bash
-orbelias put --ring=users/123 \
+kouten put --ring=users/123 \
   --payload='{"kind":"user","name":"Alice"}' --codec=json
 
-orbelias put --ring=shops/1123 \
+kouten put --ring=shops/1123 \
   --payload='{"kind":"shop","name":"Orbit Store"}' --codec=json
 
-orbelias put --ring=orders/A-001 \
+kouten put --ring=orders/A-001 \
   --payload='{"kind":"order","orderNo":"A-001","total":42}' --codec=json
 ```
 
 Then it can attach those existing coordinates to a stellar lens:
 
 ```bash
-orbelias stellar attach --stellar=commerce/order/A-001 --ring=users/123
-orbelias stellar attach --stellar=commerce/order/A-001 --ring=shops/1123
-orbelias stellar attach --stellar=commerce/order/A-001 --ring=orders/A-001
+kouten stellar attach --stellar=commerce/order/A-001 --ring=users/123
+kouten stellar attach --stellar=commerce/order/A-001 --ring=shops/1123
+kouten stellar attach --stellar=commerce/order/A-001 --ring=orders/A-001
 ```
 
 Now the order-centered read can see the nearby facts:
 
 ```bash
-orbelias get --stellar=commerce/order/A-001
+kouten get --stellar=commerce/order/A-001
 ```
 
 The caller can narrow the visible field:
 
 ```bash
-orbelias get --stellar=commerce/order/A-001 --subring=shops
-orbelias get --stellar=commerce/order/A-001 --filter='{"kind":"order"}'
-orbelias get --stellar=commerce/order/A-001 --selection='{ kind name orderNo total }'
+kouten get --stellar=commerce/order/A-001 --subring=shops
+kouten get --stellar=commerce/order/A-001 --filter='{"kind":"order"}'
+kouten get --stellar=commerce/order/A-001 --selection='{ kind name orderNo total }'
 ```
 
 Attach/detach does not copy the payload. It changes the visibility metadata of
 the stellar lens:
 
 ```bash
-orbelias stellar detach --stellar=commerce/order/A-001 --ring=shops/1123
+kouten stellar detach --stellar=commerce/order/A-001 --ring=shops/1123
 ```
 
 This is not the same as a relational constraint. It is also not a global
@@ -94,7 +94,7 @@ use opt-in locks and atomic batches:
 
 ```nim
 db.withStellarLock("commerce/order/A-001", proc() =
-  db.transaction(proc(tx: OrbeliasTx) =
+  db.transaction(proc(tx: KoutenTx) =
     discard tx.put("""{"kind":"event","status":"processing"}""",
                    ring = "orders/A-001/events")
   )
@@ -122,7 +122,7 @@ Examples:
 
 ## Where It Is Not A Fit
 
-OrbeliasDB should not pretend this model replaces every database shape.
+KoutenDB should not pretend this model replaces every database shape.
 
 It is weaker when:
 
@@ -133,7 +133,7 @@ It is weaker when:
 - the application cannot express useful placement.
 
 The stronger claim is narrower: when the application has meaningful locality,
-OrbeliasDB can make that locality part of the database model instead of rebuilding
+KoutenDB can make that locality part of the database model instead of rebuilding
 it after every query.
 
 ## Demo

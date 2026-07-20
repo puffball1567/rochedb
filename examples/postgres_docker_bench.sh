@@ -4,20 +4,20 @@ set -euo pipefail
 N="${N:-10000}"
 PAYLOAD_BYTES="${PAYLOAD_BYTES:-100}"
 POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:14}"
-ORBELIASD_IMAGE="${ORBELIASD_IMAGE:-orbeliasdb-bench:local}"
-NETWORK="${NETWORK:-orbeliasdb-postgres-bench-$$}"
-PG_CONTAINER="${PG_CONTAINER:-orbelias-postgres-bench-$$}"
-ORBELIASD_PREFIX="${ORBELIASD_PREFIX:-orbelias-pg-orbeliasd-$$}"
+KOUTEND_IMAGE="${KOUTEND_IMAGE:-koutendb-bench:local}"
+NETWORK="${NETWORK:-koutendb-postgres-bench-$$}"
+PG_CONTAINER="${PG_CONTAINER:-kouten-postgres-bench-$$}"
+KOUTEND_PREFIX="${KOUTEND_PREFIX:-kouten-pg-koutend-$$}"
 BUILD_IMAGE="${BUILD_IMAGE:-1}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TMP_ROOT="${ORBELIAS_BENCH_TMP:-$ROOT/.tmp/orbeliasdb-postgres-docker-bench-$$}"
-ORBELIAS_DATA="$TMP_ROOT/orbelias"
+TMP_ROOT="${KOUTEN_BENCH_TMP:-$ROOT/.tmp/koutendb-postgres-docker-bench-$$}"
+KOUTEN_DATA="$TMP_ROOT/kouten"
 POSTGRES_DATA="$TMP_ROOT/postgres"
-PEERS="${ORBELIASD_PREFIX}0:17301,${ORBELIASD_PREFIX}1:17301,${ORBELIASD_PREFIX}2:17301"
+PEERS="${KOUTEND_PREFIX}0:17301,${KOUTEND_PREFIX}1:17301,${KOUTEND_PREFIX}2:17301"
 
 cleanup() {
-  docker rm -f "$PG_CONTAINER" "${ORBELIASD_PREFIX}0" "${ORBELIASD_PREFIX}1" "${ORBELIASD_PREFIX}2" >/dev/null 2>&1 || true
+  docker rm -f "$PG_CONTAINER" "${KOUTEND_PREFIX}0" "${KOUTEND_PREFIX}1" "${KOUTEND_PREFIX}2" >/dev/null 2>&1 || true
   docker network rm "$NETWORK" >/dev/null 2>&1 || true
   rm -rf "$TMP_ROOT"
 }
@@ -31,35 +31,35 @@ fi
 cd "$ROOT"
 
 if [[ "$BUILD_IMAGE" == "1" ]]; then
-  echo "[postgres-docker-bench] build OrbeliasDB image $ORBELIASD_IMAGE"
-  docker build -f examples/compose/Dockerfile -t "$ORBELIASD_IMAGE" .
+  echo "[postgres-docker-bench] build KoutenDB image $KOUTEND_IMAGE"
+  docker build -f examples/compose/Dockerfile -t "$KOUTEND_IMAGE" .
 fi
 
 cleanup
 docker network create "$NETWORK" >/dev/null
-mkdir -p "$ORBELIAS_DATA" "$POSTGRES_DATA"
+mkdir -p "$KOUTEN_DATA" "$POSTGRES_DATA"
 
-echo "[postgres-docker-bench] start OrbeliasDB cluster on Docker network $NETWORK"
+echo "[postgres-docker-bench] start KoutenDB cluster on Docker network $NETWORK"
 for id in 0 1 2; do
-  mkdir -p "$ORBELIAS_DATA/node$id"
-  docker run -d --rm --network "$NETWORK" --name "${ORBELIASD_PREFIX}${id}" \
-    -v "$ORBELIAS_DATA/node$id:/data" \
-    "$ORBELIASD_IMAGE" --id="$id" --peers="$PEERS" --slow-tick=0.05 >/dev/null
+  mkdir -p "$KOUTEN_DATA/node$id"
+  docker run -d --rm --network "$NETWORK" --name "${KOUTEND_PREFIX}${id}" \
+    -v "$KOUTEN_DATA/node$id:/data" \
+    "$KOUTEND_IMAGE" --id="$id" --peers="$PEERS" --slow-tick=0.05 >/dev/null
 done
 
 for _ in $(seq 1 50); do
-  if docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/orbeliascli \
-    "$ORBELIASD_IMAGE" health --peers="$PEERS" >/dev/null 2>&1; then
+  if docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/koutencli \
+    "$KOUTEND_IMAGE" health --peers="$PEERS" >/dev/null 2>&1; then
     break
   fi
   sleep 0.1
 done
-docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/orbeliascli \
-  "$ORBELIASD_IMAGE" health --peers="$PEERS" >/dev/null
+docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/koutencli \
+  "$KOUTEND_IMAGE" health --peers="$PEERS" >/dev/null
 
-echo "[postgres-docker-bench] OrbeliasDB cluster benchmark"
-docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/orbeliascli \
-  "$ORBELIASD_IMAGE" bench --peers="$PEERS" --n="$N"
+echo "[postgres-docker-bench] KoutenDB cluster benchmark"
+docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/koutencli \
+  "$KOUTEND_IMAGE" bench --peers="$PEERS" --n="$N"
 
 echo "[postgres-docker-bench] start PostgreSQL container"
 docker run -d --rm --network "$NETWORK" --name "$PG_CONTAINER" \

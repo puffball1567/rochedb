@@ -1,25 +1,25 @@
-# OrbeliasDB v0.5.0
+# KoutenDB v0.5.0
 
-OrbeliasDB v0.5.0 is a technical-preview release focused on making OrbeliasDB's
+KoutenDB v0.5.0 is a technical-preview release focused on making KoutenDB's
 placement-aware data model more explicit and more useful for ordinary
 application workflows.
 
 Release:
 
-https://github.com/puffball1567/orbeliasdb/releases/tag/v0.5.0
+https://github.com/puffball1567/koutendb/releases/tag/v0.5.0
 
-OrbeliasDB is still not presented as a production replacement for Redis,
+KoutenDB is still not presented as a production replacement for Redis,
 PostgreSQL, MongoDB, Apache Arrow, or a dedicated vector database. The stronger
-claim in this release is narrower: OrbeliasDB can make meaningful data placement
+claim in this release is narrower: KoutenDB can make meaningful data placement
 part of the read path, operating boundary, and high-integrity application
 workflow.
 
 ## Main Changes
 
 - Added stellar locality lens workflows.
-- Added `orbelias get --stellar=...` with `--subring`, filter, selection, and
+- Added `kouten get --stellar=...` with `--subring`, filter, selection, and
   grouped output.
-- Added `orbelias stellar attach|detach|list`.
+- Added `kouten stellar attach|detach|list`.
 - Added non-copy visibility metadata for existing rings.
 - Added embedded atomic bulk helpers:
   - `batchPutAtomic`
@@ -39,7 +39,7 @@ workflow.
 
 ## Why This Release Matters
 
-OrbeliasDB's model is no longer only "place records in rings and retrieve from
+KoutenDB's model is no longer only "place records in rings and retrieve from
 rings". This release adds a clearer shape for application data:
 
 ```text
@@ -50,32 +50,32 @@ lock     = opt-in coordination around a coordinate or lens
 atomic   = all-or-nothing embedded bulk workflow
 ```
 
-This makes OrbeliasDB more useful for ordinary application domains such as SaaS,
+This makes KoutenDB more useful for ordinary application domains such as SaaS,
 CRM, support tools, catalogs, user/order detail views, and AI/RAG knowledge
-systems. It does not turn OrbeliasDB into a payment ledger or a financial core
+systems. It does not turn KoutenDB into a payment ledger or a financial core
 database, but it gives application workflows stronger primitives around
 external payment systems, retries, webhooks, and coordinated updates.
 
 ## Example
 
 ```sh
-orbelias put --ring=users/123 \
+kouten put --ring=users/123 \
   --payload='{"kind":"user","name":"Alice"}' --codec=json
 
-orbelias put --ring=shops/1123 \
+kouten put --ring=shops/1123 \
   --payload='{"kind":"shop","name":"Orbit Store"}' --codec=json
 
-orbelias put --ring=orders/A-001 \
+kouten put --ring=orders/A-001 \
   --payload='{"kind":"order","orderNo":"A-001","total":42}' --codec=json
 
-orbelias stellar attach --stellar=commerce/order/A-001 --ring=users/123
-orbelias stellar attach --stellar=commerce/order/A-001 --ring=shops/1123
-orbelias stellar attach --stellar=commerce/order/A-001 --ring=orders/A-001
+kouten stellar attach --stellar=commerce/order/A-001 --ring=users/123
+kouten stellar attach --stellar=commerce/order/A-001 --ring=shops/1123
+kouten stellar attach --stellar=commerce/order/A-001 --ring=orders/A-001
 
-orbelias get --stellar=commerce/order/A-001 \
+kouten get --stellar=commerce/order/A-001 \
   --selection='{ kind name orderNo total }'
 
-orbelias get --stellar=commerce/order/A-001 --subring=shops
+kouten get --stellar=commerce/order/A-001 --subring=shops
 ```
 
 ## Benchmark Notes
@@ -88,8 +88,8 @@ The headline working-set results remain stable:
   in the light verification run.
 - Synthetic RAG benchmark: recall stayed `1.000` while scanned/query dropped
   `8000 -> 1000` and estimated tokens/query dropped `3955 -> 657`.
-- Local Redis comparison: OrbeliasDB single TCP GET remains in the same latency
-  class as Redis GET, while OrbeliasDB batch get remains faster than Redis
+- Local Redis comparison: KoutenDB single TCP GET remains in the same latency
+  class as Redis GET, while KoutenDB batch get remains faster than Redis
   pipeline GET in the local helper run.
 
 These are local benchmark results, not universal performance claims. The point
@@ -100,8 +100,8 @@ local read path.
 
 The local verification pass included:
 
-- `nim check src/orbeliasdb.nim`
-- `nim check src/orbeliascli.nim`
+- `nim check src/koutendb.nim`
+- `nim check src/koutencli.nim`
 - `scripts/test_core.sh`
 - `scripts/cli_crud_smoke.sh`
 - working-set, memory-pressure, RAG, Redis, PostgreSQL, and Docker-Docker
@@ -114,4 +114,4 @@ The local verification pass included:
 - Dynamic membership / arc-table based remapping is still planned.
 - Cooperative locks are embedded opt-in workflow guards in this release; normal
   `put`, `get`, `list`, and `retrieve` paths do not check them.
-- OrbeliasDB is not a payment ledger or a financial-core database.
+- KoutenDB is not a payment ledger or a financial-core database.

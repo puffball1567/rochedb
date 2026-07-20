@@ -1,0 +1,5 @@
+module CKoutenDB [system] {
+  header "../../../../include/koutendb.h"
+  link "koutendb"
+  export *
+}

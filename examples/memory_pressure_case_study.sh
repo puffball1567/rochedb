@@ -8,25 +8,25 @@ BUDGET="${BUDGET:-20}"
 PAYLOAD_BYTES="${PAYLOAD_BYTES:-512}"
 RUN_REDIS="${RUN_REDIS:-1}"
 REDIS_IMAGE="${REDIS_IMAGE:-redis:7-alpine}"
-CONTAINER_NAME="${CONTAINER_NAME:-orbelias-memory-case-redis}"
+CONTAINER_NAME="${CONTAINER_NAME:-kouten-memory-case-redis}"
 REDIS_PORT="${REDIS_PORT:-6379}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 mkdir -p bin
-nim c -d:release --nimcache:/tmp/nimcache_orbeliascli_case -o:bin/orbeliascli src/orbeliascli.nim
+nim c -d:release --nimcache:/tmp/nimcache_koutencli_case -o:bin/koutencli src/koutencli.nim
 
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-echo "== OrbeliasDB memory pressure case study =="
+echo "== KoutenDB memory pressure case study =="
 echo "n=$N rings=$RINGS queries=$QUERIES budget=$BUDGET payload=${PAYLOAD_BYTES}B"
 echo
 
-bin/orbeliascli memory-pressure-bench \
+bin/koutencli memory-pressure-bench \
   --n="$N" \
   --rings="$RINGS" \
   --queries="$QUERIES" \
@@ -54,7 +54,7 @@ for _ in {1..50}; do
   sleep 0.1
 done
 
-bin/orbeliascli redis-bench \
+bin/koutencli redis-bench \
   --n="${REDIS_N:-1000}" \
   --payload-bytes="$PAYLOAD_BYTES" \
   --redis="127.0.0.1:${REDIS_PORT}"

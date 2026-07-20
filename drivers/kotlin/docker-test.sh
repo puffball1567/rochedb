@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IMAGE="${KOTLIN_IMAGE:-orbeliasdb-kotlin:2.0.21-jdk21}"
+IMAGE="${KOTLIN_IMAGE:-koutendb-kotlin:2.0.21-jdk21}"
 
 if [[ "${KOTLIN_REBUILD:-0}" == "1" ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   docker build -t "$IMAGE" "$ROOT/drivers/kotlin"
@@ -16,14 +16,14 @@ docker run --rm \
     set -euo pipefail
     g++ -std=c++17 -fPIC -shared \
       -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" -I/work/include \
-      /work/drivers/kotlin/native/orbeliasdb_jni.cpp \
-      -L/work/lib -lorbeliasdb \
+      /work/drivers/kotlin/native/koutendb_jni.cpp \
+      -L/work/lib -lkoutendb \
       -Wl,-rpath,/work/lib \
-      -o /tmp/liborbeliasdb_jni.so
+      -o /tmp/libkoutendb_jni.so
     kotlinc \
-      /work/drivers/kotlin/src/main/kotlin/org/orbeliasdb/OrbeliasDb.kt \
+      /work/drivers/kotlin/src/main/kotlin/org/koutendb/KoutenDb.kt \
       /work/drivers/kotlin/smoke/ContractSmoke.kt \
       -include-runtime \
-      -d /tmp/orbeliasdb-kotlin-smoke.jar
-    LD_LIBRARY_PATH=/tmp:/work/lib java -Djava.library.path=/tmp:/work/lib -jar /tmp/orbeliasdb-kotlin-smoke.jar
+      -d /tmp/koutendb-kotlin-smoke.jar
+    LD_LIBRARY_PATH=/tmp:/work/lib java -Djava.library.path=/tmp:/work/lib -jar /tmp/koutendb-kotlin-smoke.jar
   '

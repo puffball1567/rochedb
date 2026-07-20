@@ -1,6 +1,6 @@
-# OrbeliasDB Topology Pattern Catalog
+# KoutenDB Topology Pattern Catalog
 
-This document is a pattern catalog for mapping OrbeliasDB's universe / galaxy /
+This document is a pattern catalog for mapping KoutenDB's universe / galaxy /
 ring model to real deployments. Use it like a cloud design-pattern guide:
 choose what you want to build, copy the closest topology, then simplify it.
 Start simple. Add universes, remote placements, and shared galaxy
@@ -10,7 +10,7 @@ authentication profiles only when they solve an operational problem.
 
 | Term | Practical meaning |
 |---|---|
-| `galaxy` | One OrbeliasDB database, data boundary, and authentication boundary |
+| `galaxy` | One KoutenDB database, data boundary, and authentication boundary |
 | `ring` | A table-like locality and retrieval scope inside one galaxy |
 | `universe` | A parallel placement of the same galaxy names for recovery and future replication |
 | `endpoint` | Physical placement hint; not galaxy identity |
@@ -19,7 +19,7 @@ authentication profiles only when they solve an operational problem.
 
 Rules that keep the topology safe:
 
-- One OrbeliasDB instance should normally represent one galaxy.
+- One KoutenDB instance should normally represent one galaxy.
 - Every universe in one topology must contain the same galaxy names.
 - The same endpoint may host multiple galaxies.
 - Different universes may point at the same endpoint.
@@ -30,7 +30,7 @@ Rules that keep the topology safe:
 
 ### Use When
 
-You want the smallest useful OrbeliasDB deployment for local development, embedded
+You want the smallest useful KoutenDB deployment for local development, embedded
 tools, a small service, or the first production test.
 
 ### Shape
@@ -52,12 +52,12 @@ docker compose -f examples/compose/single-galaxy.compose.yml up --build
 Run one server:
 
 ```sh
-bin/orbeliasd --id=0 --peers=127.0.0.1:7301 \
+bin/koutend --id=0 --peers=127.0.0.1:7301 \
   --data=.data/app-main \
   --galaxy=app-main \
   --user=app \
-  --password-file=/run/secrets/orbelias_app_password \
-  --secret-key-file=/run/secrets/orbelias_app_secret_key
+  --password-file=/run/secrets/kouten_app_password \
+  --secret-key-file=/run/secrets/kouten_app_secret_key
 ```
 
 Use rings to express locality:
@@ -90,18 +90,18 @@ galaxy: audit-log
 
 ### Manual Equivalent
 
-Each galaxy can run as a separate OrbeliasDB instance:
+Each galaxy can run as a separate KoutenDB instance:
 
 ```sh
-bin/orbeliasd --id=0 --peers=127.0.0.1:7311 --data=.data/training-data \
+bin/koutend --id=0 --peers=127.0.0.1:7311 --data=.data/training-data \
   --galaxy=training-data --user=train \
-  --password-file=/run/secrets/orbelias_train_password \
-  --secret-key-file=/run/secrets/orbelias_train_secret_key
+  --password-file=/run/secrets/kouten_train_password \
+  --secret-key-file=/run/secrets/kouten_train_secret_key
 
-bin/orbeliasd --id=0 --peers=127.0.0.1:7321 --data=.data/prompt-cache \
+bin/koutend --id=0 --peers=127.0.0.1:7321 --data=.data/prompt-cache \
   --galaxy=prompt-cache --user=cache \
-  --password-file=/run/secrets/orbelias_cache_password \
-  --secret-key-file=/run/secrets/orbelias_cache_secret_key
+  --password-file=/run/secrets/kouten_cache_password \
+  --secret-key-file=/run/secrets/kouten_cache_secret_key
 ```
 
 Choose this when compromise of one dataset must not imply compromise of the
@@ -127,7 +127,7 @@ manager or runtime environment.
   "authProfiles": {
     "shared-ai": {
       "mode": "user-password-secret-key",
-      "source": "secret-manager:orbelias/shared-ai"
+      "source": "secret-manager:kouten/shared-ai"
     }
   },
   "universes": [
@@ -174,7 +174,7 @@ names.
   "authProfiles": {
     "shared-ai": {
       "mode": "user-password-secret-key",
-      "source": "secret-manager:orbelias/shared-ai"
+      "source": "secret-manager:kouten/shared-ai"
     }
   },
   "universes": [
@@ -196,7 +196,7 @@ names.
     {
       "universe": "oregon-a",
       "location": "remote",
-      "endpoint": "orbelias://oregon.example.internal:7301",
+      "endpoint": "kouten://oregon.example.internal:7301",
       "authRef": "shared-ai",
       "galaxies": [
         {
@@ -215,7 +215,7 @@ names.
 ```
 
 `readonly` is useful for remote, restore-only, audit, or analysis placements.
-It does not make the archive unhealthy; it only means OrbeliasDB should not write
+It does not make the archive unhealthy; it only means KoutenDB should not write
 there during `recovery-backup`.
 
 ### Tradeoffs
@@ -228,7 +228,7 @@ policy, and restore drills around it.
 
 ### Use When
 
-One physical node, host, or service endpoint runs multiple OrbeliasDB galaxies.
+One physical node, host, or service endpoint runs multiple KoutenDB galaxies.
 This often happens in small staging environments, local demos, or consolidated
 internal services.
 
@@ -240,7 +240,7 @@ This is allowed. Endpoint is physical placement, not identity.
     {
       "universe": "rack-a",
       "location": "remote",
-      "endpoint": "orbelias://node-a.internal:7301",
+      "endpoint": "kouten://node-a.internal:7301",
       "galaxies": [
         {
           "galaxy": "training-data",
@@ -255,7 +255,7 @@ This is allowed. Endpoint is physical placement, not identity.
     {
       "universe": "rack-b",
       "location": "remote",
-      "endpoint": "orbelias://node-a.internal:7301",
+      "endpoint": "kouten://node-a.internal:7301",
       "galaxies": [
         {
           "galaxy": "training-data",
@@ -305,13 +305,13 @@ Do not do this:
 }
 ```
 
-OrbeliasDB rejects this because the archive and policy target are ambiguous.
+KoutenDB rejects this because the archive and policy target are ambiguous.
 
 ## Pattern 7. Three-Node Galaxy Cluster
 
 ### Use When
 
-You want to test OrbeliasDB's cluster wire path and one galaxy spread across
+You want to test KoutenDB's cluster wire path and one galaxy spread across
 multiple nodes.
 
 ### Docker Compose Demo
@@ -324,9 +324,9 @@ docker compose -f examples/compose/three-node-galaxy.compose.yml up --build
 
 ```text
 galaxy: training-data
-  node0: orbelias-node0:7301
-  node1: orbelias-node1:7301
-  node2: orbelias-node2:7301
+  node0: kouten-node0:7301
+  node1: kouten-node1:7301
+  node2: kouten-node2:7301
 ```
 
 ### Tradeoffs
@@ -346,7 +346,7 @@ You want a visible local/remote style topology with multiple galaxies.
 examples/local_remote_galaxy_demo.sh
 ```
 
-The script starts four OrbeliasDB instances:
+The script starts four KoutenDB instances:
 
 ```text
 training-data local
@@ -381,7 +381,7 @@ universe: remote
 
 This is useful for explaining the concept. In production, place remote
 universes on truly independent infrastructure and validate recovery with
-`orbelias recovery-status` and restore drills.
+`kouten recovery-status` and restore drills.
 
 ## Pattern 9. Durable Universe Sync Demo
 
@@ -399,17 +399,17 @@ examples/universe_sync_demo.sh
 The local demo script creates separate source and target data directories,
 enqueues a universe sync event, applies it idempotently to the target,
 acknowledges it in the source outbox, and prunes the acknowledged event. It
-then repeats the same boundary through `orbelias universe-export` and
-`orbelias universe-sync`.
+then repeats the same boundary through `kouten universe-export` and
+`kouten universe-sync`.
 
 Remote delivery uses the same source outbox but sends events to a running
-OrbeliasDB server:
+KoutenDB server:
 
 ```sh
-orbelias universe-status --data=/var/lib/orbelias-source
-orbelias universe-sync --data=/var/lib/orbelias-source \
-  --peers=remote-orbelias.internal:7301 --prune-acked
-orbelias universe-status --peers=remote-orbelias.internal:7301
+kouten universe-status --data=/var/lib/kouten-source
+kouten universe-sync --data=/var/lib/kouten-source \
+  --peers=remote-kouten.internal:7301 --prune-acked
+kouten universe-status --peers=remote-kouten.internal:7301
 ```
 
 Runnable remote smoke:
@@ -453,6 +453,6 @@ Runnable Compose examples live under:
 - [examples/compose/three-node-galaxy.compose.yml](../examples/compose/three-node-galaxy.compose.yml)
 - [examples/compose/local-remote-universe.compose.yml](../examples/compose/local-remote-universe.compose.yml)
 
-They build the local source tree into a small OrbeliasDB runtime container and run
-`orbeliasd` with explicit galaxy credentials. They are examples, not production
+They build the local source tree into a small KoutenDB runtime container and run
+`koutend` with explicit galaxy credentials. They are examples, not production
 hardening guides.

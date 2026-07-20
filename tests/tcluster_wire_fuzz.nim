@@ -4,8 +4,8 @@
 ## frames that previously could block or escape the connection boundary.
 
 import std/[net, os, strutils, unittest]
-import ../src/orbelias/payload
-import ../src/orbelias/wire
+import ../src/kouten/payload
+import ../src/kouten/wire
 
 type FuzzCase = object
   name: string
@@ -39,7 +39,7 @@ proc checkAlive(peers: seq[Peer], label: string) =
 
 suite "cluster wire fuzz":
   test "malformed frames close only the offending connection":
-    let peers = getEnv("ORBELIAS_TEST_PEERS",
+    let peers = getEnv("KOUTEN_TEST_PEERS",
       "127.0.0.1:17711,127.0.0.1:17712,127.0.0.1:17713")
     let ps = parsePeers(peers)
     let deepJson = repeat("{\"x\":", 140) & "\"v\"" & repeat("}", 140)

@@ -1,6 +1,6 @@
 # Query Safety
 
-OrbeliasDB does not execute SQL, so its query-safety surface is different from a
+KoutenDB does not execute SQL, so its query-safety surface is different from a
 SQL database.
 
 The two important pieces are:
@@ -9,7 +9,7 @@ The two important pieces are:
 - typed filter builders for read filters.
 
 Both are designed to avoid string-concatenated query text while keeping
-OrbeliasDB's read path centered on a `ring` or `stellar` coordinate.
+KoutenDB's read path centered on a `ring` or `stellar` coordinate.
 
 ## Prepared Selections
 
@@ -35,11 +35,11 @@ interpolated into it.
 Filters are still represented as JSON objects internally and on the wire. That
 keeps the CLI, C ABI, and existing drivers compatible.
 
-For application code, OrbeliasDB also provides a builder so callers do not need to
+For application code, KoutenDB also provides a builder so callers do not need to
 construct filter JSON by string concatenation:
 
 ```nim
-let filter = orbeliasFilter().eq("status", "draft").eq("kind", "order")
+let filter = koutenFilter().eq("status", "draft").eq("kind", "order")
 
 let page = db.readRing("docs/japan", defaultReadOptions().withFilter(filter))
 ```
@@ -48,14 +48,14 @@ The same filter can be used with stellar reads:
 
 ```nim
 let page = db.readStellar("commerce/order/A-001",
-  defaultStellarOptions().withFilter(orbeliasFilter().eq("kind", "shop")))
+  defaultStellarOptions().withFilter(koutenFilter().eq("kind", "shop")))
 ```
 
 ID reads can also be built without manually stringifying the ID:
 
 ```nim
 let page = db.readRing("users", defaultReadOptions().withFilter(
-  orbeliasFilter().id(userId)))
+  koutenFilter().id(userId)))
 ```
 
 Supported builder values:
@@ -65,32 +65,32 @@ Supported builder values:
 - floats;
 - booleans;
 - explicit `JsonNode` values;
-- OrbeliasDB IDs through `id(id)`.
+- KoutenDB IDs through `id(id)`.
 
 ## Scope Comes First
 
-The filter builder is not intended to turn OrbeliasDB into an ad-hoc global query
+The filter builder is not intended to turn KoutenDB into an ad-hoc global query
 engine.
 
-OrbeliasDB's read model remains:
+KoutenDB's read model remains:
 
 1. choose a `ring` or `stellar` coordinate;
 2. optionally narrow with `subring`;
 3. apply typed filters inside that local scope;
 4. project only the requested fields.
 
-This keeps query safety aligned with the main OrbeliasDB idea: avoid unrelated
+This keeps query safety aligned with the main KoutenDB idea: avoid unrelated
 working sets before downstream work begins.
 
 ## Server-Side Cost Guards
 
-`orbeliasd` also enforces bounded network query work. `RETRIEVE` requests have a
+`koutend` also enforces bounded network query work. `RETRIEVE` requests have a
 maximum result budget and a maximum vector scan count. If a request crosses
 those bounds, the server returns a stable `ERR bad-request` instead of keeping
 the single-threaded server busy indefinitely.
 
 The normal fix is not to raise the cap first. Prefer a `ring`, `stellar`, child
-scope, or narrower retrieval plan so OrbeliasDB can reduce the candidate set before
+scope, or narrower retrieval plan so KoutenDB can reduce the candidate set before
 scoring. This turns unsafe broad scans into an observable tuning problem instead
 of hiding them behind a slow global query.
 
@@ -99,12 +99,12 @@ of hiding them behind a slow global query.
 These two forms are equivalent:
 
 ```nim
-let a = db.readRing("docs", OrbeliasReadOptions(
+let a = db.readRing("docs", KoutenReadOptions(
   filter: %*{"status": "draft"},
   selection: "{ title }"))
 
 let b = db.readRing("docs", defaultReadOptions()
-  .withFilter(orbeliasFilter().eq("status", "draft")))
+  .withFilter(koutenFilter().eq("status", "draft")))
 ```
 
 The builder-produced filter is a defensive JSON object copy. It can be passed

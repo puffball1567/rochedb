@@ -4,16 +4,16 @@ set -euo pipefail
 N="${N:-1000}"
 PAYLOAD_BYTES="${PAYLOAD_BYTES:-100}"
 REDIS_IMAGE="${REDIS_IMAGE:-redis:7-alpine}"
-ORBELIASD_IMAGE="${ORBELIASD_IMAGE:-orbeliasdb-bench:local}"
-NETWORK="${NETWORK:-orbeliasdb-redis-bench-$$}"
-REDIS_CONTAINER="${REDIS_CONTAINER:-orbelias-redis-bench-$$}"
-ORBELIASD_CONTAINER="${ORBELIASD_CONTAINER:-orbeliasd-redis-bench-$$}"
+KOUTEND_IMAGE="${KOUTEND_IMAGE:-koutendb-bench:local}"
+NETWORK="${NETWORK:-koutendb-redis-bench-$$}"
+REDIS_CONTAINER="${REDIS_CONTAINER:-kouten-redis-bench-$$}"
+KOUTEND_CONTAINER="${KOUTEND_CONTAINER:-koutend-redis-bench-$$}"
 BUILD_IMAGE="${BUILD_IMAGE:-1}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 cleanup() {
-  docker rm -f "$REDIS_CONTAINER" "$ORBELIASD_CONTAINER" >/dev/null 2>&1 || true
+  docker rm -f "$REDIS_CONTAINER" "$KOUTEND_CONTAINER" >/dev/null 2>&1 || true
   docker network rm "$NETWORK" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -26,8 +26,8 @@ fi
 cd "$ROOT"
 
 if [[ "$BUILD_IMAGE" == "1" ]]; then
-  echo "[redis-docker-bench] build OrbeliasDB image $ORBELIASD_IMAGE"
-  docker build -f examples/compose/Dockerfile -t "$ORBELIASD_IMAGE" .
+  echo "[redis-docker-bench] build KoutenDB image $KOUTEND_IMAGE"
+  docker build -f examples/compose/Dockerfile -t "$KOUTEND_IMAGE" .
 fi
 
 cleanup
@@ -44,24 +44,24 @@ for _ in $(seq 1 50); do
 done
 docker exec "$REDIS_CONTAINER" redis-cli ping >/dev/null
 
-echo "[redis-docker-bench] start OrbeliasDB container"
-docker run -d --rm --network "$NETWORK" --name "$ORBELIASD_CONTAINER" \
-  "$ORBELIASD_IMAGE" --id=0 --peers=0.0.0.0:17301 >/dev/null
+echo "[redis-docker-bench] start KoutenDB container"
+docker run -d --rm --network "$NETWORK" --name "$KOUTEND_CONTAINER" \
+  "$KOUTEND_IMAGE" --id=0 --peers=0.0.0.0:17301 >/dev/null
 
 for _ in $(seq 1 50); do
-  if docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/orbeliascli \
-    "$ORBELIASD_IMAGE" health --peers="$ORBELIASD_CONTAINER:17301" >/dev/null 2>&1; then
+  if docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/koutencli \
+    "$KOUTEND_IMAGE" health --peers="$KOUTEND_CONTAINER:17301" >/dev/null 2>&1; then
     break
   fi
   sleep 0.1
 done
-docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/orbeliascli \
-  "$ORBELIASD_IMAGE" health --peers="$ORBELIASD_CONTAINER:17301" >/dev/null
+docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/koutencli \
+  "$KOUTEND_IMAGE" health --peers="$KOUTEND_CONTAINER:17301" >/dev/null
 
-echo "[redis-docker-bench] run OrbeliasDB/Redis benchmark inside Docker network"
-docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/orbeliascli \
-  "$ORBELIASD_IMAGE" redis-bench \
+echo "[redis-docker-bench] run KoutenDB/Redis benchmark inside Docker network"
+docker run --rm --network "$NETWORK" --entrypoint /usr/local/bin/koutencli \
+  "$KOUTEND_IMAGE" redis-bench \
   --n="$N" \
   --payload-bytes="$PAYLOAD_BYTES" \
   --redis="$REDIS_CONTAINER:6379" \
-  --peers="$ORBELIASD_CONTAINER:17301"
+  --peers="$KOUTEND_CONTAINER:17301"

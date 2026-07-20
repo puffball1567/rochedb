@@ -5,7 +5,7 @@ title: Payload Codecs
 
 # Payload Codecs
 
-OrbeliasDB stores payloads as binary-safe byte strings and records a format
+KoutenDB stores payloads as binary-safe byte strings and records a format
 identifier with each document. The supported identifiers are:
 
 | Codec | Intended use | Core behavior |
@@ -17,9 +17,9 @@ identifier with each document. The supported identifiers are:
 
 NIF/BIF support in the core means format-aware storage, WAL persistence,
 cluster transport, handoff, transaction apply, Universe sync, list, get, and
-retrieval. OrbeliasDB does not bundle a NIF/BIF encoder or decoder into the core.
+retrieval. KoutenDB does not bundle a NIF/BIF encoder or decoder into the core.
 Applications can provide already encoded bytes directly, or use the optional
-[`orbeliasdb-nif`](https://github.com/puffball1567/orbeliasdb-nif) adapter backed by
+[`koutendb-nif`](https://github.com/puffball1567/koutendb-nif) adapter backed by
 [`nifkit`](https://github.com/puffball1567/nifkit). This keeps the database
 independent of one codec implementation while still providing an official OSS
 adapter path.
@@ -31,27 +31,27 @@ is persisted separately from records and is available to applications, CLI
 tools, and optional format adapters:
 
 ```bash
-orbelias ring-profile --data=/var/lib/orbelias --ring=artifacts \
+kouten ring-profile --data=/var/lib/kouten --ring=artifacts \
   --codec=bif --format-version=1
-orbelias ring-profile --data=/var/lib/orbelias --ring=documents \
+kouten ring-profile --data=/var/lib/kouten --ring=documents \
   --codec=nif --charset=UTF-8 --format-version=1
 ```
 
 The profile contains `defaultCodec`, `charset`, and `formatVersion`. `charset`
 describes text encodings such as NIF text; it does not apply to BIF binary
 payloads. A record's explicit codec always wins over the ring default, so a
-profile change never reinterprets bytes already stored. `orbelias put` defaults to
+profile change never reinterprets bytes already stored. `kouten put` defaults to
 `--codec=auto` and uses the ring default; pass an explicit codec to override it.
 
 ## Embedded API
 
 ```nim
-import orbeliasdb
+import koutendb
 import std/json
 
 var db = open()
 
-let jsonId = db.put(%*{"title": "OrbeliasDB"}, ring = "docs")
+let jsonId = db.put(%*{"title": "KoutenDB"}, ring = "docs")
 let bifId = db.put(encodedPayload(bifBytes, pcBif), ring = "docs")
 
 let stored = db.getEncoded(bifId)
@@ -66,7 +66,7 @@ The string overload of `put` remains backward compatible and uses `raw`. The
 
 ## Runnable Demos
 
-From a OrbeliasDB source checkout:
+From a KoutenDB source checkout:
 
 ```sh
 examples/payload_codecs_demo.sh
@@ -82,14 +82,14 @@ the legacy three-field `VAL` header.
 ## CLI
 
 ```sh
-orbelias put --ring=docs --in=document.bif --codec=bif
-orbelias put --ring=docs --payload='{"title":"OrbeliasDB"}' --codec=json
-orbelias get --ring=docs --filter='{"id":"RAW_ID"}'
+kouten put --ring=docs --in=document.bif --codec=bif
+kouten put --ring=docs --payload='{"title":"KoutenDB"}' --codec=json
+kouten get --ring=docs --filter='{"id":"RAW_ID"}'
 ```
 
-These examples use the default embedded data directory. Set `ORBELIAS_DATA` or
+These examples use the default embedded data directory. Set `KOUTEN_DATA` or
 pass `--data=DIR` when you want a specific local store, or pass
-`--peers=host:port,...` when talking to a `orbeliasd` cluster.
+`--peers=host:port,...` when talking to a `koutend` cluster.
 
 ### Put and get examples
 
@@ -99,28 +99,28 @@ to the ring's payload profile.
 
 ```sh
 # JSON: filter and projection work because the record is tagged as json.
-orbelias put --ring=docs/japan \
+kouten put --ring=docs/japan \
   --payload='{"title":"Hello","status":"draft"}' \
   --codec=json
-orbelias get --ring=docs/japan \
+kouten get --ring=docs/japan \
   --filter='{"status":"draft"}' \
   --selection='{ title }'
 
-# NIF text: OrbeliasDB stores the bytes and keeps codec=nif metadata.
-orbelias put --ring=docs/nif --in=sample.nif --codec=nif
-orbelias get --ring=docs/nif --limit=1
+# NIF text: KoutenDB stores the bytes and keeps codec=nif metadata.
+kouten put --ring=docs/nif --in=sample.nif --codec=nif
+kouten get --ring=docs/nif --limit=1
 
-# BIF binary: OrbeliasDB stores the bytes and keeps codec=bif metadata.
-orbelias put --ring=docs/bif --in=sample.bif --codec=bif
-orbelias get --ring=docs/bif --limit=1
+# BIF binary: KoutenDB stores the bytes and keeps codec=bif metadata.
+kouten put --ring=docs/bif --in=sample.bif --codec=bif
+kouten get --ring=docs/bif --limit=1
 
 # Debug or transport-safe BIF views.
-orbelias get --ring=docs/bif --limit=1 --view=base64
-orbelias get --ring=docs/bif --limit=1 --view=hex
+kouten get --ring=docs/bif --limit=1 --view=base64
+kouten get --ring=docs/bif --limit=1 --view=hex
 
 # Raw: plain bytes/text with no format interpretation.
-orbelias put --ring=logs/raw --payload='plain text payload' --codec=raw
-orbelias get --ring=logs/raw --limit=1
+kouten put --ring=logs/raw --payload='plain text payload' --codec=raw
+kouten get --ring=logs/raw --limit=1
 ```
 
 `get` always returns the same page shape. Use `--limit=1` when you only want one
@@ -146,13 +146,13 @@ not.
 
 The default view is `auto`, which prints text/NIF with codec metadata. For BIF,
 it first tries to use an optional adapter and prints decoded NIF text when one
-is available. The lookup order is `ORBELIASDB_NIF_TOOL`, `orbeliasdb-nif`, then
+is available. The lookup order is `KOUTENDB_NIF_TOOL`, `koutendb-nif`, then
 `nif_file_tool`. The adapter command must support
 `decode --in=input.bif --out=output.nif`. If no adapter is available, `auto`
 falls back to base64. Use `--view=hex` for byte-level inspection or
 `--view=raw` for the original raw payload bytes. Decoding BIF back into NIF text
-is intentionally adapter-side; the published `orbeliasdb-nif` adapter provides
-that path without making NIF/BIF parsing a OrbeliasDB core dependency.
+is intentionally adapter-side; the published `koutendb-nif` adapter provides
+that path without making NIF/BIF parsing a KoutenDB core dependency.
 
 ### Ring profile and auto codec
 
@@ -161,44 +161,44 @@ format. The profile does not rewrite existing records; it only supplies a
 default for future `--codec=auto` writes.
 
 ```sh
-orbelias ring-profile --data=./data \
+kouten ring-profile --data=./data \
   --ring=docs/nif \
   --codec=nif \
   --charset=UTF-8 \
   --format-version=1
 
-orbelias put --data=./data --ring=docs/nif --in=sample.nif --codec=auto
-orbelias get --data=./data --ring=docs/nif --limit=1
+kouten put --data=./data --ring=docs/nif --in=sample.nif --codec=auto
+kouten get --data=./data --ring=docs/nif --limit=1
 ```
 
 ## C ABI
 
-The additive C ABI functions preserve the existing `orbelias_put` and `orbelias_get`
+The additive C ABI functions preserve the existing `kouten_put` and `kouten_get`
 contract while exposing format metadata to C/C++ and FFI consumers:
 
 ```c
-orbelias_id id;
-orbelias_put_codec(db, "artifacts/bif", bytes, byte_len, ORBELIAS_CODEC_BIF, &id);
+kouten_id id;
+kouten_put_codec(db, "artifacts/bif", bytes, byte_len, KOUTEN_CODEC_BIF, &id);
 
 size_t len;
 int codec;
-void *stored = orbelias_get_codec(db, id, &len, &codec);
-/* codec == ORBELIAS_CODEC_BIF; release stored with orbelias_free(stored). */
+void *stored = kouten_get_codec(db, id, &len, &codec);
+/* codec == KOUTEN_CODEC_BIF; release stored with kouten_free(stored). */
 ```
 
-`orbelias_put_vec_codec` is the equivalent vector-bearing write call. The C ABI
+`kouten_put_vec_codec` is the equivalent vector-bearing write call. The C ABI
 contract smoke verifies this path in `examples/cabi_contract.c`.
 
 ## Projection Boundary
 
-`query`, `patch`, and prepared selections are JSON operations. OrbeliasDB rejects
+`query`, `patch`, and prepared selections are JSON operations. KoutenDB rejects
 their use on explicitly tagged `nif` and `bif` records instead of attempting to
 interpret those bytes as JSON. `raw` remains projection-compatible for legacy
 records and older drivers that stored JSON before codec metadata existed.
 
 ## Prepared Selections
 
-OrbeliasDB does not execute SQL, so its prepared-statement-like API compiles the
+KoutenDB does not execute SQL, so its prepared-statement-like API compiles the
 GraphQL-style projection rather than preparing an SQL string:
 
 ```nim
@@ -220,7 +220,7 @@ Clients can call the additive `CODECS` wire command to discover the identifiers
 accepted by a node. `CODECMETA ON` opts the connection into codec fields on
 response headers; clients that do not negotiate keep the original header shape.
 
-OrbeliasDB treats NIF/BIF payload bytes as opaque. Their byte order is therefore a
+KoutenDB treats NIF/BIF payload bytes as opaque. Their byte order is therefore a
 property of the selected format specification, not the host CPU. This is
-separate from OrbeliasDB vector bytes, which are always canonical little-endian
+separate from KoutenDB vector bytes, which are always canonical little-endian
 IEEE-754 `float32` on the TCP wire.

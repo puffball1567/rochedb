@@ -1,5 +1,5 @@
 import std/[json, os, strformat]
-import ../src/orbeliasdb
+import ../src/koutendb
 
 proc env(name, fallback: string): string =
   result = getEnv(name)
@@ -22,31 +22,31 @@ proc exercise(label, peers, galaxy, username, password, secretKey, ring: string)
 
 when isMainModule:
   exercise("training local",
-           env("ORBELIAS_TRAINING_LOCAL", "127.0.0.1:18411"),
+           env("KOUTEN_TRAINING_LOCAL", "127.0.0.1:18411"),
            "training-data", "train",
-           env("ORBELIAS_TRAIN_PASSWORD", "train-pass"),
-           env("ORBELIAS_TRAIN_SECRET_KEY", "train-secret-key"),
+           env("KOUTEN_TRAIN_PASSWORD", "train-pass"),
+           env("KOUTEN_TRAIN_SECRET_KEY", "train-secret-key"),
            "ai/training/japan")
 
   exercise("training remote",
-           env("ORBELIAS_TRAINING_REMOTE", "127.0.0.1:18412"),
+           env("KOUTEN_TRAINING_REMOTE", "127.0.0.1:18412"),
            "training-data", "train",
-           env("ORBELIAS_TRAIN_PASSWORD", "train-pass"),
-           env("ORBELIAS_TRAIN_SECRET_KEY", "train-secret-key"),
+           env("KOUTEN_TRAIN_PASSWORD", "train-pass"),
+           env("KOUTEN_TRAIN_SECRET_KEY", "train-secret-key"),
            "ai/training/oregon")
 
   exercise("prompt-cache local",
-           env("ORBELIAS_CACHE_LOCAL", "127.0.0.1:18421"),
+           env("KOUTEN_CACHE_LOCAL", "127.0.0.1:18421"),
            "prompt-cache", "cache",
-           env("ORBELIAS_CACHE_PASSWORD", "cache-pass"),
-           env("ORBELIAS_CACHE_SECRET_KEY", "cache-secret-key"),
+           env("KOUTEN_CACHE_PASSWORD", "cache-pass"),
+           env("KOUTEN_CACHE_SECRET_KEY", "cache-secret-key"),
            "app/session/local")
 
   exercise("prompt-cache remote",
-           env("ORBELIAS_CACHE_REMOTE", "127.0.0.1:18422"),
+           env("KOUTEN_CACHE_REMOTE", "127.0.0.1:18422"),
            "prompt-cache", "cache",
-           env("ORBELIAS_CACHE_PASSWORD", "cache-pass"),
-           env("ORBELIAS_CACHE_SECRET_KEY", "cache-secret-key"),
+           env("KOUTEN_CACHE_PASSWORD", "cache-pass"),
+           env("KOUTEN_CACHE_SECRET_KEY", "cache-secret-key"),
            "app/session/remote")
 
   echo ""
