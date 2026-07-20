@@ -1,10 +1,17 @@
 # KoutenDB
 
-**v0.7.0 Technical Preview / research OSS.** KoutenDB is not yet presented as a
+**v0.8.0 Technical Preview / research OSS.** KoutenDB is not yet presented as a
 production replacement for Redis, PostgreSQL, MongoDB, Apache Arrow, or a
 dedicated vector database. The current release target is a measurable prototype
 of ring/galaxy-oriented storage, retrieval, persistence, drivers, and cluster
 smoke behavior.
+
+The name `Kouten` comes from the Japanese word "kouten" (公転), meaning orbital
+revolution: one body moving around another. That is a good fit for this database
+because KoutenDB treats placement, rings, orbits, and locality as part of the
+retrieval model instead of only as storage internals. The project was previously
+published under older names; the active name, package name, CLI name, and
+repository name are now KoutenDB / `koutendb` / `kouten`.
 
 KoutenDB's practical goal is simple: reduce the amount of data a system has to
 read, transfer, hold in memory, and pass to downstream AI/RAG or application
@@ -58,7 +65,7 @@ corpus size toward semantic working-set size.
 - Detailed design: [docs/koutendb-design.md](docs/koutendb-design.md)
 - Feature status / roadmap: [docs/koutendb-status.md](docs/koutendb-status.md)
 - Release checklist: [docs/release-checklist.md](docs/release-checklist.md)
-- GitHub release draft: [docs/github-release-v0.7.0.md](docs/github-release-v0.7.0.md)
+- GitHub release draft: [docs/github-release-v0.8.0.md](docs/github-release-v0.8.0.md)
 - Driver / FFI roadmap: [docs/koutendb-driver-roadmap.md](docs/koutendb-driver-roadmap.md)
 - Driver installation guide: [docs/driver-installation.md](docs/driver-installation.md)
 - FAISS versioning policy: [docs/faiss-versioning.md](docs/faiss-versioning.md)
