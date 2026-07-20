@@ -1,16 +1,16 @@
 # Vector Backend Selection
 
-OrbeliasDB has two vector search backends in v0.1.0:
+KoutenDB has two vector search backends in v0.1.0:
 
 - `vbExact`: the built-in dependency-free backend.
-- `vbFaiss`: the optional FAISS bridge backend using `liborbelias_faiss.so`.
+- `vbFaiss`: the optional FAISS bridge backend using `libkouten_faiss.so`.
 
 The backend choice is a performance and deployment decision. It does not change
-OrbeliasDB's data model: rings still reduce the working set before vector search.
+KoutenDB's data model: rings still reduce the working set before vector search.
 
 ## Why Use FAISS?
 
-FAISS gives OrbeliasDB a production-grade vector execution path maintained by a
+FAISS gives KoutenDB a production-grade vector execution path maintained by a
 widely used upstream project. In v0.1.0 the bridge uses FAISS `IndexFlatIP`,
 which is an exact flat inner-product index, not an approximate ANN index.
 
@@ -18,10 +18,10 @@ The practical benefits are:
 
 - faster execution over large candidate sets;
 - a standard path for future FAISS index types;
-- less OrbeliasDB-specific vector code to maintain;
+- less KoutenDB-specific vector code to maintain;
 - a familiar dependency for AI and retrieval teams that already use FAISS.
 
-OrbeliasDB stores normalized vectors before indexing. With normalized vectors,
+KoutenDB stores normalized vectors before indexing. With normalized vectors,
 FAISS inner product and cosine-based exact search produce comparable ordering
 for the current bridge.
 
@@ -33,14 +33,14 @@ There is no single answer. Candidate count matters.
 | --- | --- | --- |
 | Small scoped ring reads | `vbExact` | No dynamic bridge or FAISS call overhead. |
 | Large global or broad reads | `vbFaiss` | FAISS' C++ flat search is much faster over large vector sets. |
-| RAG/LLM retrieval after strong ring routing | `vbFaiss` for production, `vbExact` for fallback | OrbeliasDB may reduce candidates enough that exact scoped reads are cheap, but the absolute FAISS overhead is small. |
+| RAG/LLM retrieval after strong ring routing | `vbFaiss` for production, `vbExact` for fallback | KoutenDB may reduce candidates enough that exact scoped reads are cheap, but the absolute FAISS overhead is small. |
 | Production vector-heavy workloads | `vbFaiss` | It is the intended scalable backend path. |
 
 The recommended production policy is simple: use FAISS when the bridge is
 available, and keep exact search as a dependency-free fallback for tests, small
 embedded deployments, and environments where FAISS cannot be installed.
 
-The key OrbeliasDB point is that ring routing and FAISS are complementary. Rings
+The key KoutenDB point is that ring routing and FAISS are complementary. Rings
 reduce how much must be searched. FAISS makes the remaining vector search path
 fast enough that using it as the normal production backend is reasonable even
 when scoped rings are already small.

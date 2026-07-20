@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK="${TMPDIR:-/tmp}/orbeliasdb-universe-sync-failure-smoke-$$"
+WORK="${TMPDIR:-/tmp}/koutendb-universe-sync-failure-smoke-$$"
 SOURCE="$WORK/source"
 TARGET="$WORK/target"
 EVENTS="$WORK/events.jsonl"
@@ -16,18 +16,18 @@ trap cleanup EXIT
 cd "$ROOT"
 mkdir -p "$WORK" "$ROOT/bin"
 
-echo "[universe-failure] build orbelias"
-nim c -d:release --nimcache:/tmp/nimcache_orbelias_universe_failure \
-  -o:bin/orbelias src/orbeliascli.nim >/dev/null
+echo "[universe-failure] build kouten"
+nim c -d:release --nimcache:/tmp/nimcache_kouten_universe_failure \
+  -o:bin/kouten src/koutencli.nim >/dev/null
 
 echo "[universe-failure] build demo enqueuer"
-nim c -d:release --nimcache:/tmp/nimcache_orbelias_universe_failure_demo \
+nim c -d:release --nimcache:/tmp/nimcache_kouten_universe_failure_demo \
   -o:bin/universe_sync_demo examples/universe_sync_demo.nim >/dev/null
 
 echo "[universe-failure] enqueue and export"
 bin/universe_sync_demo --source="$SOURCE" --target="$TARGET" --mode=enqueue
-bin/orbelias universe-status --data="$SOURCE" | grep -q "pending=1"
-bin/orbelias universe-export --data="$SOURCE" --out="$EVENTS" >/dev/null
+bin/kouten universe-status --data="$SOURCE" | grep -q "pending=1"
+bin/kouten universe-export --data="$SOURCE" --out="$EVENTS" >/dev/null
 test "$(wc -l < "$EVENTS")" -eq 1
 
 echo "[universe-failure] malformed JSONL is counted and valid events still apply"
@@ -35,21 +35,21 @@ echo "[universe-failure] malformed JSONL is counted and valid events still apply
   echo '{"bad":'
   cat "$EVENTS"
 } > "$MIXED"
-bin/orbelias universe-apply --data="$TARGET" --in="$MIXED" |
+bin/kouten universe-apply --data="$TARGET" --in="$MIXED" |
   grep -q "read=2 applied=1 skipped=0 errors=1"
-bin/orbelias count-ring --data="$TARGET" --ring=posts/u1 |
+bin/kouten count-ring --data="$TARGET" --ring=posts/u1 |
   grep -q "count=1"
 
 echo "[universe-failure] replay is idempotent"
-bin/orbelias universe-apply --data="$TARGET" --in="$EVENTS" |
+bin/kouten universe-apply --data="$TARGET" --in="$EVENTS" |
   grep -q "read=1 applied=0 skipped=1 errors=0"
-bin/orbelias count-ring --data="$TARGET" --ring=posts/u1 |
+bin/kouten count-ring --data="$TARGET" --ring=posts/u1 |
   grep -q "count=1"
 
 echo "[universe-failure] source ack/prune remains explicit"
-bin/orbelias universe-status --data="$SOURCE" | grep -q "pending=1"
-bin/orbelias universe-sync --data="$SOURCE" --target-data="$TARGET" --prune-acked |
+bin/kouten universe-status --data="$SOURCE" | grep -q "pending=1"
+bin/kouten universe-sync --data="$SOURCE" --target-data="$TARGET" --prune-acked |
   grep -q "read=1 applied=0 skipped=1 acked=1 pruned=1 errors=0"
-bin/orbelias universe-status --data="$SOURCE" | grep -q "pending=0"
+bin/kouten universe-status --data="$SOURCE" | grep -q "pending=0"
 
 echo "[universe-failure] OK"

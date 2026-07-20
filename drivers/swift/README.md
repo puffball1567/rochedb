@@ -1,11 +1,11 @@
-# OrbeliasDB Swift Driver
+# KoutenDB Swift Driver
 
-Minimal Swift Package wrapper over the OrbeliasDB C ABI.
+Minimal Swift Package wrapper over the KoutenDB C ABI.
 
 ```swift
-import OrbeliasDB
+import KoutenDB
 
-let db = try OrbeliasDB.open(nodes: 8)
+let db = try KoutenDB.open(nodes: 8)
 defer { db.close() }
 
 try db.setGalaxyDescription("Product and support knowledge")
@@ -16,7 +16,7 @@ let value = try db.getString(id)
 let atlas = try db.atlas(queryVector: [1.0, 0.0], maxCentroidDims: 8)
 ```
 
-Build the OrbeliasDB shared library first:
+Build the KoutenDB shared library first:
 
 ```bash
 scripts/build_capi.sh

@@ -1,12 +1,12 @@
-# OrbeliasDB v0.2.0 Technical Preview
+# KoutenDB v0.2.0 Technical Preview
 
-OrbeliasDB v0.2.0 expands the ring/galaxy-oriented prototype with a stronger
+KoutenDB v0.2.0 expands the ring/galaxy-oriented prototype with a stronger
 operational surface: Universe sync, recovery-oriented topology configuration,
 Docker Compose demos, CLI workflows, and GitHub Pages documentation.
 
 This is still a technical preview / research OSS release. Do not present it as
 a production replacement for Redis, PostgreSQL, MongoDB, Apache Arrow, or a
-mature vector database. The defensible claim remains narrower: OrbeliasDB can
+mature vector database. The defensible claim remains narrower: KoutenDB can
 reduce working-set size and downstream retrieval input when data is placed in
 meaningful rings, while the implementation is gaining the operational checks
 needed for broader evaluation.
@@ -22,7 +22,7 @@ needed for broader evaluation.
   readonly mirrors.
 - Docker Compose demos for a single galaxy, a three-node galaxy, and a
   local/remote universe-shaped topology.
-- `orbelias` CLI CRUD workflows, ring list/count, atlas, and a minimal
+- `kouten` CLI CRUD workflows, ring list/count, atlas, and a minimal
   interactive shell.
 - GitHub Pages documentation structure with public API, config, CLI, topology,
   universe sync, protocol compatibility, cloud metrics, and threat model pages.
@@ -44,7 +44,7 @@ The v0.2 pre-release verification pass should include:
 
 ## Known Gaps
 
-- TLS is not implemented; do not expose `orbeliasd` directly on untrusted
+- TLS is not implemented; do not expose `koutend` directly on untrusted
   networks.
 - Cluster membership is static.
 - node0 remains the cluster transaction landing coordinator.
@@ -60,13 +60,13 @@ The v0.2 pre-release verification pass should include:
 ## Links
 
 - README: `README.md`
-- Status / roadmap: `docs/orbeliasdb-status.md`
+- Status / roadmap: `docs/koutendb-status.md`
 - Public API: `docs/public-api.md`
 - Configuration reference: `docs/config-reference.md`
 - CLI reference: `docs/cli-reference.md`
 - Universe sync: `docs/universe-sync.md`
 - Topology examples: `docs/topology-examples.md`
-- Benchmarks: `docs/orbeliasdb-bench.md`
+- Benchmarks: `docs/koutendb-bench.md`
 - Release checklist: `docs/release-checklist.md`
 - Driver installation guide: `docs/driver-installation.md`
 - Threat model: `docs/threat-model.md`

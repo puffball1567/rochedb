@@ -1,6 +1,6 @@
 # Third-Party Source Checkouts
 
-This directory is reserved for pinned third-party source checkouts that OrbeliasDB
+This directory is reserved for pinned third-party source checkouts that KoutenDB
 can build against.
 
 Current pinned source:

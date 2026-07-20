@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IMAGE="${SWIFT_IMAGE:-orbeliasdb-swift:6.0}"
+IMAGE="${SWIFT_IMAGE:-koutendb-swift:6.0}"
 
 if [[ "${SWIFT_IMAGE:-}" == "" ]]; then
   docker build -t "$IMAGE" "$ROOT/drivers/swift"

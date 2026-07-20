@@ -4,16 +4,16 @@ set -euo pipefail
 N="${N:-1000}"
 PAYLOAD_BYTES="${PAYLOAD_BYTES:-100}"
 REDIS_ENDPOINT="${REDIS_ENDPOINT:-127.0.0.1:6379}"
-ORBELIASD_PEERS="${ORBELIASD_PEERS:-127.0.0.1:17301}"
-DATA="${TMPDIR:-/tmp}/orbeliasdb-redis-local-bench-$$"
+KOUTEND_PEERS="${KOUTEND_PEERS:-127.0.0.1:17301}"
+DATA="${TMPDIR:-/tmp}/koutendb-redis-local-bench-$$"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ORBELIASD_PID=""
+KOUTEND_PID=""
 
 cleanup() {
-  if [[ -n "$ORBELIASD_PID" ]]; then
-    kill "$ORBELIASD_PID" >/dev/null 2>&1 || true
-    wait "$ORBELIASD_PID" >/dev/null 2>&1 || true
+  if [[ -n "$KOUTEND_PID" ]]; then
+    kill "$KOUTEND_PID" >/dev/null 2>&1 || true
+    wait "$KOUTEND_PID" >/dev/null 2>&1 || true
   fi
   rm -rf "$DATA"
 }
@@ -30,25 +30,25 @@ fi
 cd "$ROOT"
 mkdir -p "$DATA" bin
 
-echo "[redis-local-bench] build OrbeliasDB binaries"
-nim c -d:release --nimcache:/tmp/nimcache_orbeliasd -o:bin/orbeliasd src/orbeliasd.nim
-nim c -d:release --nimcache:/tmp/nimcache_orbeliascli -o:bin/orbelias src/orbeliascli.nim
+echo "[redis-local-bench] build KoutenDB binaries"
+nim c -d:release --nimcache:/tmp/nimcache_koutend -o:bin/koutend src/koutend.nim
+nim c -d:release --nimcache:/tmp/nimcache_koutencli -o:bin/kouten src/koutencli.nim
 
-echo "[redis-local-bench] start one local orbeliasd on $ORBELIASD_PEERS"
-bin/orbeliasd --id=0 --peers="$ORBELIASD_PEERS" --data="$DATA/node0" &
-ORBELIASD_PID="$!"
+echo "[redis-local-bench] start one local koutend on $KOUTEND_PEERS"
+bin/koutend --id=0 --peers="$KOUTEND_PEERS" --data="$DATA/node0" &
+KOUTEND_PID="$!"
 
 for _ in $(seq 1 50); do
-  if bin/orbelias health --peers="$ORBELIASD_PEERS" >/dev/null 2>&1; then
+  if bin/kouten health --peers="$KOUTEND_PEERS" >/dev/null 2>&1; then
     break
   fi
   sleep 0.1
 done
-bin/orbelias health --peers="$ORBELIASD_PEERS" >/dev/null
+bin/kouten health --peers="$KOUTEND_PEERS" >/dev/null
 
-echo "[redis-local-bench] run OrbeliasDB/Redis benchmark"
-bin/orbelias redis-bench \
+echo "[redis-local-bench] run KoutenDB/Redis benchmark"
+bin/kouten redis-bench \
   --n="$N" \
   --payload-bytes="$PAYLOAD_BYTES" \
   --redis="$REDIS_ENDPOINT" \
-  --peers="$ORBELIASD_PEERS"
+  --peers="$KOUTEND_PEERS"

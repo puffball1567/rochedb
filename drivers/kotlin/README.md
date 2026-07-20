@@ -1,6 +1,6 @@
-# OrbeliasDB Kotlin Driver
+# KoutenDB Kotlin Driver
 
-Minimal Kotlin-first JVM binding for OrbeliasDB through a small JNI bridge over the
+Minimal Kotlin-first JVM binding for KoutenDB through a small JNI bridge over the
 stable C ABI.
 
 The public API is Kotlin-first while remaining Java-compatible at the bytecode
@@ -12,7 +12,7 @@ targets JVM servers and desktop tooling.
 - JDK 21
 - Kotlin compiler
 - C++17 compiler
-- `lib/liborbeliasdb.so` built from `src/orbeliasdb_capi.nim`
+- `lib/libkoutendb.so` built from `src/koutendb_capi.nim`
 
 Build the native library from the repository root:
 

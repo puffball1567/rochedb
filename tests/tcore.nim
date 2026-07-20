@@ -1,7 +1,7 @@
-## orbelias/core の単体テスト（設計書 §12 Step 1 の完了条件を含む）
+## kouten/core の単体テスト（設計書 §12 Step 1 の完了条件を含む）
 
 import std/[unittest, math]
-import ../src/orbelias/core
+import ../src/kouten/core
 
 suite "wrap / angDist":
   test "正規化":

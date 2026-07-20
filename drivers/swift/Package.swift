@@ -3,28 +3,28 @@
 import PackageDescription
 
 let package = Package(
-    name: "OrbeliasDB",
+    name: "KoutenDB",
     platforms: [
         .macOS(.v13)
     ],
     products: [
-        .library(name: "OrbeliasDB", targets: ["OrbeliasDB"])
+        .library(name: "KoutenDB", targets: ["KoutenDB"])
     ],
     targets: [
         .systemLibrary(
-            name: "COrbeliasDB",
-            path: "Sources/COrbeliasDB"
+            name: "CKoutenDB",
+            path: "Sources/CKoutenDB"
         ),
         .target(
-            name: "OrbeliasDB",
-            dependencies: ["COrbeliasDB"],
+            name: "KoutenDB",
+            dependencies: ["CKoutenDB"],
             linkerSettings: [
                 .unsafeFlags(["-L../../lib"])
             ]
         ),
         .testTarget(
-            name: "OrbeliasDBTests",
-            dependencies: ["OrbeliasDB"]
+            name: "KoutenDBTests",
+            dependencies: ["KoutenDB"]
         )
     ]
 )

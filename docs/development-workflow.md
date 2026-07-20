@@ -1,6 +1,6 @@
 # Development Workflow
 
-OrbeliasDB uses a stable-main workflow.
+KoutenDB uses a stable-main workflow.
 
 ## Branch Roles
 

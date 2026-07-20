@@ -1,9 +1,9 @@
 <?php
 declare(strict_types=1);
 
-require __DIR__ . '/../src/OrbeliasDB.php';
+require __DIR__ . '/../src/KoutenDB.php';
 
-use OrbeliasDB\OrbeliasDB;
+use KoutenDB\KoutenDB;
 
 function assert_true(bool $value, string $message): void
 {
@@ -13,7 +13,7 @@ function assert_true(bool $value, string $message): void
     }
 }
 
-$db = OrbeliasDB::open(8);
+$db = KoutenDB::open(8);
 $db->setGalaxyDescription('PHP test galaxy');
 $db->setRingDescription('docs/php', 'PHP driver documents');
 $db->configureRing('docs/php', 30.0);

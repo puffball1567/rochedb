@@ -1,6 +1,6 @@
 # Test Coverage
 
-This document tracks OrbeliasDB's test coverage by product surface. It is not a
+This document tracks KoutenDB's test coverage by product surface. It is not a
 claim of exhaustive production certification; it is the current engineering
 matrix used before releases.
 
@@ -11,12 +11,12 @@ matrix used before releases.
 | Orbital placement core | `tests/tcore.nim` | Unit-covered: angle wrapping, ownership, weighted arcs, virtual arc remap reduction, future arrival, conjunctions |
 | Field / halo movement | `tests/tfield.nim` | Unit-covered: field state and ring movement behavior |
 | Selection parser | `tests/tselect.nim` | Unit-covered: GraphQL-like selection parsing, bounded selection depth, and projection basics |
-| Store / WAL | `tests/tstore.nim` | Unit-covered: codec persistence, time-orbit profile persistence, versioned WAL magic/checksum, checksum mismatch refusal, torn-tail repair, mid-file WAL corruption refusal, transaction replay, data-dir locking, compact, locality report, delete/backfill locality matrix, compact-before/after logical query invariants, backup/restore, encrypted backup verification temp isolation, universe sync applied-key retention replay; `-d:orbeliasTestFailpoints` covers poisoned write-path rejection after simulated durability failure |
+| Store / WAL | `tests/tstore.nim` | Unit-covered: codec persistence, time-orbit profile persistence, versioned WAL magic/checksum, checksum mismatch refusal, torn-tail repair, mid-file WAL corruption refusal, transaction replay, data-dir locking, compact, locality report, delete/backfill locality matrix, compact-before/after logical query invariants, backup/restore, encrypted backup verification temp isolation, universe sync applied-key retention replay; `-d:koutenTestFailpoints` covers poisoned write-path rejection after simulated durability failure |
 | Public embedded API | `tests/tapi.nim` | Unit-covered: put/get, codec-aware projection, ring profiles, time-orbit put/read, readRing filtering, typed filter builders, pagination, sorting, stellar neighborhood reads from either side, stellar attach/detach persistence, atomic batch rollback, cooperative ring/stellar locks with fencing values, warp, universe sync retry/dead-letter state |
 | CLI embedded usage | `scripts/cli_crud_smoke.sh` | Smoke-covered: help, put/get/query/list/count, readRing options, `--near` placement, `--stellar`, stellar attach/detach, `--subring` neighborhood narrowing, codec display, ring profile auto codec, time-orbit put/get, dump/import JSONL round-trip, shell, auth error text |
 | C ABI | `examples/cabi_contract.c`, `examples/cabi_tls_contract.c`, `scripts/cabi_tls_smoke.sh`, `scripts/driver_compat.sh` | Contract-covered: ABI version, put/get, codec metadata, read ring page shape, validation errors, handle close/reuse safety, atlas, CA-verified TLS-enabled connect path |
 | Wire protocol | `tests/twire_driver.nim`, `scripts/cluster_wire_driver_smoke.sh`, `scripts/cluster_wire_fuzz_smoke.sh` | Smoke-covered: driver-facing PUTR/GETID/QRYID, codec metadata negotiation, malformed frame behavior, oversized/deep JSON rejection, and `RETRIEVE` query-cost rejection |
-| TLS transport | `scripts/cluster_tls_smoke.sh` | Smoke-covered: TLS-enabled `orbeliasd`/CLI build, CA-verified authenticated TLS health, secret-key auth transport, JSON put/get, and plain-client rejection |
+| TLS transport | `scripts/cluster_tls_smoke.sh` | Smoke-covered: TLS-enabled `koutend`/CLI build, CA-verified authenticated TLS health, secret-key auth transport, JSON put/get, and plain-client rejection |
 | Cluster transactions | `tests/tcluster_tx.nim`, `scripts/cluster_tx_smoke.sh` | Smoke-covered: landing intent, apply retry, basic owner failure path |
 | Cluster auth / RBAC | `tests/tcluster_authz.nim`, `tests/tcluster_rbac.nim`, related scripts | Smoke-covered: username/password/secret key, unusable auth config fail-fast, role/ring-prefix authorization, admin-only metrics, and minimal non-admin health |
 | Cluster failure | `tests/tcluster_failure.nim`, `scripts/cluster_failure_smoke.sh` | Smoke-covered: owner restart and retry boundaries |
@@ -43,7 +43,7 @@ scripts/universe_sync_remote_smoke.sh
 ```
 
 `scripts/test_all_smoke.sh` runs the same sequence and skips driver
-compatibility by default. Set `ORBELIAS_TEST_DRIVERS=1` when the local driver
+compatibility by default. Set `KOUTEN_TEST_DRIVERS=1` when the local driver
 toolchains are available.
 
 ## Remaining Depth Targets

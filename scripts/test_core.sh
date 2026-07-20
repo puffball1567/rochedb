@@ -9,7 +9,7 @@ run_nim_test() {
   local name
   name="$(basename "$file" .nim)"
   echo "[test-core] $file"
-  nim c --nimcache="/tmp/nimcache_orbelias_${name}" -r "$file"
+  nim c --nimcache="/tmp/nimcache_kouten_${name}" -r "$file"
 }
 
 run_nim_test tests/tcore.nim

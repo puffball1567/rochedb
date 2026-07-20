@@ -18,11 +18,11 @@ drivers/**/target/
 drivers/**/.build/
 drivers/**/Cargo.lock
 
-src/orbeliasd
-src/orbeliascli
-src/orbeliasbench
-src/orbeliassim
-src/orbeliasdb
+src/koutend
+src/koutencli
+src/koutenbench
+src/koutensim
+src/koutendb
 tests/tapi
 tests/tauth
 tests/tcore

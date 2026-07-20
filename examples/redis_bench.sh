@@ -4,26 +4,26 @@ set -euo pipefail
 N="${N:-100000}"
 PAYLOAD_BYTES="${PAYLOAD_BYTES:-100}"
 REDIS_IMAGE="${REDIS_IMAGE:-redis:7-alpine}"
-CONTAINER_NAME="${CONTAINER_NAME:-orbelias-redis-bench}"
+CONTAINER_NAME="${CONTAINER_NAME:-kouten-redis-bench}"
 NETWORK_MODE="${NETWORK_MODE:-host}"
 REDIS_PORT="${REDIS_PORT:-6379}"
-ORBELIASD="${ORBELIASD:-0}"
-ORBELIASD_PEERS="${ORBELIASD_PEERS:-127.0.0.1:17301}"
+KOUTEND="${KOUTEND:-0}"
+KOUTEND_PEERS="${KOUTEND_PEERS:-127.0.0.1:17301}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 mkdir -p bin
-nim c -d:release -o:bin/orbeliascli src/orbeliascli.nim
-if [[ "$ORBELIASD" == "1" ]]; then
-  nim c -d:release -o:bin/orbeliasd src/orbeliasd.nim
+nim c -d:release -o:bin/koutencli src/koutencli.nim
+if [[ "$KOUTEND" == "1" ]]; then
+  nim c -d:release -o:bin/koutend src/koutend.nim
 fi
 
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  if [[ -n "${ORBELIASD_PID:-}" ]]; then
-    kill "$ORBELIASD_PID" >/dev/null 2>&1 || true
-    wait "$ORBELIASD_PID" >/dev/null 2>&1 || true
+  if [[ -n "${KOUTEND_PID:-}" ]]; then
+    kill "$KOUTEND_PID" >/dev/null 2>&1 || true
+    wait "$KOUTEND_PID" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
@@ -45,16 +45,16 @@ for _ in {1..50}; do
   sleep 0.1
 done
 
-ORBELIAS_ARGS=()
-if [[ "$ORBELIASD" == "1" ]]; then
-  bin/orbeliasd --id=0 --peers="$ORBELIASD_PEERS" &
-  ORBELIASD_PID="$!"
+KOUTEN_ARGS=()
+if [[ "$KOUTEND" == "1" ]]; then
+  bin/koutend --id=0 --peers="$KOUTEND_PEERS" &
+  KOUTEND_PID="$!"
   sleep 0.3
-  ORBELIAS_ARGS+=(--peers="$ORBELIASD_PEERS")
+  KOUTEN_ARGS+=(--peers="$KOUTEND_PEERS")
 fi
 
-bin/orbeliascli redis-bench \
+bin/koutencli redis-bench \
   --n="$N" \
   --payload-bytes="$PAYLOAD_BYTES" \
   --redis="$REDIS_ENDPOINT" \
-  "${ORBELIAS_ARGS[@]}"
+  "${KOUTEN_ARGS[@]}"

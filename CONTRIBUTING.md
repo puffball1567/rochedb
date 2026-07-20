@@ -1,12 +1,12 @@
-# Contributing to OrbeliasDB
+# Contributing to KoutenDB
 
-OrbeliasDB is currently developed as a tightly controlled technical-preview
+KoutenDB is currently developed as a tightly controlled technical-preview
 database project. The core implementation direction is maintained by the project
 owner.
 
 At this stage, the most useful contributions are not broad feature pull
 requests. They are real-world verification reports that help evaluate whether
-OrbeliasDB behaves correctly outside the author's local environment.
+KoutenDB behaves correctly outside the author's local environment.
 
 ## Preferred Contributions
 
@@ -23,7 +23,7 @@ Please focus on:
 
 Good reports include:
 
-- OrbeliasDB commit or tag;
+- KoutenDB commit or tag;
 - OS, CPU, memory, disk, filesystem, and container/runtime details;
 - exact commands used;
 - dataset size, ring count, vector dimensions, payload size, and workload shape;
@@ -41,14 +41,14 @@ test, and documentation work targets `devel`; `main` is reserved for released,
 tagged state and direct hotfixes.
 
 Implementation pull requests may be closed or redirected unless they were
-discussed first. OrbeliasDB's data model, transaction behavior, persistence format,
+discussed first. KoutenDB's data model, transaction behavior, persistence format,
 wire protocol, and recovery semantics are intentionally kept under central
 design control while the project is pre-1.0.
 
 If you want to propose a code change, open an issue or discussion first with:
 
 - the problem being solved;
-- why it belongs in OrbeliasDB core rather than a driver, adapter, or external
+- why it belongs in KoutenDB core rather than a driver, adapter, or external
   tool;
 - compatibility impact;
 - recovery / durability impact;

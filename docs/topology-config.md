@@ -1,6 +1,6 @@
-# OrbeliasDB Topology Configuration
+# KoutenDB Topology Configuration
 
-This is the reference for OrbeliasDB recovery / universe topology files. For
+This is the reference for KoutenDB recovery / universe topology files. For
 deployment patterns, see [topology-examples.md](./topology-examples.md). For
 cloud metrics and recovery commands, see [cloud-operations.md](./cloud-operations.md).
 
@@ -19,7 +19,7 @@ The topology file is JSON.
       "galaxies": [
         {
           "galaxy": "app-main",
-          "archive": "/backup/orbeliasdb/app-main/local-a"
+          "archive": "/backup/koutendb/app-main/local-a"
         }
       ]
     }
@@ -30,14 +30,14 @@ The topology file is JSON.
 Run:
 
 ```sh
-orbelias recovery-backup --data=/var/lib/orbeliasdb \
-  --universe-config=/etc/orbeliasdb/topology.json
+kouten recovery-backup --data=/var/lib/koutendb \
+  --universe-config=/etc/koutendb/topology.json
 
-orbelias recovery-status --universe-config=/etc/orbeliasdb/topology.json \
+kouten recovery-status --universe-config=/etc/koutendb/topology.json \
   --metrics
 
-orbelias recovery-restore --universe-config=/etc/orbeliasdb/topology.json \
-  --data=/var/lib/orbeliasdb-restored
+kouten recovery-restore --universe-config=/etc/koutendb/topology.json \
+  --data=/var/lib/koutendb-restored
 ```
 
 ## Full Example
@@ -49,11 +49,11 @@ orbelias recovery-restore --universe-config=/etc/orbeliasdb/topology.json \
   "authProfiles": {
     "shared-ai": {
       "mode": "user-password-secret-key",
-      "source": "secret-manager:orbelias/shared-ai"
+      "source": "secret-manager:kouten/shared-ai"
     },
     "audit-readonly": {
       "mode": "user-password-secret-key",
-      "source": "secret-manager:orbelias/audit-readonly"
+      "source": "secret-manager:kouten/audit-readonly"
     }
   },
   "universes": [
@@ -67,11 +67,11 @@ orbelias recovery-restore --universe-config=/etc/orbeliasdb/topology.json \
       "galaxies": [
         {
           "galaxy": "training-data",
-          "archive": "/backup/orbeliasdb/training-data/tokyo-a"
+          "archive": "/backup/koutendb/training-data/tokyo-a"
         },
         {
           "galaxy": "prompt-cache",
-          "archive": "/backup/orbeliasdb/prompt-cache/tokyo-a",
+          "archive": "/backup/koutendb/prompt-cache/tokyo-a",
           "authRef": "audit-readonly",
           "readonly": false
         }
@@ -80,7 +80,7 @@ orbelias recovery-restore --universe-config=/etc/orbeliasdb/topology.json \
     {
       "universe": "oregon-a",
       "location": "remote",
-      "endpoint": "orbelias://oregon-training.internal:7301",
+      "endpoint": "kouten://oregon-training.internal:7301",
       "failureDomain": "aws-us-west-2",
       "authRef": "shared-ai",
       "priority": 5,
@@ -88,11 +88,11 @@ orbelias recovery-restore --universe-config=/etc/orbeliasdb/topology.json \
       "galaxies": [
         {
           "galaxy": "training-data",
-          "archive": "/backup/orbeliasdb/training-data/oregon-a"
+          "archive": "/backup/koutendb/training-data/oregon-a"
         },
         {
           "galaxy": "prompt-cache",
-          "archive": "/backup/orbeliasdb/prompt-cache/oregon-a",
+          "archive": "/backup/koutendb/prompt-cache/oregon-a",
           "authRef": "audit-readonly",
           "readonly": true
         }
@@ -121,7 +121,7 @@ orbelias recovery-restore --universe-config=/etc/orbeliasdb/topology.json \
   "authProfiles": {
     "shared-ai": {
       "mode": "user-password-secret-key",
-      "source": "secret-manager:orbelias/shared-ai"
+      "source": "secret-manager:kouten/shared-ai"
     }
   }
 }
@@ -133,7 +133,7 @@ orbelias recovery-restore --universe-config=/etc/orbeliasdb/topology.json \
 | `source` | string | No | Operator-defined location of the real credentials, such as a secret manager path. |
 
 Do not include `username`, `password`, or `secretKey` in the topology file.
-OrbeliasDB rejects those fields under `authProfiles`.
+KoutenDB rejects those fields under `authProfiles`.
 
 ## `universes[]`
 
@@ -212,7 +212,7 @@ excluded as write targets during `recovery-backup`.
 The recovery CLI can create entries without a topology file:
 
 ```sh
-orbelias recovery-backup --data=/var/lib/orbeliasdb \
+kouten recovery-backup --data=/var/lib/koutendb \
   --mirror=/backup/app-main \
   --universe=local-a \
   --galaxy=app-main \

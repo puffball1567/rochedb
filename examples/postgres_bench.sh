@@ -3,15 +3,15 @@ set -euo pipefail
 
 N="${N:-10000}"
 PAYLOAD_BYTES="${PAYLOAD_BYTES:-100}"
-BASE_PORT="${ORBELIAS_BENCH_BASE_PORT:-17311}"
+BASE_PORT="${KOUTEN_BENCH_BASE_PORT:-17311}"
 PGPORT="${PGPORT:-55432}"
 PGHOST="${PGHOST:-127.0.0.1}"
-TMP_ROOT="${TMPDIR:-/tmp}/orbeliasdb-postgres-bench-$$"
+TMP_ROOT="${TMPDIR:-/tmp}/koutendb-postgres-bench-$$"
 PG_BIN="${PG_BIN:-}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PEERS="127.0.0.1:${BASE_PORT},127.0.0.1:$((BASE_PORT + 1)),127.0.0.1:$((BASE_PORT + 2))"
-ORBELIAS_DATA="$TMP_ROOT/orbelias"
+KOUTEN_DATA="$TMP_ROOT/kouten"
 PGDATA="$TMP_ROOT/pgdata"
 PGLOG="$TMP_ROOT/postgres.log"
 PIDS=()
@@ -80,32 +80,32 @@ need_path psql PSQL
 need_path pgbench PGBENCH
 
 cd "$ROOT"
-mkdir -p "$ORBELIAS_DATA" bin
+mkdir -p "$KOUTEN_DATA" bin
 
 payload="$(printf "%${PAYLOAD_BYTES}s" "" | tr " " "a")"
 select_sql="$TMP_ROOT/select.sql"
 write_sql="$TMP_ROOT/write.sql"
 
-echo "[postgres-bench] build OrbeliasDB binaries"
-nim c -d:release --nimcache:/tmp/nimcache_orbeliasd -o:bin/orbeliasd src/orbeliasd.nim
-nim c -d:release --nimcache:/tmp/nimcache_orbeliascli -o:bin/orbelias src/orbeliascli.nim
+echo "[postgres-bench] build KoutenDB binaries"
+nim c -d:release --nimcache:/tmp/nimcache_koutend -o:bin/koutend src/koutend.nim
+nim c -d:release --nimcache:/tmp/nimcache_koutencli -o:bin/kouten src/koutencli.nim
 
-echo "[postgres-bench] start OrbeliasDB cluster on $PEERS"
+echo "[postgres-bench] start KoutenDB cluster on $PEERS"
 for id in 0 1 2; do
-  bin/orbeliasd --id="$id" --peers="$PEERS" --data="$ORBELIAS_DATA/node$id" --slow-tick=0.05 &
+  bin/koutend --id="$id" --peers="$PEERS" --data="$KOUTEN_DATA/node$id" --slow-tick=0.05 &
   PIDS+=("$!")
 done
 
 for _ in $(seq 1 50); do
-  if bin/orbelias health --peers="$PEERS" >/dev/null 2>&1; then
+  if bin/kouten health --peers="$PEERS" >/dev/null 2>&1; then
     break
   fi
   sleep 0.1
 done
-bin/orbelias health --peers="$PEERS" >/dev/null
+bin/kouten health --peers="$PEERS" >/dev/null
 
-echo "[postgres-bench] OrbeliasDB cluster benchmark"
-bin/orbelias bench --peers="$PEERS" --n="$N"
+echo "[postgres-bench] KoutenDB cluster benchmark"
+bin/kouten bench --peers="$PEERS" --n="$N"
 
 echo "[postgres-bench] init temporary PostgreSQL cluster on $PGHOST:$PGPORT"
 "$INITDB" -A trust -D "$PGDATA" >/dev/null

@@ -1,6 +1,6 @@
-# OrbeliasDB Release Checklist
+# KoutenDB Release Checklist
 
-This is the canonical release checklist for the public OrbeliasDB repository.
+This is the canonical release checklist for the public KoutenDB repository.
 The current automated test coverage matrix is tracked in
 [Test Coverage](test-coverage.md).
 
@@ -12,12 +12,12 @@ operational demos and Universe sync coverage.
 Recommended wording:
 
 ```text
-OrbeliasDB v0.2.0 Technical Preview
+KoutenDB v0.2.0 Technical Preview
 A ring/galaxy-oriented document and vector database prototype focused on
 smaller working sets, durable recovery boundaries, and eventual universe sync.
 ```
 
-Avoid claiming that OrbeliasDB is generally faster than Redis, PostgreSQL, or
+Avoid claiming that KoutenDB is generally faster than Redis, PostgreSQL, or
 Apache Arrow. The current defensible claim is narrower:
 
 ```text
@@ -34,12 +34,12 @@ Release v0.1.0 as a technical preview / research OSS release.
 Recommended wording:
 
 ```text
-OrbeliasDB v0.1.0 Technical Preview
+KoutenDB v0.1.0 Technical Preview
 A ring/galaxy-oriented document and vector database prototype focused on
 reducing working-set size for retrieval-heavy systems.
 ```
 
-Avoid claiming that OrbeliasDB is generally faster than Redis, PostgreSQL, or
+Avoid claiming that KoutenDB is generally faster than Redis, PostgreSQL, or
 Apache Arrow. The current defensible claim is narrower:
 
 ```text
@@ -54,11 +54,11 @@ under the documented conditions.
 |---|---|---|
 | Core tests | `scripts/test_core.sh` passes | Done |
 | WAL recovery | Versioned WAL magic/checksum, checksum mismatch refusal, torn-tail, invalid length, invalid vector dim, mid-file corruption refusal, partial transaction tests pass | Done |
-| Migration boundary | `orbelias dump` / `orbelias import-jsonl` round-trip OrbeliasDB JSONL across data directories and preserve ring, payload, vector, and codec metadata | Done |
+| Migration boundary | `kouten dump` / `kouten import-jsonl` round-trip KoutenDB JSONL across data directories and preserve ring, payload, vector, and codec metadata | Done |
 | C ABI library | `scripts/build_capi.sh` is the canonical build and includes `-d:ssl`; CA-verified C ABI TLS smoke passes | Done |
 | Warp belt | WAL persistence, reopen recovery, ack cleanup, idempotent patch behavior | Done |
 | Cluster smoke | tx / failure retry / authz fail-fast / RBAC / wire fuzz smoke scripts pass locally | Done |
-| FAISS bridge | `orbelias doctor` and FAISS bridge smoke are documented and reproducible | Done |
+| FAISS bridge | `kouten doctor` and FAISS bridge smoke are documented and reproducible | Done |
 | Drivers | Driver status table is accurate and does not overclaim package publication | Done |
 | Bench docs | Benchmark conditions, limitations, Redis/PostgreSQL wording, and environment are consistent | Done |
 | AI/RAG case study | Generated JSONL corpus is imported and measured with global / routed / wrong-ring retrieval | Done |
@@ -76,8 +76,8 @@ under the documented conditions.
 | Docs | Done: README links to status, benchmark, threat model, driver roadmap, and release draft |
 | Examples | Done: cluster demo passed locally; core tests cover embedded usage |
 | AI/RAG demo | Done: `examples/ai_rag_case_study.sh` passed locally |
-| Package metadata | Done: `orbeliasdb.nimble` version / description / license checked |
-| CLI CRUD | `orbelias --help`, `put/get/query/list-ring/count-ring`, and minimal `orbelias shell` are available for embedded smoke usage | Done |
+| Package metadata | Done: `koutendb.nimble` version / description / license checked |
+| CLI CRUD | `kouten --help`, `put/get/query/list-ring/count-ring`, and minimal `kouten shell` are available for embedded smoke usage | Done |
 
 ## Required Before v0.2.0
 
@@ -95,8 +95,8 @@ under the documented conditions.
 | Documentation site | GitHub Pages workflow plus API / config / CLI entry pages exist under `docs/` | Done |
 | Docker Compose demos | Single galaxy, three-node galaxy, and local/remote universe demos build, start, pass health checks, and cleanly stop | Done |
 | CLI usability | CRUD, shell, help, and user-facing auth error smoke checks pass | Done |
-| Package metadata | `orbeliasdb.nimble` is valid and versioned for v0.2.0 | Done |
-| Nimble CLI entrypoint | `src/orbelias.nim` builds the user-facing `orbelias` command for Nimble installs | Done |
+| Package metadata | `koutendb.nimble` is valid and versioned for v0.2.0 | Done |
+| Nimble CLI entrypoint | `src/kouten.nim` builds the user-facing `kouten` command for Nimble installs | Done |
 | Production boundary | README/status/design avoid claiming enterprise production readiness before TLS, audit, coordinator redundancy, and mixed-version tests | Done |
 | Planner boundary | Heuristic planner status and benchmark dependency are documented | Done |
 
@@ -121,7 +121,7 @@ The post-v0.1 roadmap should focus on integration and operational maturity.
 The items below are candidates for v0.2 and later releases, not a promise that
 all of them fit into v0.2.0:
 
-- `orbeliasdb-flow` adapter
+- `koutendb-flow` adapter
 - FlowBrigade-backed retry / backoff / lock / rate limit for warp belt
 - FlowLogbook-compatible warp attempt and ack history
 - server-side warp scheduler

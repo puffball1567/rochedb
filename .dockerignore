@@ -1,5 +1,5 @@
 *
 !config.nims
-!orbeliasdb.nimble
+!koutendb.nimble
 !src
 !src/**

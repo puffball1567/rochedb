@@ -1,7 +1,7 @@
-## orbelias/auth の安全比較テスト
+## kouten/auth の安全比較テスト
 
 import std/unittest
-import ../src/orbelias/auth
+import ../src/kouten/auth
 
 suite "auth helpers":
   test "secureEqual matches equal strings":

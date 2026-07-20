@@ -4,7 +4,7 @@
 ## when FAISS should be evaluated, not to claim universal backend speed.
 
 import std/[math, monotimes, parseopt, strformat, strutils, times]
-import ../src/orbeliasdb
+import ../src/koutendb
 
 type
   BenchResult = object
@@ -40,7 +40,7 @@ proc makeVec(ring, item, dim: int): seq[float32] =
     for i in 0 ..< result.len:
       result[i] = result[i] / denom
 
-proc loadCorpus(db: OrbeliasDb, docs, rings, dim: int) =
+proc loadCorpus(db: KoutenDb, docs, rings, dim: int) =
   for i in 0 ..< docs:
     let ringId = i mod rings
     let ring = "bench/ring-" & $ringId

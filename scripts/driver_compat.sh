@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUN_DOCKER="${ORBELIAS_COMPAT_DOCKER:-0}"
-RUN_WIRE="${ORBELIAS_COMPAT_WIRE:-1}"
+RUN_DOCKER="${KOUTEN_COMPAT_DOCKER:-0}"
+RUN_WIRE="${KOUTEN_COMPAT_WIRE:-1}"
 
 log() {
   printf '\n[compat] %s\n' "$*"
@@ -21,22 +21,22 @@ cd "$ROOT"
 log "build C ABI shared library"
 scripts/build_capi.sh
 
-log "build orbeliasd for wire-driver tests"
-nim c -d:release --nimcache:/tmp/nimcache_orbeliasd -o:src/orbeliasd src/orbeliasd.nim
+log "build koutend for wire-driver tests"
+nim c -d:release --nimcache:/tmp/nimcache_koutend -o:src/koutend src/koutend.nim
 
 log "C ABI contract"
 mkdir -p bin
-gcc examples/cabi_contract.c -Iinclude -Llib -lorbeliasdb -Wl,-rpath,'$ORIGIN/../lib' -o bin/cabi_contract
+gcc examples/cabi_contract.c -Iinclude -Llib -lkoutendb -Wl,-rpath,'$ORIGIN/../lib' -o bin/cabi_contract
 LD_LIBRARY_PATH=lib bin/cabi_contract
 
-if [[ "${ORBELIAS_COMPAT_TLS:-1}" == "1" ]]; then
+if [[ "${KOUTEN_COMPAT_TLS:-1}" == "1" ]]; then
   log "C ABI TLS contract"
   scripts/cabi_tls_smoke.sh
 fi
 
 log "C++ driver"
-g++ -std=c++17 -Iinclude -Idrivers/cpp/include drivers/cpp/examples/contract_smoke.cpp -Llib -lorbeliasdb -o /tmp/orbelias_cpp_contract_smoke
-LD_LIBRARY_PATH=lib /tmp/orbelias_cpp_contract_smoke
+g++ -std=c++17 -Iinclude -Idrivers/cpp/include drivers/cpp/examples/contract_smoke.cpp -Llib -lkoutendb -o /tmp/kouten_cpp_contract_smoke
+LD_LIBRARY_PATH=lib /tmp/kouten_cpp_contract_smoke
 
 if require_cmd dotnet; then
   log "C# driver"
@@ -52,7 +52,7 @@ fi
 
 if require_cmd go; then
   log "Go driver"
-  (cd drivers/go && GOCACHE="${GOCACHE:-/tmp/orbelias-go-cache}" go test ./...)
+  (cd drivers/go && GOCACHE="${GOCACHE:-/tmp/kouten-go-cache}" go test ./...)
 fi
 
 if [[ "$RUN_WIRE" == "1" ]]; then
@@ -72,9 +72,9 @@ if [[ "$RUN_WIRE" == "1" ]]; then
   fi
 
   log "Nim wire protocol driver"
-  nim c --nimcache:/tmp/nimcache_orbelias_twire_driver -r tests/twire_driver.nim
+  nim c --nimcache:/tmp/nimcache_kouten_twire_driver -r tests/twire_driver.nim
 else
-  log "wire-driver tests skipped because ORBELIAS_COMPAT_WIRE=$RUN_WIRE"
+  log "wire-driver tests skipped because KOUTEN_COMPAT_WIRE=$RUN_WIRE"
 fi
 
 if [[ "$RUN_DOCKER" == "1" ]]; then
@@ -87,7 +87,7 @@ if [[ "$RUN_DOCKER" == "1" ]]; then
   log "Kotlin driver via Docker"
   drivers/kotlin/docker-test.sh
 else
-  log "Docker-backed PHP / Swift / Kotlin tests skipped; set ORBELIAS_COMPAT_DOCKER=1 to run them"
+  log "Docker-backed PHP / Swift / Kotlin tests skipped; set KOUTEN_COMPAT_DOCKER=1 to run them"
 fi
 
 log "driver compatibility suite OK"

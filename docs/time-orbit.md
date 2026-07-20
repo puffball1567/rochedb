@@ -1,11 +1,11 @@
 # Time Orbit Design
 
-Time orbit is an early OrbeliasDB placement model for time-series records such as
+Time orbit is an early KoutenDB placement model for time-series records such as
 logs, events, audit trails, metrics, traces, and AI/RAG execution history.
 
-The goal is to make time itself part of OrbeliasDB's coordinate model. Instead of
+The goal is to make time itself part of KoutenDB's coordinate model. Instead of
 walking a tree, scanning from the top, or relying only on a separate secondary
-index, OrbeliasDB can calculate where a time range should live and read only those
+index, KoutenDB can calculate where a time range should live and read only those
 time-local rings.
 
 This document is both a design note and the current early implementation guide.
@@ -98,7 +98,7 @@ putTime(ring = "logs/api", timestampMs = t, payload = doc)
 The payload should still carry at least:
 
 - `eventTimeMs`: the time the event claims to describe;
-- `ingestTimeMs`: the time OrbeliasDB received the event;
+- `ingestTimeMs`: the time KoutenDB received the event;
 - an optional source id, sequence, or trace id for tie-breaking.
 
 This keeps clock-skew and duplicate-event handling explicit.
@@ -130,9 +130,9 @@ Users usually ask questions like:
 - "show traces generated during this deployment";
 - "show RAG retrieval events around this model response".
 
-If OrbeliasDB can calculate the time-local coordinate directly, it can avoid
+If KoutenDB can calculate the time-local coordinate directly, it can avoid
 searching unrelated historical data. This is the same broad design direction as
-OrbeliasDB's ring and stellar locality: make application structure part of the
+KoutenDB's ring and stellar locality: make application structure part of the
 retrieval model.
 
 ## Bucket Width
@@ -168,14 +168,14 @@ Record identity and ordering should still be represented with metadata such as:
 - ingest timestamp;
 - source id;
 - per-source sequence;
-- generated OrbeliasDB id.
+- generated KoutenDB id.
 
 ## Relationship To Ring And Stellar Locality
 
 Time orbit is not a replacement for ordinary rings or stellar lenses.
 
 It is an additional placement profile for data whose dominant access pattern is
-time-based. It can compose with existing OrbeliasDB ideas:
+time-based. It can compose with existing KoutenDB ideas:
 
 ```text
 logs/api/@time/<coord>
@@ -213,19 +213,19 @@ layout metrics such as candidate-set size, disk span, and latency.
 The current embedded implementation exposes numeric millisecond timestamps:
 
 ```sh
-orbelias time-orbit \
+kouten time-orbit \
   --ring=logs/api \
   --bucket-ms=1000 \
   --bits=60 \
   --phase=100 \
   --salt=api
 
-orbelias time-put \
+kouten time-put \
   --ring=logs/api \
   --time-ms=1784376000000 \
   --payload='{"level":"error","message":"timeout"}'
 
-orbelias time-get \
+kouten time-get \
   --ring=logs/api \
   --from-ms=1784376000000 \
   --to-ms=1784376300000 \
@@ -248,4 +248,4 @@ It should not replace:
 - external object storage for long-term cold archives.
 
 The intended scope is narrower: make time-series placement and retrieval more
-direct for OrbeliasDB's coordinate-local access model.
+direct for KoutenDB's coordinate-local access model.
