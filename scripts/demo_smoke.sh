@@ -24,6 +24,12 @@ grep -q "stored codec=nif" "$WORK/payload-codecs.out"
 grep -q "stored codec=bif" "$WORK/payload-codecs.out"
 grep -q "reopen codec=bif" "$WORK/payload-codecs.out"
 
+echo "[demo-smoke] tiny LLM RAG prompt demo"
+examples/tiny_llm_rag_demo.sh >"$WORK/tiny-llm-rag.out"
+grep -q "== KoutenDB tiny LLM RAG demo ==" "$WORK/tiny-llm-rag.out"
+grep -q "LLM execution skipped." "$WORK/tiny-llm-rag.out"
+grep -q "gemma4:e2b" "$WORK/tiny-llm-rag.out"
+
 echo "[demo-smoke] build locality layout demo once"
 nim c -d:release --nimcache:"$WORK/nimcache" \
   -o:"$LOCALITY_BIN" examples/locality_layout_demo.nim >/dev/null

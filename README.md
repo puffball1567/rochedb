@@ -1,6 +1,6 @@
 # KoutenDB
 
-**v0.8.0 Technical Preview / research OSS.** KoutenDB is not yet presented as a
+**v0.8.1 Technical Preview / research OSS.** KoutenDB is not yet presented as a
 production replacement for Redis, PostgreSQL, MongoDB, Apache Arrow, or a
 dedicated vector database. The current release target is a measurable prototype
 of ring/galaxy-oriented storage, retrieval, persistence, drivers, and cluster
@@ -65,7 +65,7 @@ corpus size toward semantic working-set size.
 - Detailed design: [docs/koutendb-design.md](docs/koutendb-design.md)
 - Feature status / roadmap: [docs/koutendb-status.md](docs/koutendb-status.md)
 - Release checklist: [docs/release-checklist.md](docs/release-checklist.md)
-- GitHub release draft: [docs/github-release-v0.8.0.md](docs/github-release-v0.8.0.md)
+- GitHub release draft: [docs/github-release-v0.8.1.md](docs/github-release-v0.8.1.md)
 - Driver / FFI roadmap: [docs/koutendb-driver-roadmap.md](docs/koutendb-driver-roadmap.md)
 - Driver installation guide: [docs/driver-installation.md](docs/driver-installation.md)
 - FAISS versioning policy: [docs/faiss-versioning.md](docs/faiss-versioning.md)
@@ -432,7 +432,27 @@ kouten working-set-bench --n=100000 --rings=100 --queries=50 --budget=20
 kouten memory-pressure-bench --n=100000 --rings=100 --queries=50 --budget=20 --payload-bytes=512
 RUN_REDIS=0 examples/memory_pressure_case_study.sh
 examples/ai_rag_case_study.sh
+examples/tiny_llm_rag_demo.sh
 ```
+
+The tiny LLM demo always generates and prints a compact RAG prompt. LLM
+execution is optional so CI and first-time users do not need to download a
+model. To run the prompt through a trusted small local model, use an official
+Gemma edge-size model through Ollama:
+
+```sh
+ollama pull gemma4:e2b
+KOUTEN_TINY_LLM_CMD='ollama run gemma4:e2b' examples/tiny_llm_rag_demo.sh
+```
+
+Gemma 4 E2B is the recommended demo target because it is an official Google
+Gemma 4 edge-size model available through Ollama. Other commands can be used
+through `KOUTEN_TINY_LLM_CMD`, but the demo documentation intentionally avoids
+recommending unknown or untrusted model sources.
+
+References: [Google Gemma](https://deepmind.google/models/gemma/),
+[Gemma docs](https://ai.google.dev/gemma/docs),
+[Ollama Gemma 4](https://registry.ollama.com/library/gemma4).
 
 ### Redis Comparison
 

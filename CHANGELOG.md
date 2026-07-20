@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.8.1 - 2026-07-20
+
+### Added
+
+- Added `examples/tiny_llm_rag_demo.sh` and
+  `examples/tiny_llm_rag_demo.nim`.
+- The demo imports a deterministic JSONL corpus, compares global vs ring-routed
+  retrieval, writes a compact prompt, and can optionally pass that prompt to a
+  trusted tiny local LLM command.
+- Documented Gemma 4 E2B through Ollama as the recommended trusted small-model
+  demo target.
+- Added tiny LLM prompt generation to the demo smoke matrix without requiring a
+  model download in CI.
+
 ## v0.8.0 - 2026-07-20
 
 ### Changed
