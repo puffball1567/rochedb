@@ -2139,16 +2139,18 @@ proc runDump(dataDir, outPath: string, includeVectors: bool) =
     echo &"dump OK bytes={stats.bytes} records={stats.records} rings={stats.rings} documents={stats.documents} to={stats.destination}"
 
 proc runImportJsonl(dataDir, inPath, defaultRing, ringField, ringPrefix,
-                    payloadField, vecField: string, maxRecords: int) =
+                    payloadField, vecField: string, maxRecords,
+                    batchSize: int) =
   if dataDir.len == 0 or inPath.len == 0:
     raise newException(ValueError, "import-jsonl requires --data=DIR --in=FILE")
   var db = open(dataDir = dataDir)
   let stats = db.importJsonl(inPath, defaultRing = defaultRing,
                              ringField = ringField, ringPrefix = ringPrefix,
                              payloadField = payloadField, vecField = vecField,
-                             maxRecords = maxRecords)
+                             maxRecords = maxRecords,
+                             batchSize = batchSize)
   db.close()
-  echo &"import-jsonl OK read={stats.read} imported={stats.imported} skipped={stats.skipped} errors={stats.errors} rings={stats.rings} source={stats.source}"
+  echo &"import-jsonl OK read={stats.read} imported={stats.imported} skipped={stats.skipped} errors={stats.errors} rings={stats.rings} batches={stats.batches} batchSize={stats.batchSize} source={stats.source}"
 
 proc universeSyncEventNode(event: UniverseSyncEvent): JsonNode =
   %*{
@@ -2433,7 +2435,7 @@ proc printHelp() =
   echo "  kouten backup --data=DIR --backup=DIR [--durability=buffered|strong]"
   echo "  kouten restore --backup=DIR --data=DIR [--overwrite] [--durability=buffered|strong]"
   echo "  kouten dump --data=DIR [--out=FILE] [--no-vectors]"
-  echo "  kouten import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING]"
+  echo "  kouten import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING] [--batch-size=N]"
   echo "  kouten universe-sync --data=SOURCE_DIR [--target-data=TARGET_DIR | --peers=host:port,...] [--prune-acked]"
   echo "  kouten universe-status [--data=DIR | --peers=host:port,...] [--metrics]"
   echo "  kouten recovery-status [--mirror=DIR...] [--universe-config=FILE] [--required-healthy=N] [--metrics]"
@@ -2516,6 +2518,7 @@ proc main() =
   var routedBudget = 3
   var ringCount = 100
   var payloadBytes = 100
+  var importBatchSize = 1000
   var priority = 0
   var snapshotSeq: BiggestInt = 0
   var requiredHealthy = 1
@@ -2693,6 +2696,7 @@ proc main() =
       of "routed-budget": routedBudget = parseInt(val)
       of "rings": ringCount = parseInt(val)
       of "payload-bytes": payloadBytes = parseInt(val)
+      of "batch-size": importBatchSize = parseInt(val)
       of "priority": priority = parseInt(val)
       of "snapshot-seq": snapshotSeq = parseBiggestInt(val)
       of "required-healthy":
@@ -2852,7 +2856,8 @@ proc main() =
                        backupPassphrase, overwrite, durability)
   of "dump": runDump(dataDir, outPath, includeVectors)
   of "import-jsonl": runImportJsonl(dataDir, inPath, defaultRing, ringField,
-                                    ringPrefix, payloadField, vecField, n)
+                                    ringPrefix, payloadField, vecField, n,
+                                    importBatchSize)
   of "universe-export": runUniverseExport(dataDir, outPath)
   of "universe-apply": runUniverseApply(dataDir, inPath)
   of "universe-sync":

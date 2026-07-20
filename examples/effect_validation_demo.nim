@@ -1,10 +1,11 @@
-## Tiny LLM RAG demo.
+## KoutenDB effect validation demo.
 ##
 ## Imports a small generated JSONL corpus, compares global vs ring-routed
-## retrieval, and writes a compact prompt that can be passed to a trusted small
-## local model such as Gemma 4 E2B via Ollama.
+## retrieval, and writes a compact prompt. The point is to measure KoutenDB's
+## effect before an LLM is involved: scanned records, estimated context tokens,
+## and prompt size.
 
-import std/[json, parseopt, strformat, strutils]
+import std/[json, monotimes, parseopt, strformat, strutils, times]
 import ../src/koutendb
 
 type
@@ -48,6 +49,9 @@ proc main() =
   var question = "How should a Japanese customer request a refund?"
   var globalBudget = 8
   var routedBudget = 3
+  var batchSize = 1000
+  var diskBacked = false
+  var metrics = false
 
   for kind, key, val in getopt():
     case kind
@@ -60,27 +64,38 @@ proc main() =
       of "question": question = val
       of "global-budget": globalBudget = parseInt(val)
       of "routed-budget": routedBudget = parseInt(val)
+      of "batch-size": batchSize = parseInt(val)
+      of "disk-backed": diskBacked = true
+      of "metrics": metrics = true
       else: discard
     of cmdArgument, cmdShortOption, cmdEnd:
       discard
 
   if corpus.len == 0 or dataDir.len == 0 or promptOut.len == 0:
     raise newException(ValueError,
-      "usage: tiny_llm_rag_demo --corpus=FILE --data=DIR --prompt-out=FILE [--ring=RING] [--question=TEXT]")
+      "usage: effect_validation_demo --corpus=FILE --data=DIR --prompt-out=FILE [--ring=RING] [--question=TEXT]")
 
-  var db = open(dataDir = dataDir)
+  var db = open(dataDir = dataDir, diskBacked = diskBacked)
   defer: db.close()
 
-  db.setGalaxyDescription("Tiny LLM RAG demo corpus")
+  db.setGalaxyDescription("KoutenDB effect validation corpus")
   db.setRingDescription("docs/japan", "Japanese product and refund support notes")
   db.setRingDescription("docs/us", "US enterprise onboarding and billing notes")
   db.setRingDescription("support/errors", "Operational incident and error notes")
   db.setRingDescription("noise/general", "Unrelated background notes")
 
+  var t = getMonoTime()
   let stats = db.importJsonl(corpus, defaultRing = "noise/general",
                              ringField = "ring",
                              payloadField = "body",
-                             vecField = "embedding")
+                             vecField = "embedding",
+                             batchSize = batchSize)
+  let setUs = float((getMonoTime() - t).inNanoseconds) / 1e3
+  let setUsPerRecord =
+    if stats.imported > 0:
+      setUs / float(stats.imported)
+    else:
+      0.0
 
   let queryVec =
     if ring == "docs/japan":
@@ -92,22 +107,61 @@ proc main() =
     else:
       vec([0.05'f32, 0.04, 0.03, 1.0])
 
+  t = getMonoTime()
   let global = db.retrieveWithStats(queryVec, budget = globalBudget)
+  let globalUs = float((getMonoTime() - t).inNanoseconds) / 1e3
+  t = getMonoTime()
   let routed = db.retrieveWithStats(queryVec, ring = ring, budget = routedBudget)
+  let routedUs = float((getMonoTime() - t).inNanoseconds) / 1e3
   let prompt = buildPrompt(question, ring, routed.hits, routed.stats)
   writeFile(promptOut, prompt)
 
-  echo "== KoutenDB tiny LLM RAG demo =="
+  let scanReduction =
+    if global.stats.scanned > 0:
+      100.0 * (1.0 - float(routed.stats.scanned) / float(global.stats.scanned))
+    else:
+      0.0
+  let tokenReduction =
+    if global.stats.estimatedTokens > 0:
+      100.0 * (1.0 - float(routed.stats.estimatedTokens) / float(global.stats.estimatedTokens))
+    else:
+      0.0
+
+  if metrics:
+    echo &"effectImported {stats.imported}"
+    echo &"effectImportBatches {stats.batches}"
+    echo &"effectImportBatchSize {stats.batchSize}"
+    echo &"effectDiskBacked {int(diskBacked)}"
+    echo &"effectRings {stats.rings}"
+    echo &"effectRing {ring}"
+    echo &"effectSetLatencyUs {setUs:.3f}"
+    echo &"effectSetLatencyUsPerRecord {setUsPerRecord:.6f}"
+    echo &"effectGlobalScanned {global.stats.scanned}"
+    echo &"effectGlobalTotal {global.stats.totalVectors}"
+    echo &"effectGlobalTokens {global.stats.estimatedTokens}"
+    echo &"effectGlobalHits {global.hits.len}"
+    echo &"effectGlobalLatencyUs {globalUs:.3f}"
+    echo &"effectRoutedScanned {routed.stats.scanned}"
+    echo &"effectRoutedTotal {routed.stats.totalVectors}"
+    echo &"effectRoutedTokens {routed.stats.estimatedTokens}"
+    echo &"effectRoutedHits {routed.hits.len}"
+    echo &"effectRoutedLatencyUs {routedUs:.3f}"
+    echo &"effectScannedReductionPct {scanReduction:.3f}"
+    echo &"effectTokenReductionPct {tokenReduction:.3f}"
+    echo &"effectPromptBytes {prompt.len}"
+    return
+
+  echo "== KoutenDB effect validation demo =="
   echo &"corpus={corpus}"
   echo &"import read={stats.read} imported={stats.imported} skipped={stats.skipped} errors={stats.errors} rings={stats.rings}"
+  echo &"set latency_us={setUs:.3f} set_us_per_record={setUsPerRecord:.6f}"
   echo &"question={question}"
   echo &"ring={ring}"
-  echo &"global scanned={global.stats.scanned}/{global.stats.totalVectors} tokens~={global.stats.estimatedTokens} hits={global.hits.len}"
-  echo &"routed scanned={routed.stats.scanned}/{routed.stats.totalVectors} tokens~={routed.stats.estimatedTokens} hits={routed.hits.len}"
-  if global.stats.scanned > 0:
-    echo &"scanned reduction vs global={100.0 * (1.0 - float(routed.stats.scanned) / float(global.stats.scanned)):.1f}%"
-  if global.stats.estimatedTokens > 0:
-    echo &"token reduction vs global={100.0 * (1.0 - float(routed.stats.estimatedTokens) / float(global.stats.estimatedTokens)):.1f}%"
+  echo &"global scanned={global.stats.scanned}/{global.stats.totalVectors} tokens~={global.stats.estimatedTokens} hits={global.hits.len} latency_us={globalUs:.3f}"
+  echo &"routed scanned={routed.stats.scanned}/{routed.stats.totalVectors} tokens~={routed.stats.estimatedTokens} hits={routed.hits.len} latency_us={routedUs:.3f}"
+  echo &"scanned reduction vs global={scanReduction:.1f}%"
+  echo &"token reduction vs global={tokenReduction:.1f}%"
+  echo &"prompt bytes={prompt.len}"
   echo &"prompt={promptOut}"
 
 when isMainModule:

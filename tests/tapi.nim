@@ -1330,6 +1330,56 @@ suite "永続化":
     dst.close()
     removeDir(root)
 
+  test "disk-backed mode keeps payloads in WAL while preserving public reads":
+    let root = createTempDir("koutendb", "disk-backed")
+    let dir = root / "db"
+    let importPath = root / "input.jsonl"
+    try:
+      var db = open(dataDir = dir, diskBacked = true)
+      let a = db.put(%*{"title": "alpha", "kind": "doc"}, ring = "docs/a",
+                     vec = @[1.0'f32, 0.0'f32])
+      let b = db.put(encodedPayload("(object (title beta))", pcNif), ring = "docs/a",
+                     vec = @[0.8'f32, 0.2'f32])
+      discard db.put(%*{"title": "gamma", "kind": "note"}, ring = "docs/b",
+                     vec = @[0.0'f32, 1.0'f32])
+
+      check db.get(a).contains("alpha")
+      check db.getEncoded(b).codec == pcNif
+      check db.countByRing("docs/a") == 2
+      let page = db.listByRing("docs/a", limit = 10)
+      check page.items.len == 2
+      check page.items[1].codec == pcNif
+      let rr = db.retrieveWithStats(@[1.0'f32, 0.0'f32], ring = "docs/a", budget = 2)
+      check rr.hits.len == 2
+      check rr.stats.totalVectors == 3
+      check rr.stats.scanned == 2
+      db.close()
+
+      var reopened = open(dataDir = dir, diskBacked = true)
+      check reopened.get(a).contains("alpha")
+      check reopened.getEncoded(b).codec == pcNif
+      check reopened.countByRing("docs/a") == 2
+      let reopenedRead = reopened.retrieveWithStats(@[1.0'f32, 0.0'f32],
+                                                    ring = "docs/a", budget = 2)
+      check reopenedRead.hits.len == 2
+      check reopenedRead.stats.scanned == 2
+
+      writeFile(importPath,
+        "{\"ring\":\"imports/a\",\"payload\":{\"title\":\"one\"},\"vec\":[1,0]}\n" &
+        "{\"ring\":\"imports/a\",\"payload\":{\"title\":\"two\"},\"vec\":[0.9,0.1]}\n" &
+        "{\"ring\":\"imports/b\",\"payload\":{\"title\":\"three\"},\"vec\":[0,1]}\n")
+      let stats = reopened.importJsonl(importPath, ringField = "ring",
+                                       payloadField = "payload", vecField = "vec",
+                                       batchSize = 2)
+      check stats.imported == 3
+      check stats.batches == 2
+      check reopened.countByRing("imports/a") == 2
+      check reopened.retrieveWithStats(@[1.0'f32, 0.0'f32],
+                                       ring = "imports/a", budget = 2).stats.scanned == 2
+      reopened.close()
+    finally:
+      removeDir(root)
+
   test "importJsonl は外部 NoSQL JSONL を ring に割り振って保存できる":
     let dir = createTempDir("koutendb", "import-jsonl")
     let input = dir / "mongo-export.jsonl"
@@ -1342,10 +1392,13 @@ suite "永続化":
                                ringField = "tenant",
                                ringPrefix = "tenant/",
                                payloadField = "body",
-                               vecField = "embedding")
+                               vecField = "embedding",
+                               batchSize = 2)
     check stats.read == 3
     check stats.imported == 3
     check stats.rings == 3
+    check stats.batches == 2
+    check stats.batchSize == 2
 
     let aHits = db.retrieve(@[1.0'f32, 0.0'f32],
                             ring = "tenant/a", budget = 2)

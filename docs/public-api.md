@@ -68,7 +68,7 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 | `CompactStats` | store-defined | Result of WAL compaction. |
 | `BackupStats` | store-defined | Result of backup / verify / restore operations. |
 | `DumpStats` | `bytes`, `records`, `rings`, `documents`, `destination` | JSONL dump summary. |
-| `ImportStats` | `read`, `imported`, `skipped`, `errors`, `rings`, `source`, `defaultRing` | JSONL import summary. |
+| `ImportStats` | `read`, `imported`, `skipped`, `errors`, `rings`, `batches`, `batchSize`, `source`, `defaultRing` | JSONL import summary, including chunked bulk-load commit information. |
 | `KoutenDurability` | `durBuffered`, `durStrong` | WAL durability mode. |
 
 ## Handles

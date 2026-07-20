@@ -402,6 +402,8 @@ type
     skipped*: int
     errors*: int
     rings*: int
+    batches*: int
+    batchSize*: int
     source*: string
     defaultRing*: string
 
@@ -664,7 +666,8 @@ proc withStellarLock*(db: KoutenDb, stellar: string, body: proc(),
 # ---------------------------------------------------------------- 開閉と時計
 
 proc open*(nodes: int = 8, dataDir: string = "",
-           durability: KoutenDurability = durBuffered): KoutenDb =
+           durability: KoutenDurability = durBuffered,
+           diskBacked = false): KoutenDb =
   ## 組み込みモードで開く。dataDir を渡すと追記ログに永続化され、
   ## 再オープン時に中身と時計が復元される。
   if nodes <= 0 or nodes > int(high(uint16)):
@@ -672,7 +675,8 @@ proc open*(nodes: int = 8, dataDir: string = "",
   let tbl = equalArcTable(1, uint16(nodes))
   result = KoutenDb(mode: mEmbedded,
                    tbl: tbl,
-                   st: openStore(dataDir, durability = durability),
+                   st: openStore(dataDir, durability = durability,
+                                 diskBacked = diskBacked),
                    vectorBackend: newExactVectorBackend(),
                    plannerBackend: newHeuristicPlannerBackend())
   result.clock = result.st.maxTWrite   # 再開時: 時計を巻き戻さない
@@ -763,8 +767,9 @@ proc open*(nodes: int = 8, dataDir: string = "",
     let parentName = parentRingName(name)
     if parentName.len > 0 and parentName in result.ringNames:
       result.addRingChild(result.ringNames[parentName], key)
-  for _, p in result.st.items:
-    result.vectorBackend.upsert p
+  if not result.st.diskBacked:
+    for _, p in result.st.items:
+      result.vectorBackend.upsert p
 
 proc connect*(peers: string, username: string = "", password: string = "",
               authToken: string = "", secretKey: string = "",
@@ -1007,7 +1012,7 @@ proc dump*(db: KoutenDb, path: string = "", includeVectors = true): DumpStats =
       "galaxy": db.st.galaxy,
       "epoch": db.tbl.epoch,
       "nodes": db.tbl.nNodes,
-      "documents": db.st.items.len,
+      "documents": db.st.count(),
       "rings": db.rings.len
     })
     inc result.records
@@ -1021,7 +1026,7 @@ proc dump*(db: KoutenDb, path: string = "", includeVectors = true): DumpStats =
       })
       inc result.records
       inc result.rings
-    for _, p in db.st.items:
+    for p in db.st.allParticles():
       var doc = %*{
         "type": "document",
         "id": $(KoutenId(parent: p.parent, epoch: db.tbl.epoch,
@@ -1093,68 +1098,125 @@ proc pathVector(node: JsonNode, path: string): seq[float32] =
 
 proc importJsonl*(db: KoutenDb, path: string, defaultRing = "imported",
                   ringField = "", ringPrefix = "", payloadField = "",
-                  vecField = "", maxRecords = 0): ImportStats =
+                  vecField = "", maxRecords = 0,
+                  batchSize = 1000): ImportStats =
   ## JSON Lines を読み込み、ringField の値で ring に割り振りながら保存する。
   ## MongoDB export のような 1 行 1 JSON ドキュメントの移行入口。
   if db.mode != mEmbedded:
     raise newException(ValueError, "cluster connection cannot import JSONL directly")
   if path.len == 0:
     raise newException(ValueError, "import path is empty")
+  if batchSize < 0:
+    raise newException(ValueError, "batchSize must be >= 0")
   result.source = path
   result.defaultRing = defaultRing
+  result.batchSize = batchSize
   var seenRings = initTable[string, bool]()
   var koutenDumpMode = false
-  for line in lines(path):
-    if maxRecords > 0 and result.read >= maxRecords:
-      break
-    inc result.read
-    let trimmed = line.strip()
-    if trimmed.len == 0:
-      inc result.skipped
-      continue
-    try:
-      let node = parseJson(trimmed)
-      let nodeType =
-        if node.kind == JObject and node.hasKey("type"): node["type"].getStr()
-        else: ""
-      if nodeType == "meta" and
-          node{"format"}.getStr("") == "koutendb.dump.v1":
-        koutenDumpMode = true
+  var batchCount = 0
+  var stagedRingNames = initTable[uint64, bool]()
+  var stagedRingMeta = initTable[uint64, bool]()
+  let effectiveBatchSize =
+    if batchSize <= 0: 1
+    else: batchSize
+  var tx = db.st.beginTxn()
+  var staged: seq[Particle]
+
+  proc commitBatch() =
+    if staged.len == 0:
+      tx.rollback()
+      tx = db.st.beginTxn()
+      return
+    tx.commit()
+    if not db.st.diskBacked:
+      for p in staged:
+        db.vectorBackend.upsert p
+    staged.setLen(0)
+    stagedRingNames.clear()
+    stagedRingMeta.clear()
+    inc batchCount
+    tx = db.st.beginTxn()
+
+  proc stagePut(encoded: EncodedPayload, ring: string, vec: seq[float32]) =
+    let key = db.ringKey(ring, persist = false)
+    let ri = db.rings[key]
+    if not stagedRingNames.getOrDefault(key, false) and
+        db.st.ringNames.getOrDefault(key, "") != ring:
+      tx.putRingName(key, ring)
+      stagedRingNames[key] = true
+    if not stagedRingMeta.getOrDefault(key, false) and
+        key notin db.st.ringMeta:
+      tx.putRingMeta(key, ri.period, ri.headAngle)
+      stagedRingMeta[key] = true
+    let seq = db.st.nextSeq(key)
+    let p = Particle(parent: key, seq: seq, period: ri.period,
+                     head: ri.headAngle, tWrite: db.clock,
+                     payload: encoded.data, codec: encoded.codec,
+                     vec: vec.normalize())
+    tx.upsert p
+    staged.add p
+    if staged.len >= effectiveBatchSize:
+      commitBatch()
+
+  try:
+    for line in lines(path):
+      if maxRecords > 0 and result.read >= maxRecords:
+        break
+      inc result.read
+      let trimmed = line.strip()
+      if trimmed.len == 0:
         inc result.skipped
         continue
-      if nodeType == "ring" and
-          (koutenDumpMode or
-           (node.hasKey("key") and node.hasKey("name") and
-            node.hasKey("period") and node.hasKey("head"))):
-        inc result.skipped
-        continue
-      if nodeType == "document" and node.hasKey("ring") and node.hasKey("payload"):
-        let ring = node["ring"].getStr(defaultRing)
-        let codec =
-          if node.hasKey("codec"): parsePayloadCodec(node["codec"].getStr("raw"))
-          else: pcRaw
-        discard db.put(encodedPayload(node["payload"].getStr(), codec),
-                       ring = ring,
-                       vec = pathVector(node, "vec"))
+      try:
+        let node = parseJson(trimmed)
+        let nodeType =
+          if node.kind == JObject and node.hasKey("type"): node["type"].getStr()
+          else: ""
+        if nodeType == "meta" and
+            node{"format"}.getStr("") == "koutendb.dump.v1":
+          koutenDumpMode = true
+          inc result.skipped
+          continue
+        if nodeType == "ring" and
+            (koutenDumpMode or
+             (node.hasKey("key") and node.hasKey("name") and
+              node.hasKey("period") and node.hasKey("head"))):
+          inc result.skipped
+          continue
+        if nodeType == "document" and node.hasKey("ring") and node.hasKey("payload"):
+          let ring = node["ring"].getStr(defaultRing)
+          let codec =
+            if node.hasKey("codec"): parsePayloadCodec(node["codec"].getStr("raw"))
+            else: pcRaw
+          stagePut(encodedPayload(node["payload"].getStr(), codec),
+                   ring,
+                   pathVector(node, "vec"))
+          seenRings[ring] = true
+          inc result.imported
+          continue
+        var ring =
+          if ringField.len > 0: pathString(node, ringField) else: ""
+        if ring.len == 0:
+          ring = defaultRing
+        if ringPrefix.len > 0:
+          ring = ringPrefix & ring
+        let payload = pathPayload(node, payloadField)
+        if payload.len == 0:
+          inc result.skipped
+          continue
+        stagePut(encodedPayload(payload),
+                 ring,
+                 pathVector(node, vecField))
         seenRings[ring] = true
         inc result.imported
-        continue
-      var ring =
-        if ringField.len > 0: pathString(node, ringField) else: ""
-      if ring.len == 0:
-        ring = defaultRing
-      if ringPrefix.len > 0:
-        ring = ringPrefix & ring
-      let payload = pathPayload(node, payloadField)
-      if payload.len == 0:
-        inc result.skipped
-        continue
-      discard db.put(payload, ring = ring, vec = pathVector(node, vecField))
-      seenRings[ring] = true
-      inc result.imported
-    except CatchableError:
-      inc result.errors
+      except CatchableError:
+        inc result.errors
+    commitBatch()
+  except CatchableError:
+    tx.rollback()
+    raise
   result.rings = seenRings.len
+  result.batches = batchCount
 
 proc clampTopRings*(topRings: int): int
 
@@ -1165,12 +1227,14 @@ proc configureVectorBackend*(db: KoutenDb, kind: VectorBackendKind) =
   case kind
   of vbExact:
     db.vectorBackend = newExactVectorBackend()
-    for _, p in db.st.items:
-      db.vectorBackend.upsert p
+    if not db.st.diskBacked:
+      for _, p in db.st.items:
+        db.vectorBackend.upsert p
   of vbFaiss:
     db.vectorBackend = newFaissVectorBackend()
-    for _, p in db.st.items:
-      db.vectorBackend.upsert p
+    if not db.st.diskBacked:
+      for _, p in db.st.items:
+        db.vectorBackend.upsert p
 
 proc configurePlannerBackend*(db: KoutenDb, kind: PlannerBackendKind) =
   ## retrieval planner backend を選ぶ。
@@ -1377,7 +1441,8 @@ proc put*(db: KoutenDb, encoded: EncodedPayload, ring: string = "default",
                      codec: encoded.codec,
                      vec: normVec)
     db.st.upsert p
-    db.vectorBackend.upsert p
+    if not db.st.diskBacked:
+      db.vectorBackend.upsert p
   of mCluster:
     # 書き込み先 = 環ヘッド角の所有ノード（決定論的 write leader, §7 の最小版）
     let node = int(db.tbl.owner(ri.headAngle))
@@ -1581,9 +1646,10 @@ proc commit*(tx: KoutenTx) =
   case tx.db.mode
   of mEmbedded:
     tx.tx.commit()
-    tx.db.vectorBackend.clear()
-    for _, p in tx.db.st.items:
-      tx.db.vectorBackend.upsert p
+    if not tx.db.st.diskBacked:
+      tx.db.vectorBackend.clear()
+      for _, p in tx.db.st.items:
+        tx.db.vectorBackend.upsert p
   of mCluster:
     tx.db.client.txCommitReq(0, tx.clusterTxId, tx.clusterOps)
     if tx.db.writeAckModeForOps(tx.clusterOps) == wamApplied:
@@ -1772,7 +1838,7 @@ proc get*(db: KoutenDb, id: KoutenId): string =
   ## 読み出し。クラスタでは所在を計算して当該ノードに直接取りに行く（1 RTT）。
   case db.mode
   of mEmbedded:
-    db.st.items[(id.parent, id.seq)].payload
+    db.st.getParticle(id.parent, id.seq).payload
   of mCluster:
     db.fetchClusterPayload(id, "").data
 
@@ -1780,7 +1846,7 @@ proc getEncoded*(db: KoutenDb, id: KoutenId): EncodedPayload =
   ## Read payload bytes together with the persisted format identifier.
   case db.mode
   of mEmbedded:
-    let p = db.st.items[(id.parent, id.seq)]
+    let p = db.st.getParticle(id.parent, id.seq)
     encodedPayload(p.payload, p.codec)
   of mCluster:
     db.fetchClusterPayload(id, "")
@@ -1856,17 +1922,17 @@ proc update*(db: KoutenDb, id: KoutenId, encoded: EncodedPayload,
   ## payload を置換する。vec を省略した場合は既存 vec を保持する。
   case db.mode
   of mEmbedded:
-    let k = (id.parent, id.seq)
-    if k notin db.st.items:
+    if not db.st.contains(id.parent, id.seq):
       raise newException(KeyError, "id が見つからない")
-    var p = db.st.items[k]
+    var p = db.st.getParticle(id.parent, id.seq)
     p.payload = encoded.data
     p.codec = encoded.codec
     p.tWrite = db.clock
     if vec.len > 0:
       p.vec = vec.normalize()
     db.st.upsert p
-    db.vectorBackend.upsert p
+    if not db.st.diskBacked:
+      db.vectorBackend.upsert p
   of mCluster:
     let ri = db.rings[id.parent]
     let txid = db.client.txBeginReq(0)
@@ -1920,7 +1986,7 @@ proc countByRing*(db: KoutenDb, ring: string): int =
   case db.mode
   of mEmbedded:
     for itemKey in db.st.itemsByRing.getOrDefault(key, @[]):
-      if itemKey in db.st.items:
+      if db.st.contains(itemKey[0], itemKey[1]):
         inc result
   of mCluster:
     for node in 0 ..< db.client.peers.len:
@@ -1958,12 +2024,12 @@ proc listByRing*(db: KoutenDb, ring: string, limit = 100,
   for itemKey in db.st.itemsByRing.getOrDefault(key, @[]):
     if itemKey[1].int64 <= afterSeq:
       continue
-    if itemKey notin db.st.items:
+    if not db.st.contains(itemKey[0], itemKey[1]):
       continue
     if emitted >= limit:
       result.nextCursor = $lastSeq
       break
-    let p = db.st.items[itemKey]
+    let p = db.st.getParticle(itemKey[0], itemKey[1])
     result.items.add KoutenRecord(
       id: KoutenId(parent: p.parent, epoch: db.tbl.epoch, seq: p.seq,
                   tWrite: p.tWrite),
@@ -2937,7 +3003,7 @@ proc query*(db: KoutenDb, id: KoutenId, prepared: PreparedSelection): JsonNode =
   ## クラスタではサーバ側で射影され、選択した分だけがネットワークを流れる。
   case db.mode
   of mEmbedded:
-    let p = db.st.items[(id.parent, id.seq)]
+    let p = db.st.getParticle(id.parent, id.seq)
     if not p.codec.supportsJsonProjection:
       raise newException(ValueError,
         "payload codec " & p.codec.payloadCodecName & " does not support JSON projection")
@@ -3482,7 +3548,7 @@ proc retrieveWithStats*(db: KoutenDb, queryVec: seq[float32], ring: string = "",
       result.hits.add KoutenHit(id: KoutenId(parent: h.parent, epoch: db.tbl.epoch,
                                            seq: h.seq, tWrite: h.tWrite),
                                score: h.score, payload: h.payload,
-                               codec: db.st.items.getOrDefault((h.parent, h.seq)).codec)
+                               codec: h.codec)
     result.stats.totalVectors = rr.totalVectors
     result.stats.scanned = rr.scanned
     result.stats.skippedVectors = rr.skippedVectors

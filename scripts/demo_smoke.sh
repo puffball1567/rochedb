@@ -24,11 +24,13 @@ grep -q "stored codec=nif" "$WORK/payload-codecs.out"
 grep -q "stored codec=bif" "$WORK/payload-codecs.out"
 grep -q "reopen codec=bif" "$WORK/payload-codecs.out"
 
-echo "[demo-smoke] tiny LLM RAG prompt demo"
-examples/tiny_llm_rag_demo.sh >"$WORK/tiny-llm-rag.out"
-grep -q "== KoutenDB tiny LLM RAG demo ==" "$WORK/tiny-llm-rag.out"
-grep -q "LLM execution skipped." "$WORK/tiny-llm-rag.out"
-grep -q "gemma4:e2b" "$WORK/tiny-llm-rag.out"
+echo "[demo-smoke] effect validation prompt demo"
+examples/effect_validation_demo.sh >"$WORK/effect-validation.out"
+grep -q "== KoutenDB effect validation demo ==" "$WORK/effect-validation.out"
+grep -q "scanned reduction vs global=" "$WORK/effect-validation.out"
+grep -q "token reduction vs global=" "$WORK/effect-validation.out"
+grep -q "LLM execution skipped." "$WORK/effect-validation.out"
+grep -q "gemma4:e2b" "$WORK/effect-validation.out"
 
 echo "[demo-smoke] build locality layout demo once"
 nim c -d:release --nimcache:"$WORK/nimcache" \

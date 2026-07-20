@@ -9,13 +9,13 @@ QUERY_RING="${QUERY_RING:-docs/japan}"
 QUESTION="${QUESTION:-How should a Japanese customer request a refund?}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK="${TMPDIR:-/tmp}/koutendb-tiny-llm-rag-$$"
+WORK="${TMPDIR:-/tmp}/koutendb-effect-validation-$$"
 CORPUS="$WORK/corpus.jsonl"
 DATA="$WORK/data"
 PROMPT="$WORK/prompt.txt"
 
 cleanup() {
-  if [[ "${KEEP_TINY_LLM_DEMO:-0}" != "1" ]]; then
+  if [[ "${KEEP_EFFECT_VALIDATION_DEMO:-0}" != "1" ]]; then
     rm -rf "$WORK"
   else
     echo "kept workdir: $WORK"
@@ -50,7 +50,7 @@ write_noise() {
   done
 }
 
-echo "== Generate deterministic tiny LLM RAG corpus =="
+echo "== Generate deterministic effect-validation corpus =="
 write_ring "docs/japan" "docs-japan" "Japanese refund support" \
   "Japanese customers should contact support with their order number, invoice email, payment method, and refund reason. Support confirms eligibility and then starts the refund workflow." \
   "1.0,0.02,0.01,0.0"
@@ -66,13 +66,13 @@ echo "corpus: $CORPUS"
 echo "docs:   $(wc -l < "$CORPUS")"
 echo
 
-echo "== Build tiny LLM RAG prompt generator =="
-nim c -d:release --nimcache:/tmp/nimcache_kouten_tiny_llm_rag \
-  -o:bin/tiny_llm_rag_demo examples/tiny_llm_rag_demo.nim
+echo "== Build effect validation runner =="
+nim c -d:release --nimcache:/tmp/nimcache_kouten_effect_validation \
+  -o:bin/effect_validation_demo examples/effect_validation_demo.nim
 
 echo
 echo "== Retrieve compact context with KoutenDB =="
-bin/tiny_llm_rag_demo \
+bin/effect_validation_demo \
   --corpus="$CORPUS" \
   --data="$DATA" \
   --prompt-out="$PROMPT" \
@@ -86,15 +86,15 @@ echo "== Prompt preview =="
 sed -n '1,40p' "$PROMPT"
 
 echo
-if [[ -n "${KOUTEN_TINY_LLM_CMD:-}" ]]; then
+if [[ -n "${KOUTEN_TRUSTED_LLM_CMD:-}" ]]; then
   echo "== Run trusted tiny LLM command =="
-  echo "command: $KOUTEN_TINY_LLM_CMD"
-  "${SHELL:-/bin/sh}" -lc "$KOUTEN_TINY_LLM_CMD" < "$PROMPT"
+  echo "command: $KOUTEN_TRUSTED_LLM_CMD"
+  "${SHELL:-/bin/sh}" -lc "$KOUTEN_TRUSTED_LLM_CMD" < "$PROMPT"
 else
   echo "LLM execution skipped."
   echo "Recommended trusted small model path:"
   echo "  ollama pull gemma4:e2b"
-  echo "  KOUTEN_TINY_LLM_CMD='ollama run gemma4:e2b' examples/tiny_llm_rag_demo.sh"
+  echo "  KOUTEN_TRUSTED_LLM_CMD='ollama run gemma4:e2b' examples/effect_validation_demo.sh"
   echo
   echo "Gemma 4 E2B is the recommended demo target because it is an official Google Gemma 4 edge-size model."
 fi

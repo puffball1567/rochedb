@@ -87,6 +87,7 @@ type
       ringName: string
     of txUpsert:
       p: Particle
+      walOffset: int64
     of txRemove:
       remParent: uint64
       remSeq: uint32
@@ -170,6 +171,10 @@ type
   Store* = ref object
     items*: Table[(uint64, uint32), Particle]
     itemsByRing*: Table[uint64, seq[(uint64, uint32)]]
+    itemOffsets*: Table[(uint64, uint32), int64]
+    itemHasVector*: Table[(uint64, uint32), bool]
+    vectorCount*: int
+    vectorCountByRing*: Table[uint64, int]
     forwarders*: Table[(uint64, uint32), Forwarder]
     seqs*: Table[uint64, uint32]                    # ring → 次の seq
     ringMeta*: Table[uint64, tuple[period, head: float]]
@@ -195,6 +200,7 @@ type
     logPath: string
     lockFd: cint
     persistent: bool
+    diskBacked*: bool
     durability*: StoreDurability
     dirty: int
     lastFlush: MonoTime
@@ -349,12 +355,34 @@ proc applyOp(s: Store, op: TxOp) =
     s.maxTWrite = max(s.maxTWrite, p.tWrite)
     if p.seq >= s.seqs.getOrDefault(p.parent, 0'u32):
       s.seqs[p.parent] = p.seq + 1
-    if k notin s.items:
+    let oldHasVector = s.itemHasVector.getOrDefault(k, false)
+    let newHasVector = p.vec.len > 0
+    if k notin s.items and k notin s.itemOffsets:
       s.itemsByRing.mgetOrPut(p.parent, @[]).add k
-    s.items[k] = p
+    if oldHasVector != newHasVector:
+      if newHasVector:
+        inc s.vectorCount
+        s.vectorCountByRing[p.parent] = s.vectorCountByRing.getOrDefault(p.parent, 0) + 1
+      else:
+        s.vectorCount = max(0, s.vectorCount - 1)
+        let n = max(0, s.vectorCountByRing.getOrDefault(p.parent, 0) - 1)
+        if n == 0: s.vectorCountByRing.del p.parent else: s.vectorCountByRing[p.parent] = n
+    s.itemHasVector[k] = newHasVector
+    if s.diskBacked:
+      if op.walOffset >= 0:
+        s.itemOffsets[k] = op.walOffset
+      s.items.del k
+    else:
+      s.items[k] = p
   of txRemove:
     let k = key(op.remParent, op.remSeq)
     s.items.del k
+    s.itemOffsets.del k
+    if s.itemHasVector.getOrDefault(k, false):
+      s.vectorCount = max(0, s.vectorCount - 1)
+      let n = max(0, s.vectorCountByRing.getOrDefault(op.remParent, 0) - 1)
+      if n == 0: s.vectorCountByRing.del op.remParent else: s.vectorCountByRing[op.remParent] = n
+      s.itemHasVector.del k
     if op.remParent in s.itemsByRing:
       var entries = s.itemsByRing[op.remParent]
       for i in countdown(entries.len - 1, 0):
@@ -407,6 +435,8 @@ proc clusterTxOpBody(txid: uint64, op: ClusterTxOp): string =
 proc writeClusterTxOp(file: File, txid: uint64, op: ClusterTxOp) =
   file.writeWalRecord(clusterTxOpBody(txid, op))
 
+proc checkedWalBody(fs: Stream, parts: seq[string]): string
+
 proc readParticleRecord(fs: Stream, parts: seq[string], firstData: int): Particle =
   result = Particle(parent: parseBiggestUInt(parts[firstData]).uint64,
                     seq: parseUInt(parts[firstData + 1]).uint32,
@@ -422,6 +452,75 @@ proc readParticleRecord(fs: Stream, parts: seq[string], firstData: int): Particl
   result.payload = fs.readExactStr(len)
   result.vec = fs.readVec(dim)
   fs.readRecordSep()
+
+proc readParticleAtStream(fs: Stream, offset: int64): Particle =
+  fs.setPosition(offset)
+  var line = ""
+  if not fs.readLine(line):
+    raise newException(IOError, "missing WAL record at offset " & $offset)
+  var parts = line.split(' ')
+  var recordStream: Stream = fs
+  var bodyStream: StringStream = nil
+  if parts[0] == WalRecordTag:
+    let body = checkedWalBody(fs, parts)
+    bodyStream = newStringStream(body)
+    if not bodyStream.readLine(line):
+      raise newException(WalCorruptionError, "empty WAL record body")
+    parts = line.split(' ')
+    recordStream = bodyStream
+  case parts[0]
+  of "P":
+    result = recordStream.readParticleRecord(parts, 1)
+  of "XP":
+    result = recordStream.readParticleRecord(parts, 2)
+  else:
+    raise newException(IOError, "WAL offset does not point to a particle record")
+
+proc flushDiskBackedLog(s: Store) =
+  if s.logFile != nil:
+    s.logFile.flushFile()
+
+proc openWalReadStream(s: Store): FileStream =
+  if not s.persistent or s.logPath.len == 0:
+    raise newException(IOError, "disk-backed particle read requires persistent WAL")
+  s.flushDiskBackedLog()
+  result = newFileStream(s.logPath, fmRead)
+  if result.isNil:
+    raise newException(IOError, "cannot open WAL for particle read")
+
+proc readParticleAt*(s: Store, offset: int64): Particle =
+  let fs = s.openWalReadStream()
+  try:
+    result = fs.readParticleAtStream(offset)
+  finally:
+    fs.close()
+
+iterator particlesByRing*(s: Store, ring: uint64): Particle =
+  if s.diskBacked:
+    let fs = s.openWalReadStream()
+    try:
+      for k in s.itemsByRing.getOrDefault(ring, @[]):
+        if k in s.itemOffsets:
+          yield fs.readParticleAtStream(s.itemOffsets[k])
+    finally:
+      fs.close()
+  else:
+    for k in s.itemsByRing.getOrDefault(ring, @[]):
+      if k in s.items:
+        yield s.items[k]
+
+iterator allParticles*(s: Store): Particle =
+  for ring in s.itemsByRing.keys:
+    for p in s.particlesByRing(ring):
+      yield p
+
+proc getParticle*(s: Store, parent: uint64, seq: uint32): Particle =
+  let k = key(parent, seq)
+  if k in s.items:
+    return s.items[k]
+  if k in s.itemOffsets:
+    return s.readParticleAt(s.itemOffsets[k])
+  raise newException(KeyError, "particle not found")
 
 proc readClusterTxOp(fs: Stream, parts: seq[string], firstData: int): ClusterTxOp =
   var data = firstData
@@ -569,6 +668,7 @@ proc checkedWalBody(fs: Stream, parts: seq[string]): string =
     raise newException(WalCorruptionError,
       "WAL checksum mismatch: expected " & $expected & ", got " & $actual)
 
+
 proc replay(s: Store, path: string, repair = true) =
   let versionedWal = isVersionedWalFile(path)
   if repair and not versionedWal:
@@ -586,6 +686,7 @@ proc replay(s: Store, path: string, repair = true) =
   var strictWal = false
   var seenRecord = false
   while true:
+    let recordStart = fs.getPosition()
     if not fs.readLine(line):
       break
     if line.len == 0: continue
@@ -664,7 +765,7 @@ proc replay(s: Store, path: string, repair = true) =
         recordStream.readRecordSep()
       of "P":
         let p = recordStream.readParticleRecord(parts, 1)
-        s.applyOp(TxOp(kind: txUpsert, p: p))
+        s.applyOp(TxOp(kind: txUpsert, p: p, walOffset: recordStart))
       of "E":
         let parent = parseBiggestUInt(parts[1]).uint64
         let seq = parseUInt(parts[2]).uint32
@@ -709,7 +810,8 @@ proc replay(s: Store, path: string, repair = true) =
       of "XP":
         let txid = parseBiggestUInt(parts[1]).uint64
         let p = recordStream.readParticleRecord(parts, 2)
-        pending.mgetOrPut(txid, @[]).add TxOp(kind: txUpsert, p: p)
+        pending.mgetOrPut(txid, @[]).add TxOp(kind: txUpsert, p: p,
+                                              walOffset: recordStart)
         s.nextTxId = max(s.nextTxId, txid + 1)
       of "XD":
         let txid = parseBiggestUInt(parts[1]).uint64
@@ -867,11 +969,13 @@ when defined(koutenTestFailpoints):
   proc poisonWritesForTest*(s: Store, message = "test write failure") =
     s.markWriteFailed(message)
 
-proc openStore*(dir: string, durability: StoreDurability = durBuffered): Store =
+proc openStore*(dir: string, durability: StoreDurability = durBuffered,
+                diskBacked = false): Store =
   ## dir == "" ならメモリのみ。指定時は dir/kouten.log に追記・起動時に再生。
   result = Store(lastFlush: getMonoTime(), nextTxId: 1,
                  lockFd: -1,
-                 durability: durability)
+                 durability: durability,
+                 diskBacked: diskBacked)
   if dir.len > 0:
     createDir(dir)
     result.lockFd = acquireDataDirLock(dir)
@@ -1555,10 +1659,12 @@ proc nextSeq*(s: Store, ring: uint64): uint32 =
 
 proc upsert*(s: Store, p: Particle) =
   s.ensureWritable()
-  s.applyOp(TxOp(kind: txUpsert, p: p))
+  var walOffset = -1'i64
   if s.persistent:
+    walOffset = s.logFile.getFilePos()
     s.logFile.writeParticleRecord("", 0, p)
     s.flushMaybe()
+  s.applyOp(TxOp(kind: txUpsert, p: p, walOffset: walOffset))
 
 proc putForwarder*(s: Store, oldParent: uint64, oldSeq: uint32, f: Forwarder) =
   s.ensureWritable()
@@ -1576,9 +1682,14 @@ proc remove*(s: Store, parent: uint64, seq: uint32) =
     s.flushMaybe()
 
 proc contains*(s: Store, parent: uint64, seq: uint32): bool =
-  key(parent, seq) in s.items
+  let k = key(parent, seq)
+  k in s.items or k in s.itemOffsets
 
-proc count*(s: Store): int = s.items.len
+proc count*(s: Store): int =
+  if s.diskBacked:
+    s.itemOffsets.len
+  else:
+    s.items.len
 
 proc clusterTxPending*(s: Store): int =
   for _, intent in s.clusterTx:
@@ -1650,7 +1761,8 @@ proc commit*(tx: StoreTxn) =
   s.ensureWritable()
   if s.persistent:
     s.logFile.writeWalLine("T " & $tx.id)
-    for op in tx.ops:
+    for i in 0 ..< tx.ops.len:
+      var op = tx.ops[i]
       case op.kind
       of txRingMeta:
         s.logFile.writeWalLine("XR " & $tx.id & " " & $op.ringKey & " " &
@@ -1659,6 +1771,8 @@ proc commit*(tx: StoreTxn) =
         s.logFile.writeWalRecord("XN " & $tx.id & " " & $op.ringNameKey & " " &
                                  $op.ringName.len & "\n" & op.ringName & "\n")
       of txUpsert:
+        op.walOffset = s.logFile.getFilePos()
+        tx.ops[i] = op
         s.logFile.writeParticleRecord("XP", tx.id, op.p)
       of txRemove:
         s.logFile.writeWalLine("XD " & $tx.id & " " & $op.remParent & " " & $op.remSeq)

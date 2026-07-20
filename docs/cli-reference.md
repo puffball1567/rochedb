@@ -309,14 +309,16 @@ For scripts and reproducible examples, prefer the single-shot commands above.
 | `backup-encrypted` | `--data=DIR --backup=DIR --passphrase=TEXT` | Create encrypted backup. |
 | `restore-encrypted` | `--backup=DIR --data=DIR --passphrase=TEXT` | Restore encrypted backup. |
 | `dump` | `--data=DIR` | Export JSONL. |
-| `import-jsonl` | `--data=DIR --in=FILE` | Import JSONL. |
+| `import-jsonl` | `--data=DIR --in=FILE`; optional `--batch-size=N` | Import JSONL with chunked commits. |
 | `describe-galaxy` | `--data=DIR --description=TEXT` | Set galaxy map description. |
 | `describe-ring` | `--data=DIR --ring=RING --description=TEXT` | Set ring map description. |
 
 `dump` / `import-jsonl` are the portable migration boundary while KoutenDB's
 pre-v1.0 internal WAL format can still evolve. `import-jsonl` recognizes
 `koutendb.dump.v1` files produced by `dump`, and can also route external JSONL
-exports through `--ring-field`, `--payload-field`, and `--vec-field`. See
+exports through `--ring-field`, `--payload-field`, and `--vec-field`.
+`--batch-size=N` controls how many successfully parsed records are committed per
+WAL transaction during bulk load. See
 [Data Migration](data-migration.md).
 
 ## Recovery Commands

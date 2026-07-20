@@ -24,6 +24,7 @@ downstream AI/RAG or application logic.
 - [Feature Status / Roadmap](koutendb-status.md)
 - [Benchmark Notes](koutendb-bench.md)
 - [Benchmark Comparison Tables](benchmark-comparison.md)
+- [Effect Validation](effect-validation.md)
 
 ## Core Guides
 

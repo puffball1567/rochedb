@@ -78,6 +78,7 @@ corpus size toward semantic working-set size.
 - Universe sync: [docs/universe-sync.md](docs/universe-sync.md)
 - Threat model: [docs/threat-model.md](docs/threat-model.md)
 - Benchmark notes: [docs/koutendb-bench.md](docs/koutendb-bench.md)
+- Effect validation: [docs/effect-validation.md](docs/effect-validation.md)
 - Cloud operations metrics: [docs/cloud-operations.md](docs/cloud-operations.md)
 - Topology configuration reference: [docs/topology-config.md](docs/topology-config.md)
 - Topology pattern catalog: [docs/topology-examples.md](docs/topology-examples.md)
@@ -238,7 +239,8 @@ locality boundaries.
   routed by fields such as `tenant`, `category`, `region`, or `date`.
 - Migration boundary: `kouten dump` / `kouten import-jsonl` provide a
   human-readable data path while the pre-v1.0 internal WAL format continues to
-  harden.
+  harden. `kouten import-jsonl --batch-size=N` uses chunked commits for larger
+  imports.
 - Galaxy isolation: separate services can use separate galaxies, data
   directories, credentials, and clusters while using the same implementation.
 - Explainable location: `locate(id)` and `locate(id, at=...)` make placement
@@ -432,27 +434,69 @@ kouten working-set-bench --n=100000 --rings=100 --queries=50 --budget=20
 kouten memory-pressure-bench --n=100000 --rings=100 --queries=50 --budget=20 --payload-bytes=512
 RUN_REDIS=0 examples/memory_pressure_case_study.sh
 examples/ai_rag_case_study.sh
-examples/tiny_llm_rag_demo.sh
+examples/effect_validation_demo.sh
+examples/effect_validation_matrix.sh
+KOUTEN_EFFECT_LARGE=1 examples/effect_validation_matrix.sh
 ```
 
-The tiny LLM demo always generates and prints a compact RAG prompt. LLM
-execution is optional so CI and first-time users do not need to download a
-model. To run the prompt through a trusted small local model, use an official
-Gemma edge-size model through Ollama:
+The effect-validation demo generates a deterministic JSONL corpus, imports it
+into KoutenDB, and compares global retrieval against ring-routed retrieval. It
+prints scanned-record reduction, estimated token reduction, and the compact
+prompt size before any LLM is involved. It also reports import and retrieval
+latency so the working-set effect is visible alongside the cost of loading and
+reading the generated corpus.
+
+The matrix script runs several generated workload shapes, including near-topic
+distractors and medium noisy corpora. The default manual matrix can scale to
+13,500,000 generated documents; `KOUTEN_EFFECT_LARGE=1` adds a
+98,000,000-document stress case. `KOUTEN_EFFECT_BATCH_SIZE=N` controls JSONL
+bulk-load chunk commits. It
+prints a Markdown table so results can be pasted into issues, release notes, or
+benchmark discussions. This is a manual validation path and is not part of the
+default CI smoke suite:
+
+```sh
+KOUTEN_EFFECT_SCALE=1000 KOUTEN_EFFECT_BATCH_SIZE=10000 examples/effect_validation_matrix.sh
+KOUTEN_EFFECT_LARGE=1 examples/effect_validation_matrix.sh
+```
+
+To validate a copied or exported real dataset without production traffic:
+
+```sh
+KOUTEN_REAL_JSONL=/path/to/corpus.jsonl QUERY_RING=docs/japan examples/offline_effect_validation.sh
+```
+
+LLM execution is optional so CI and first-time users do not need to download a
+model. To run the generated prompt through a trusted small local model, use an
+official Gemma edge-size model through Ollama:
 
 ```sh
 ollama pull gemma4:e2b
-KOUTEN_TINY_LLM_CMD='ollama run gemma4:e2b' examples/tiny_llm_rag_demo.sh
+KOUTEN_TRUSTED_LLM_CMD='ollama run gemma4:e2b' examples/effect_validation_demo.sh
 ```
 
 Gemma 4 E2B is the recommended demo target because it is an official Google
 Gemma 4 edge-size model available through Ollama. Other commands can be used
-through `KOUTEN_TINY_LLM_CMD`, but the demo documentation intentionally avoids
+through `KOUTEN_TRUSTED_LLM_CMD`, but the demo documentation intentionally avoids
 recommending unknown or untrusted model sources.
 
 References: [Google Gemma](https://deepmind.google/models/gemma/),
 [Gemma docs](https://ai.google.dev/gemma/docs),
 [Ollama Gemma 4](https://registry.ollama.com/library/gemma4).
+
+### Load Smoke With JMeter
+
+KoutenDB also includes an optional Apache JMeter plan for basic TCP server load
+smoke:
+
+```sh
+examples/jmeter_load_smoke.sh
+KOUTEN_JMETER_THREADS=64 KOUTEN_JMETER_LOOPS=1000 examples/jmeter_load_smoke.sh
+```
+
+This plan sends concurrent `HEALTH` requests to `koutend`. It validates the TCP
+listener and request/response path under load; it is separate from the
+retrieval-locality benchmarks above.
 
 ### Redis Comparison
 
