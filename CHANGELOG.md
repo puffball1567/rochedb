@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.8.0 - 2026-07-20
+
+### Changed
+
+- Renamed the project to KoutenDB.
+- Renamed the public Nim package to `koutendb`.
+- Renamed the command-line entry point to `kouten` and the daemon to `koutend`.
+- Renamed the C ABI surface to `libkoutendb.so`, `include/koutendb.h`, and
+  `kouten_*` / `KOUTEN_*` symbols.
+- Renamed source modules, documentation, examples, scripts, driver stubs, and
+  environment variables to the KoutenDB naming scheme.
+- Updated package, driver, installation, benchmark, topology, codec, and
+  release documentation to use the new repository and package names.
+
+### Naming
+
+- `Kouten` comes from the Japanese word "kouten" (公転), meaning orbital
+  revolution: one body moving around another. The name is intended to match
+  KoutenDB's model: rings, orbit-inspired placement, locality-aware retrieval,
+  and smaller working sets.
+- The technical direction is unchanged. KoutenDB remains the same
+  ring-oriented NoSQL document/vector store, now under a clearer name.
+
+### Migration Notes
+
+- New users should use `nimble install koutendb` and the `kouten` CLI.
+- Driver projects should target the new KoutenDB package names and C ABI names.
+- Older names may remain visible in historical posts, package registries, or
+  archived release notes, but the active project name is KoutenDB.
+
 ## v0.7.0 - 2026-07-19
 
 ### Added
