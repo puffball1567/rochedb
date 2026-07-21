@@ -1,6 +1,6 @@
 # KoutenDB
 
-**v0.8.0 Technical Preview / research OSS.** KoutenDB is not yet presented as a
+**v0.9.0 Technical Preview / research OSS.** KoutenDB is not yet presented as a
 production replacement for Redis, PostgreSQL, MongoDB, Apache Arrow, or a
 dedicated vector database. The current release target is a measurable prototype
 of ring/galaxy-oriented storage, retrieval, persistence, drivers, and cluster
@@ -65,7 +65,7 @@ corpus size toward semantic working-set size.
 - Detailed design: [docs/koutendb-design.md](docs/koutendb-design.md)
 - Feature status / roadmap: [docs/koutendb-status.md](docs/koutendb-status.md)
 - Release checklist: [docs/release-checklist.md](docs/release-checklist.md)
-- GitHub release draft: [docs/github-release-v0.8.0.md](docs/github-release-v0.8.0.md)
+- GitHub release draft: [docs/github-release-v0.9.0.md](docs/github-release-v0.9.0.md)
 - Driver / FFI roadmap: [docs/koutendb-driver-roadmap.md](docs/koutendb-driver-roadmap.md)
 - Driver installation guide: [docs/driver-installation.md](docs/driver-installation.md)
 - FAISS versioning policy: [docs/faiss-versioning.md](docs/faiss-versioning.md)
@@ -78,6 +78,7 @@ corpus size toward semantic working-set size.
 - Universe sync: [docs/universe-sync.md](docs/universe-sync.md)
 - Threat model: [docs/threat-model.md](docs/threat-model.md)
 - Benchmark notes: [docs/koutendb-bench.md](docs/koutendb-bench.md)
+- Effect validation: [docs/effect-validation.md](docs/effect-validation.md)
 - Cloud operations metrics: [docs/cloud-operations.md](docs/cloud-operations.md)
 - Topology configuration reference: [docs/topology-config.md](docs/topology-config.md)
 - Topology pattern catalog: [docs/topology-examples.md](docs/topology-examples.md)
@@ -238,7 +239,8 @@ locality boundaries.
   routed by fields such as `tenant`, `category`, `region`, or `date`.
 - Migration boundary: `kouten dump` / `kouten import-jsonl` provide a
   human-readable data path while the pre-v1.0 internal WAL format continues to
-  harden.
+  harden. `kouten import-jsonl --batch-size=N` uses chunked commits for larger
+  imports.
 - Galaxy isolation: separate services can use separate galaxies, data
   directories, credentials, and clusters while using the same implementation.
 - Explainable location: `locate(id)` and `locate(id, at=...)` make placement
@@ -342,21 +344,22 @@ Reference latency results are tracked in
 in [docs/benchmark-comparison.md](docs/benchmark-comparison.md). The short
 version is:
 
-- KoutenDB 3-node TCP with persistence enabled measured `46.8 us` per
-  single-key read and `48.8 us` per single-key write in the PostgreSQL
+- KoutenDB 3-node TCP with persistence enabled measured `53.5 us` per
+  single-key read and `61.1 us` per single-key write in the PostgreSQL
   comparison helper run. KoutenDB strong durability was not part of that
   PostgreSQL reference comparison.
-- PostgreSQL 14.23 on the same machine measured `68 us` for primary-key read
-  and `80 us` for `synchronous_commit=off` single-row write over local TCP.
+- PostgreSQL 14.23 on the same machine measured `86 us` for primary-key read
+  and `104 us` for `synchronous_commit=off` single-row write over local TCP.
 - The PostgreSQL comparison also has a Docker-Docker reproduction helper; in
   the included run KoutenDB measured `61.3 us` read / `103.6 us` write, while
   PostgreSQL measured `103 us` primary-key read / `149 us`
   `synchronous_commit=off` write.
-- Local Redis 6.0.16 measured `42.85 us/op` for single GET and `3.53 us/op`
-  for pipeline GET. KoutenDB TCP GET measured `45.26 us/op`; KoutenDB TCP BGET
-  measured `1.48 us/op` in the same local single-client benchmark shape.
-  This Redis comparison uses KoutenDB persistence disabled and measures simple
-  GET/BGET latency, not the working-set reduction benchmarks.
+- Local Redis 6.0.16 measured `44.93 us/op` for single GET and `3.55 us/op`
+  for pipeline GET. KoutenDB TCP GET measured `52.88 us/op`; KoutenDB TCP BGET
+  measured `1.81 us/op` in the same local single-client benchmark shape.
+  This Redis comparison uses KoutenDB buffered durability with a fresh temporary
+  data directory and measures simple GET/BGET latency, not the working-set
+  reduction benchmarks.
 - In the Docker-Docker Redis comparison, Redis 7 measured `48.74 us/op` for
   single GET and `2.06 us/op` for pipeline GET. KoutenDB TCP GET measured
   `55.78 us/op`; KoutenDB TCP BGET measured `1.71 us/op`.
@@ -432,7 +435,69 @@ kouten working-set-bench --n=100000 --rings=100 --queries=50 --budget=20
 kouten memory-pressure-bench --n=100000 --rings=100 --queries=50 --budget=20 --payload-bytes=512
 RUN_REDIS=0 examples/memory_pressure_case_study.sh
 examples/ai_rag_case_study.sh
+examples/effect_validation_demo.sh
+examples/effect_validation_matrix.sh
+KOUTEN_EFFECT_LARGE=1 examples/effect_validation_matrix.sh
 ```
+
+The effect-validation demo generates a deterministic JSONL corpus, imports it
+into KoutenDB, and compares global retrieval against ring-routed retrieval. It
+prints scanned-record reduction, estimated token reduction, and the compact
+prompt size before any LLM is involved. It also reports import and retrieval
+latency so the working-set effect is visible alongside the cost of loading and
+reading the generated corpus.
+
+The matrix script runs several generated workload shapes, including near-topic
+distractors and medium noisy corpora. The default manual matrix can scale to
+13,500,000 generated documents; `KOUTEN_EFFECT_LARGE=1` adds a
+98,000,000-document stress case. `KOUTEN_EFFECT_BATCH_SIZE=N` controls JSONL
+bulk-load chunk commits. It
+prints a Markdown table so results can be pasted into issues, release notes, or
+benchmark discussions. This is a manual validation path and is not part of the
+default CI smoke suite:
+
+```sh
+KOUTEN_EFFECT_SCALE=1000 KOUTEN_EFFECT_BATCH_SIZE=10000 examples/effect_validation_matrix.sh
+KOUTEN_EFFECT_LARGE=1 examples/effect_validation_matrix.sh
+```
+
+To validate a copied or exported real dataset without production traffic:
+
+```sh
+KOUTEN_REAL_JSONL=/path/to/corpus.jsonl QUERY_RING=docs/japan examples/offline_effect_validation.sh
+```
+
+LLM execution is optional so CI and first-time users do not need to download a
+model. To run the generated prompt through a trusted small local model, use an
+official Gemma edge-size model through Ollama:
+
+```sh
+ollama pull gemma4:e2b
+KOUTEN_TRUSTED_LLM_CMD='ollama run gemma4:e2b' examples/effect_validation_demo.sh
+```
+
+Gemma 4 E2B is the recommended demo target because it is an official Google
+Gemma 4 edge-size model available through Ollama. Other commands can be used
+through `KOUTEN_TRUSTED_LLM_CMD`, but the demo documentation intentionally avoids
+recommending unknown or untrusted model sources.
+
+References: [Google Gemma](https://deepmind.google/models/gemma/),
+[Gemma docs](https://ai.google.dev/gemma/docs),
+[Ollama Gemma 4](https://registry.ollama.com/library/gemma4).
+
+### Load Smoke With JMeter
+
+KoutenDB also includes an optional Apache JMeter plan for basic TCP server load
+smoke:
+
+```sh
+examples/jmeter_load_smoke.sh
+KOUTEN_JMETER_THREADS=64 KOUTEN_JMETER_LOOPS=1000 examples/jmeter_load_smoke.sh
+```
+
+This plan sends concurrent `HEALTH` requests to `koutend`. It validates the TCP
+listener and request/response path under load; it is separate from the
+retrieval-locality benchmarks above.
 
 ### Redis Comparison
 

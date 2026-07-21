@@ -30,6 +30,7 @@ type
     tWrite: float
     vec: seq[float32]
     payload: string
+    codec: PayloadCodec
 
   FaissRingIndex = object
     handle: FaissHandle
@@ -127,7 +128,7 @@ method upsert*(b: FaissVectorBackend, p: Particle) =
   b.setDim(p.vec)
   let k = (p.parent, p.seq)
   let e = FaissEntry(parent: p.parent, seq: p.seq, tWrite: p.tWrite,
-                     vec: p.vec, payload: p.payload)
+                     vec: p.vec, payload: p.payload, codec: p.codec)
   if k in b.global.indexed:
     b.global.entries[b.global.indexed[k]] = e
     b.api.rebuild(b.global, b.dim)
@@ -200,7 +201,7 @@ proc searchIndex(api: FaissApi, ix: var FaissRingIndex, totalVectors: int,
     let e = ix.entries[pos]
     result.hits.add VectorCandidate(parent: e.parent, seq: e.seq,
                                     tWrite: e.tWrite, score: float(scores[i]),
-                                    payload: e.payload)
+                                    payload: e.payload, codec: e.codec)
   result.hits.sort(proc(a, b: VectorCandidate): int = cmp(b.score, a.score))
   for h in result.hits:
     result.payloadBytes += h.payload.len

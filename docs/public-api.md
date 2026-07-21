@@ -20,7 +20,7 @@ technical preview. The canonical Nim definitions live in `src/koutendb.nim`.
 | `KoutenListPage` | `items`, `nextCursor` | Cursor-paginated list result. Empty `nextCursor` means there is no next page. |
 | `KoutenReadOptions` | `filter`, `selection`, `limit`, `cursor`, `pagination`, `page`, `pageLimit`, `sortField`, `sortDirection` | Ring read options shared with CLI semantics. |
 | `KoutenReadPage` | `ring`, `count`, `items`, `nextCursor`, `pagination`, `page`, `pageLimit`, `sortField`, `sortDirection` | Ring read result. `count` is the number of returned items; use `countByRing` for the total ring size. |
-| `KoutenStellarOptions` | `filter`, `selection`, `limitPerRing`, `maxDepth`, `branchBudget`, `subrings`, `includeRoot`, `sortField`, `sortDirection` | Coordinate-near read options. A root ring behaves like a telescope target; nearby rings are visible unless narrowed by `subrings`. |
+| `KoutenStellarOptions` | `filter`, `selection`, `limitPerRing`, `subringLimits`, `subringSortFields`, `subringSortDirections`, `maxDepth`, `branchBudget`, `subrings`, `includeRoot`, `sortField`, `sortDirection` | Coordinate-near read options. A root ring behaves like a telescope target; nearby rings are visible unless narrowed by `subrings`. `limitPerRing`, `sortField`, and `sortDirection` are defaults; the `subring*` tables override them for named subrings. |
 | `KoutenStellarPage` | `root`, `ringsVisited`, `count`, `rings` | Grouped result for a stellar neighborhood read. |
 | `KoutenLockToken` | `scope`, `coordinate`, `token`, `fence`, `expiresAt`, `keys` | Cooperative opt-in lock token for high-integrity embedded workflows. `fence` is a monotonically increasing handle-local fencing value. |
 | `KoutenHit` | `id`, `score`, `payload` | Retrieval hit. `score` is cosine similarity, higher is closer. |
@@ -68,7 +68,7 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 | `CompactStats` | store-defined | Result of WAL compaction. |
 | `BackupStats` | store-defined | Result of backup / verify / restore operations. |
 | `DumpStats` | `bytes`, `records`, `rings`, `documents`, `destination` | JSONL dump summary. |
-| `ImportStats` | `read`, `imported`, `skipped`, `errors`, `rings`, `source`, `defaultRing` | JSONL import summary. |
+| `ImportStats` | `read`, `imported`, `skipped`, `errors`, `rings`, `batches`, `batchSize`, `source`, `defaultRing` | JSONL import summary, including chunked bulk-load commit information. |
 | `KoutenDurability` | `durBuffered`, `durStrong` | WAL durability mode. |
 
 ## Handles

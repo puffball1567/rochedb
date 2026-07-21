@@ -302,6 +302,9 @@ type
     filter*: JsonNode
     selection*: string
     limitPerRing*: int
+    subringLimits*: Table[string, int]
+    subringSortFields*: Table[string, string]
+    subringSortDirections*: Table[string, KoutenReadSortDirection]
     maxDepth*: int
     branchBudget*: int
     subrings*: seq[string]
@@ -402,6 +405,8 @@ type
     skipped*: int
     errors*: int
     rings*: int
+    batches*: int
+    batchSize*: int
     source*: string
     defaultRing*: string
 
@@ -664,7 +669,8 @@ proc withStellarLock*(db: KoutenDb, stellar: string, body: proc(),
 # ---------------------------------------------------------------- 開閉と時計
 
 proc open*(nodes: int = 8, dataDir: string = "",
-           durability: KoutenDurability = durBuffered): KoutenDb =
+           durability: KoutenDurability = durBuffered,
+           diskBacked = false): KoutenDb =
   ## 組み込みモードで開く。dataDir を渡すと追記ログに永続化され、
   ## 再オープン時に中身と時計が復元される。
   if nodes <= 0 or nodes > int(high(uint16)):
@@ -672,7 +678,8 @@ proc open*(nodes: int = 8, dataDir: string = "",
   let tbl = equalArcTable(1, uint16(nodes))
   result = KoutenDb(mode: mEmbedded,
                    tbl: tbl,
-                   st: openStore(dataDir, durability = durability),
+                   st: openStore(dataDir, durability = durability,
+                                 diskBacked = diskBacked),
                    vectorBackend: newExactVectorBackend(),
                    plannerBackend: newHeuristicPlannerBackend())
   result.clock = result.st.maxTWrite   # 再開時: 時計を巻き戻さない
@@ -763,8 +770,9 @@ proc open*(nodes: int = 8, dataDir: string = "",
     let parentName = parentRingName(name)
     if parentName.len > 0 and parentName in result.ringNames:
       result.addRingChild(result.ringNames[parentName], key)
-  for _, p in result.st.items:
-    result.vectorBackend.upsert p
+  if not result.st.diskBacked:
+    for _, p in result.st.items:
+      result.vectorBackend.upsert p
 
 proc connect*(peers: string, username: string = "", password: string = "",
               authToken: string = "", secretKey: string = "",
@@ -1007,7 +1015,7 @@ proc dump*(db: KoutenDb, path: string = "", includeVectors = true): DumpStats =
       "galaxy": db.st.galaxy,
       "epoch": db.tbl.epoch,
       "nodes": db.tbl.nNodes,
-      "documents": db.st.items.len,
+      "documents": db.st.count(),
       "rings": db.rings.len
     })
     inc result.records
@@ -1021,7 +1029,7 @@ proc dump*(db: KoutenDb, path: string = "", includeVectors = true): DumpStats =
       })
       inc result.records
       inc result.rings
-    for _, p in db.st.items:
+    for p in db.st.allParticles():
       var doc = %*{
         "type": "document",
         "id": $(KoutenId(parent: p.parent, epoch: db.tbl.epoch,
@@ -1093,68 +1101,128 @@ proc pathVector(node: JsonNode, path: string): seq[float32] =
 
 proc importJsonl*(db: KoutenDb, path: string, defaultRing = "imported",
                   ringField = "", ringPrefix = "", payloadField = "",
-                  vecField = "", maxRecords = 0): ImportStats =
+                  vecField = "", maxRecords = 0,
+                  batchSize = 1000,
+                  packSegments = false): ImportStats =
   ## JSON Lines を読み込み、ringField の値で ring に割り振りながら保存する。
   ## MongoDB export のような 1 行 1 JSON ドキュメントの移行入口。
   if db.mode != mEmbedded:
     raise newException(ValueError, "cluster connection cannot import JSONL directly")
   if path.len == 0:
     raise newException(ValueError, "import path is empty")
+  if batchSize < 0:
+    raise newException(ValueError, "batchSize must be >= 0")
   result.source = path
   result.defaultRing = defaultRing
+  result.batchSize = batchSize
   var seenRings = initTable[string, bool]()
   var koutenDumpMode = false
-  for line in lines(path):
-    if maxRecords > 0 and result.read >= maxRecords:
-      break
-    inc result.read
-    let trimmed = line.strip()
-    if trimmed.len == 0:
-      inc result.skipped
-      continue
-    try:
-      let node = parseJson(trimmed)
-      let nodeType =
-        if node.kind == JObject and node.hasKey("type"): node["type"].getStr()
-        else: ""
-      if nodeType == "meta" and
-          node{"format"}.getStr("") == "koutendb.dump.v1":
-        koutenDumpMode = true
+  var batchCount = 0
+  var stagedRingNames = initTable[uint64, bool]()
+  var stagedRingMeta = initTable[uint64, bool]()
+  let effectiveBatchSize =
+    if batchSize <= 0: 1
+    else: batchSize
+  var tx = db.st.beginTxn()
+  var staged: seq[Particle]
+
+  proc commitBatch() =
+    if staged.len == 0:
+      tx.rollback()
+      tx = db.st.beginTxn()
+      return
+    tx.commit()
+    if packSegments and db.st.diskBacked:
+      tx.packCommittedSegments()
+    if not db.st.diskBacked:
+      for p in staged:
+        db.vectorBackend.upsert p
+    staged.setLen(0)
+    stagedRingNames.clear()
+    stagedRingMeta.clear()
+    inc batchCount
+    tx = db.st.beginTxn()
+
+  proc stagePut(encoded: EncodedPayload, ring: string, vec: seq[float32]) =
+    let key = db.ringKey(ring, persist = false)
+    let ri = db.rings[key]
+    if not stagedRingNames.getOrDefault(key, false) and
+        db.st.ringNames.getOrDefault(key, "") != ring:
+      tx.putRingName(key, ring)
+      stagedRingNames[key] = true
+    if not stagedRingMeta.getOrDefault(key, false) and
+        key notin db.st.ringMeta:
+      tx.putRingMeta(key, ri.period, ri.headAngle)
+      stagedRingMeta[key] = true
+    let seq = db.st.nextSeq(key)
+    let p = Particle(parent: key, seq: seq, period: ri.period,
+                     head: ri.headAngle, tWrite: db.clock,
+                     payload: encoded.data, codec: encoded.codec,
+                     vec: vec.normalize())
+    tx.upsert p
+    staged.add p
+    if staged.len >= effectiveBatchSize:
+      commitBatch()
+
+  try:
+    for line in lines(path):
+      if maxRecords > 0 and result.read >= maxRecords:
+        break
+      inc result.read
+      let trimmed = line.strip()
+      if trimmed.len == 0:
         inc result.skipped
         continue
-      if nodeType == "ring" and
-          (koutenDumpMode or
-           (node.hasKey("key") and node.hasKey("name") and
-            node.hasKey("period") and node.hasKey("head"))):
-        inc result.skipped
-        continue
-      if nodeType == "document" and node.hasKey("ring") and node.hasKey("payload"):
-        let ring = node["ring"].getStr(defaultRing)
-        let codec =
-          if node.hasKey("codec"): parsePayloadCodec(node["codec"].getStr("raw"))
-          else: pcRaw
-        discard db.put(encodedPayload(node["payload"].getStr(), codec),
-                       ring = ring,
-                       vec = pathVector(node, "vec"))
+      try:
+        let node = parseJson(trimmed)
+        let nodeType =
+          if node.kind == JObject and node.hasKey("type"): node["type"].getStr()
+          else: ""
+        if nodeType == "meta" and
+            node{"format"}.getStr("") == "koutendb.dump.v1":
+          koutenDumpMode = true
+          inc result.skipped
+          continue
+        if nodeType == "ring" and
+            (koutenDumpMode or
+             (node.hasKey("key") and node.hasKey("name") and
+              node.hasKey("period") and node.hasKey("head"))):
+          inc result.skipped
+          continue
+        if nodeType == "document" and node.hasKey("ring") and node.hasKey("payload"):
+          let ring = node["ring"].getStr(defaultRing)
+          let codec =
+            if node.hasKey("codec"): parsePayloadCodec(node["codec"].getStr("raw"))
+            else: pcRaw
+          stagePut(encodedPayload(node["payload"].getStr(), codec),
+                   ring,
+                   pathVector(node, "vec"))
+          seenRings[ring] = true
+          inc result.imported
+          continue
+        var ring =
+          if ringField.len > 0: pathString(node, ringField) else: ""
+        if ring.len == 0:
+          ring = defaultRing
+        if ringPrefix.len > 0:
+          ring = ringPrefix & ring
+        let payload = pathPayload(node, payloadField)
+        if payload.len == 0:
+          inc result.skipped
+          continue
+        stagePut(encodedPayload(payload),
+                 ring,
+                 pathVector(node, vecField))
         seenRings[ring] = true
         inc result.imported
-        continue
-      var ring =
-        if ringField.len > 0: pathString(node, ringField) else: ""
-      if ring.len == 0:
-        ring = defaultRing
-      if ringPrefix.len > 0:
-        ring = ringPrefix & ring
-      let payload = pathPayload(node, payloadField)
-      if payload.len == 0:
-        inc result.skipped
-        continue
-      discard db.put(payload, ring = ring, vec = pathVector(node, vecField))
-      seenRings[ring] = true
-      inc result.imported
-    except CatchableError:
-      inc result.errors
+      except CatchableError:
+        inc result.errors
+    commitBatch()
+  except CatchableError:
+    tx.rollback()
+    raise
   result.rings = seenRings.len
+  result.batches = batchCount
 
 proc clampTopRings*(topRings: int): int
 
@@ -1165,12 +1233,21 @@ proc configureVectorBackend*(db: KoutenDb, kind: VectorBackendKind) =
   case kind
   of vbExact:
     db.vectorBackend = newExactVectorBackend()
-    for _, p in db.st.items:
-      db.vectorBackend.upsert p
+    if not db.st.diskBacked:
+      for _, p in db.st.items:
+        db.vectorBackend.upsert p
   of vbFaiss:
     db.vectorBackend = newFaissVectorBackend()
-    for _, p in db.st.items:
-      db.vectorBackend.upsert p
+    if not db.st.diskBacked:
+      for _, p in db.st.items:
+        db.vectorBackend.upsert p
+
+proc packDiskBackedSegments*(db: KoutenDb): SegmentPackStats {.discardable.} =
+  ## Build ring-local physical segment files for disk-backed embedded reads.
+  ## WAL remains the source of truth; segments are rebuildable read layout.
+  doAssert db.mode == mEmbedded, "packDiskBackedSegments は組み込みモード専用"
+  if db.st.diskBacked:
+    result = db.st.rebuildRingSegments()
 
 proc configurePlannerBackend*(db: KoutenDb, kind: PlannerBackendKind) =
   ## retrieval planner backend を選ぶ。
@@ -1377,7 +1454,8 @@ proc put*(db: KoutenDb, encoded: EncodedPayload, ring: string = "default",
                      codec: encoded.codec,
                      vec: normVec)
     db.st.upsert p
-    db.vectorBackend.upsert p
+    if not db.st.diskBacked:
+      db.vectorBackend.upsert p
   of mCluster:
     # 書き込み先 = 環ヘッド角の所有ノード（決定論的 write leader, §7 の最小版）
     let node = int(db.tbl.owner(ri.headAngle))
@@ -1581,9 +1659,10 @@ proc commit*(tx: KoutenTx) =
   case tx.db.mode
   of mEmbedded:
     tx.tx.commit()
-    tx.db.vectorBackend.clear()
-    for _, p in tx.db.st.items:
-      tx.db.vectorBackend.upsert p
+    if not tx.db.st.diskBacked:
+      tx.db.vectorBackend.clear()
+      for _, p in tx.db.st.items:
+        tx.db.vectorBackend.upsert p
   of mCluster:
     tx.db.client.txCommitReq(0, tx.clusterTxId, tx.clusterOps)
     if tx.db.writeAckModeForOps(tx.clusterOps) == wamApplied:
@@ -1708,7 +1787,7 @@ proc batchDeleteAtomic*(db: KoutenDb, ids: seq[KoutenId]) =
 # ---------------------------------------------------------------- 読み出し
 
 proc fetchClusterPayload(db: KoutenDb, id: KoutenId, selection: string,
-                         fwdDepth = 0): EncodedPayload =
+                         fwdDepth = 0, needCodec = true): EncodedPayload =
   ## 現在の所有ノードから取得。取りこぼしのフォールバック順:
   ##   primary → 1つ手前（尾流コピー, §6.1）→ もう一度 primary
   ## 最後の再試行は「手前を見ている間に粒子が前方へハンドオフされた」TOCTOU
@@ -1737,12 +1816,20 @@ proc fetchClusterPayload(db: KoutenDb, id: KoutenId, selection: string,
     var r: tuple[found: bool, node: int, value: string, codec: PayloadCodec, forwarded: bool,
                  newParent: uint64, newSeq: uint32, newTWrite: float]
     try:
-      r =
-        if selection.len == 0:
-          db.client.getReq(node, id.parent, id.seq, ri.period, ri.headAngle, id.tWrite)
-        else:
-          db.client.queryReq(node, id.parent, id.seq, ri.period, ri.headAngle,
-                             id.tWrite, selection)
+      if selection.len == 0 and not needCodec:
+        let raw = db.client.getValueReq(node, id.parent, id.seq, ri.period,
+                                        ri.headAngle, id.tWrite)
+        r = (found: raw.found, node: raw.node, value: raw.value,
+             codec: pcRaw, forwarded: raw.forwarded,
+             newParent: raw.newParent, newSeq: raw.newSeq,
+             newTWrite: raw.newTWrite)
+      else:
+        r =
+          if selection.len == 0:
+            db.client.getReq(node, id.parent, id.seq, ri.period, ri.headAngle, id.tWrite)
+          else:
+            db.client.queryReq(node, id.parent, id.seq, ri.period, ri.headAngle,
+                               id.tWrite, selection)
     except IOError, OSError:
       let pendingRetry = landingRead()
       if pendingRetry.deleted:
@@ -1759,7 +1846,7 @@ proc fetchClusterPayload(db: KoutenDb, id: KoutenId, selection: string,
         raise newException(KeyError, "FWD 先の環メタがない（parent=" & $r.newParent & "）")
       return db.fetchClusterPayload(KoutenId(parent: r.newParent, epoch: id.epoch,
                                             seq: r.newSeq, tWrite: r.newTWrite),
-                                    selection, fwdDepth + 1)
+                                    selection, fwdDepth + 1, needCodec)
     let pendingRetry = landingRead()
     if pendingRetry.deleted:
       raise newException(KeyError, "id は cluster tx landing intent で削除済み")
@@ -1772,15 +1859,15 @@ proc get*(db: KoutenDb, id: KoutenId): string =
   ## 読み出し。クラスタでは所在を計算して当該ノードに直接取りに行く（1 RTT）。
   case db.mode
   of mEmbedded:
-    db.st.items[(id.parent, id.seq)].payload
+    db.st.getParticle(id.parent, id.seq).payload
   of mCluster:
-    db.fetchClusterPayload(id, "").data
+    db.fetchClusterPayload(id, "", needCodec = false).data
 
 proc getEncoded*(db: KoutenDb, id: KoutenId): EncodedPayload =
   ## Read payload bytes together with the persisted format identifier.
   case db.mode
   of mEmbedded:
-    let p = db.st.items[(id.parent, id.seq)]
+    let p = db.st.getParticle(id.parent, id.seq)
     encodedPayload(p.payload, p.codec)
   of mCluster:
     db.fetchClusterPayload(id, "")
@@ -1856,17 +1943,17 @@ proc update*(db: KoutenDb, id: KoutenId, encoded: EncodedPayload,
   ## payload を置換する。vec を省略した場合は既存 vec を保持する。
   case db.mode
   of mEmbedded:
-    let k = (id.parent, id.seq)
-    if k notin db.st.items:
+    if not db.st.contains(id.parent, id.seq):
       raise newException(KeyError, "id が見つからない")
-    var p = db.st.items[k]
+    var p = db.st.getParticle(id.parent, id.seq)
     p.payload = encoded.data
     p.codec = encoded.codec
     p.tWrite = db.clock
     if vec.len > 0:
       p.vec = vec.normalize()
     db.st.upsert p
-    db.vectorBackend.upsert p
+    if not db.st.diskBacked:
+      db.vectorBackend.upsert p
   of mCluster:
     let ri = db.rings[id.parent]
     let txid = db.client.txBeginReq(0)
@@ -1920,7 +2007,7 @@ proc countByRing*(db: KoutenDb, ring: string): int =
   case db.mode
   of mEmbedded:
     for itemKey in db.st.itemsByRing.getOrDefault(key, @[]):
-      if itemKey in db.st.items:
+      if db.st.contains(itemKey[0], itemKey[1]):
         inc result
   of mCluster:
     for node in 0 ..< db.client.peers.len:
@@ -1955,20 +2042,17 @@ proc listByRing*(db: KoutenDb, ring: string, limit = 100,
     return
   var emitted = 0
   var lastSeq = -1'i64
-  for itemKey in db.st.itemsByRing.getOrDefault(key, @[]):
-    if itemKey[1].int64 <= afterSeq:
-      continue
-    if itemKey notin db.st.items:
+  for p in db.st.particlesByRing(key):
+    if p.seq.int64 <= afterSeq:
       continue
     if emitted >= limit:
       result.nextCursor = $lastSeq
       break
-    let p = db.st.items[itemKey]
     result.items.add KoutenRecord(
       id: KoutenId(parent: p.parent, epoch: db.tbl.epoch, seq: p.seq,
                   tWrite: p.tWrite),
       payload: p.payload, codec: p.codec)
-    lastSeq = itemKey[1].int64
+    lastSeq = p.seq.int64
     inc emitted
 
 proc defaultReadOptions*(): KoutenReadOptions =
@@ -1988,6 +2072,9 @@ proc defaultStellarOptions*(): KoutenStellarOptions =
     filter: newJObject(),
     selection: "",
     limitPerRing: 20,
+    subringLimits: initTable[string, int](),
+    subringSortFields: initTable[string, string](),
+    subringSortDirections: initTable[string, KoutenReadSortDirection](),
     maxDepth: 1,
     branchBudget: 0,
     subrings: @[],
@@ -2094,14 +2181,15 @@ proc recordMatchesReadFilter(item: KoutenRecord, filterNode: JsonNode): bool =
       return false
   true
 
-proc projectReadRecord(item: KoutenRecord, selection: string): KoutenRecord =
+proc projectReadRecord(item: KoutenRecord; prepared: PreparedSelection;
+                       hasSelection: bool): KoutenRecord =
   result = item
-  if selection.len == 0:
+  if not hasSelection:
     return
   if not item.codec.supportsJsonProjection:
     raise newException(ValueError,
       "payload codec " & item.codec.payloadCodecName & " does not support JSON projection")
-  result.payload = $applySelection(prepareSelection(selection), parseJson(item.payload))
+  result.payload = $applySelection(prepared, parseJson(item.payload))
   result.codec = pcJson
 
 proc compareReadRecords(a, b: KoutenRecord, options: KoutenReadOptions): int =
@@ -2115,11 +2203,16 @@ proc compareReadRecords(a, b: KoutenRecord, options: KoutenReadOptions): int =
   if options.sortDirection == rsDesc:
     result = -result
 
-proc readRing*(db: KoutenDb, ring: string,
-               options: KoutenReadOptions = defaultReadOptions()): KoutenReadPage =
-  ## Read records from one ring with filter, projection, limit/cursor,
-  ## page/pagelimit, and page-local sort controls.
-  let opts = normalizedReadOptions(options)
+proc canUseRingWindowFastPath(db: KoutenDb, ring: string,
+                              opts: KoutenReadOptions): bool =
+  db.mode == mEmbedded and ring in db.ringNames and
+    (opts.filter.isNil or opts.filter.kind == JObject and opts.filter.len == 0) and
+    opts.cursor.len == 0 and opts.pagination == rpOff and opts.limit > 0 and
+    opts.sortField in ["id", "time"]
+
+proc readRingPrepared(db: KoutenDb, ring: string, opts: KoutenReadOptions;
+                      preparedSelection: PreparedSelection;
+                      hasSelection: bool): KoutenReadPage =
   let requested =
     if opts.pagination == rpOn: opts.page * opts.pageLimit
     else: opts.limit
@@ -2140,6 +2233,19 @@ proc readRing*(db: KoutenDb, ring: string,
   if requested <= 0:
     return
 
+  if db.canUseRingWindowFastPath(ring, opts):
+    let key = db.ringNames[ring]
+    let reverse = opts.sortDirection == rsDesc
+    let particles = db.st.particlesByRingWindow(key, take, reverse)
+    for p in particles:
+      let item = KoutenRecord(
+        id: KoutenId(parent: p.parent, epoch: db.tbl.epoch, seq: p.seq,
+                    tWrite: p.tWrite),
+        payload: p.payload, codec: p.codec)
+      result.items.add projectReadRecord(item, preparedSelection, hasSelection)
+    result.count = result.items.len
+    return
+
   var matched: seq[KoutenRecord] = @[]
   var nextCursor = opts.cursor
   let pageSize = max(requested, 100)
@@ -2156,9 +2262,20 @@ proc readRing*(db: KoutenDb, ring: string,
 
   matched.sort(proc(a, b: KoutenRecord): int = compareReadRecords(a, b, opts))
   for i in skip ..< min(skip + take, matched.len):
-    result.items.add projectReadRecord(matched[i], opts.selection)
+    result.items.add projectReadRecord(matched[i], preparedSelection, hasSelection)
   result.count = result.items.len
   result.nextCursor = nextCursor
+
+proc readRing*(db: KoutenDb, ring: string,
+               options: KoutenReadOptions = defaultReadOptions()): KoutenReadPage =
+  ## Read records from one ring with filter, projection, limit/cursor,
+  ## page/pagelimit, and page-local sort controls.
+  let opts = normalizedReadOptions(options)
+  let hasSelection = opts.selection.len > 0
+  let preparedSelection =
+    if hasSelection: prepareSelection(opts.selection)
+    else: PreparedSelection()
+  db.readRingPrepared(ring, opts, preparedSelection, hasSelection)
 
 proc eventTimeMsOf(item: KoutenRecord): tuple[ok: bool, value: int64] =
   if not item.codec.supportsJsonProjection:
@@ -2340,6 +2457,36 @@ proc normalizedStellarOptions(options: KoutenStellarOptions): KoutenStellarOptio
     result.filter = newJObject()
   if result.limitPerRing <= 0:
     result.limitPerRing = 20
+  var normalizedLimits = initTable[string, int]()
+  for name, value in result.subringLimits:
+    let clean = normalizedCoordinate(name)
+    if clean.len == 0:
+      continue
+    if value <= 0:
+      raise newException(ValueError, "subring limit must be positive")
+    normalizedLimits[clean] = value
+  result.subringLimits = normalizedLimits
+  var normalizedSortFields = initTable[string, string]()
+  for name, value in result.subringSortFields:
+    let clean = normalizedCoordinate(name)
+    if clean.len == 0:
+      continue
+    if value.len == 0:
+      continue
+    if value == "write":
+      normalizedSortFields[clean] = "time"
+    elif value in ["id", "time"]:
+      normalizedSortFields[clean] = value
+    else:
+      raise newException(ValueError, "subring sort field must be id, time, or write")
+  result.subringSortFields = normalizedSortFields
+  var normalizedSortDirections = initTable[string, KoutenReadSortDirection]()
+  for name, value in result.subringSortDirections:
+    let clean = normalizedCoordinate(name)
+    if clean.len == 0:
+      continue
+    normalizedSortDirections[clean] = value
+  result.subringSortDirections = normalizedSortDirections
   if result.maxDepth < 0:
     result.maxDepth = 0
   if result.branchBudget < 0:
@@ -2370,6 +2517,54 @@ proc subringMatches(root, ringName: string, subrings: seq[string]): bool =
       return true
   false
 
+proc subringNameMatches(root, ringName, subring: string): bool =
+  let rootClean = normalizedCoordinate(root)
+  let ringClean = normalizedCoordinate(ringName)
+  let sub = normalizedCoordinate(subring)
+  if sub.len == 0:
+    return false
+  if ringClean == rootClean & "/" & sub:
+    return true
+  if ringClean == sub or ringClean.startsWith(sub & "/"):
+    return true
+  if ringClean.endsWith("/" & sub):
+    return true
+  false
+
+proc stellarLimitFor(root, ringName: string,
+                     opts: KoutenStellarOptions): int =
+  result = opts.limitPerRing
+  if opts.subringLimits.len == 0:
+    return
+  let rootClean = normalizedCoordinate(root)
+  if normalizedCoordinate(ringName) == rootClean:
+    return
+  var bestLen = -1
+  for subring, limit in opts.subringLimits:
+    let clean = normalizedCoordinate(subring)
+    if clean.len > bestLen and subringNameMatches(root, ringName, clean):
+      result = limit
+      bestLen = clean.len
+
+proc stellarSortFor(root, ringName: string,
+                    opts: KoutenStellarOptions):
+                    tuple[field: string, direction: KoutenReadSortDirection] =
+  result = (opts.sortField, opts.sortDirection)
+  if normalizedCoordinate(ringName) == normalizedCoordinate(root):
+    return
+  var bestFieldLen = -1
+  for subring, field in opts.subringSortFields:
+    let clean = normalizedCoordinate(subring)
+    if clean.len > bestFieldLen and subringNameMatches(root, ringName, clean):
+      result.field = field
+      bestFieldLen = clean.len
+  var bestDirectionLen = -1
+  for subring, direction in opts.subringSortDirections:
+    let clean = normalizedCoordinate(subring)
+    if clean.len > bestDirectionLen and subringNameMatches(root, ringName, clean):
+      result.direction = direction
+      bestDirectionLen = clean.len
+
 proc readStellar*(db: KoutenDb, root: string,
                   options: KoutenStellarOptions = defaultStellarOptions()): KoutenStellarPage =
   ## Read a stellar neighborhood: the root ring and nearby child coordinates.
@@ -2377,6 +2572,10 @@ proc readStellar*(db: KoutenDb, root: string,
   ## naturally visible, and subrings narrow the field when needed. It does not
   ## chase distant coordinates just to emulate a global join.
   let opts = normalizedStellarOptions(options)
+  let hasSelection = opts.selection.len > 0
+  let preparedSelection =
+    if hasSelection: prepareSelection(opts.selection)
+    else: PreparedSelection()
   result.root = root
   result.maxDepth = opts.maxDepth
   result.branchBudget = opts.branchBudget
@@ -2409,12 +2608,16 @@ proc readStellar*(db: KoutenDb, root: string,
       keys.addUniqueRingKey db.ringNames[ringName]
   for key in keys:
     let ringName = db.ringNameOf(key)
-    let page = db.readRing(ringName, KoutenReadOptions(
+    let ringLimit = stellarLimitFor(root, ringName, opts)
+    let ringSort = stellarSortFor(root, ringName, opts)
+    let readOptions = normalizedReadOptions(KoutenReadOptions(
       filter: opts.filter,
       selection: opts.selection,
-      limit: opts.limitPerRing,
-      sortField: opts.sortField,
-      sortDirection: opts.sortDirection))
+      limit: ringLimit,
+      sortField: ringSort.field,
+      sortDirection: ringSort.direction))
+    let page = db.readRingPrepared(ringName, readOptions, preparedSelection,
+                                   hasSelection)
     if page.items.len == 0:
       continue
     result.rings.add KoutenStellarRingPage(ring: ringName,
@@ -2937,7 +3140,7 @@ proc query*(db: KoutenDb, id: KoutenId, prepared: PreparedSelection): JsonNode =
   ## クラスタではサーバ側で射影され、選択した分だけがネットワークを流れる。
   case db.mode
   of mEmbedded:
-    let p = db.st.items[(id.parent, id.seq)]
+    let p = db.st.getParticle(id.parent, id.seq)
     if not p.codec.supportsJsonProjection:
       raise newException(ValueError,
         "payload codec " & p.codec.payloadCodecName & " does not support JSON projection")
@@ -3482,7 +3685,7 @@ proc retrieveWithStats*(db: KoutenDb, queryVec: seq[float32], ring: string = "",
       result.hits.add KoutenHit(id: KoutenId(parent: h.parent, epoch: db.tbl.epoch,
                                            seq: h.seq, tWrite: h.tWrite),
                                score: h.score, payload: h.payload,
-                               codec: db.st.items.getOrDefault((h.parent, h.seq)).codec)
+                               codec: h.codec)
     result.stats.totalVectors = rr.totalVectors
     result.stats.scanned = rr.scanned
     result.stats.skippedVectors = rr.skippedVectors

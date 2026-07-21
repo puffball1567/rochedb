@@ -2,7 +2,7 @@
 ##
 ## usage:
 ##   kouten put [--data=DIR | --peers=host:port,...] --ring=RING [--near=BASE_RING] [--payload=TEXT | --in=FILE] [--codec=raw|json|nif|bif]
-##   kouten get [--data=DIR | --peers=host:port,...] [--ring=RING | --stellar=RING] [--subring=orders,billing] [--filter='{"id":"RAW_ID"}'] [--selection=SEL] [--sort=id|time] [--rsort=id|time]
+##   kouten get [--data=DIR | --peers=host:port,...] [--ring=RING | --stellar=RING] [--subring=orders,billing] [--subring-limit=orders:10] [--filter='{"id":"RAW_ID"}'] [--selection=SEL] [--sort=id|time] [--rsort=id|time]
 ##   kouten query [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{"id":"RAW_ID"}' | --id=RAW_ID] --selection=SEL
 ##   kouten list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]
 ##   kouten count-ring [--data=DIR | --peers=host:port,...] --ring=RING
@@ -13,7 +13,7 @@
 ##   kouten doctor
 
 import std/[algorithm, base64, os, osproc, strutils, strformat, json, times, monotimes,
-            parseopt, net, dynlib, tempfiles]
+            parseopt, net, dynlib, tempfiles, tables]
 import nimsodium/hash
 import koutendb
 import kouten/wire
@@ -842,9 +842,49 @@ proc parseSubrings(value: string): seq[string] =
     if clean.len > 0:
       result.add clean
 
+proc parseNamedIntMap(value, optionName: string): Table[string, int] =
+  result = initTable[string, int]()
+  if value.len == 0:
+    return
+  for part in value.split(","):
+    let cleanPart = part.strip()
+    if cleanPart.len == 0:
+      continue
+    let sep = if cleanPart.find(':') >= 0: cleanPart.find(':') else: cleanPart.find('=')
+    if sep <= 0 or sep >= cleanPart.high:
+      raise newException(ValueError, optionName & " entries must be name:N")
+    let name = cleanPart[0 ..< sep].strip(chars = {' ', '\t', '\r', '\n', '/'})
+    let rawValue = cleanPart[sep + 1 .. ^1].strip()
+    if name.len == 0:
+      raise newException(ValueError, optionName & " subring name must not be empty")
+    let parsed = parseInt(rawValue)
+    if parsed <= 0:
+      raise newException(ValueError, optionName & " values must be positive")
+    result[name] = parsed
+
+proc parseNamedSortMap(value, optionName: string): Table[string, string] =
+  result = initTable[string, string]()
+  if value.len == 0:
+    return
+  for part in value.split(","):
+    let cleanPart = part.strip()
+    if cleanPart.len == 0:
+      continue
+    let sep = if cleanPart.find(':') >= 0: cleanPart.find(':') else: cleanPart.find('=')
+    if sep <= 0 or sep >= cleanPart.high:
+      raise newException(ValueError, optionName & " entries must be name:id|time")
+    let name = cleanPart[0 ..< sep].strip(chars = {' ', '\t', '\r', '\n', '/'})
+    let field = cleanPart[sep + 1 .. ^1].strip()
+    if name.len == 0:
+      raise newException(ValueError, optionName & " subring name must not be empty")
+    if field notin ["id", "time", "write"]:
+      raise newException(ValueError, optionName & " fields must be id, time, or write")
+    result[name] = field
+
 proc runGet(dataDir, peers, username, password, authToken, secretKey,
             galaxy, idArg, filterArg, ring, subringArg, view, selection,
             cursor: string, limit, page, pageLimit, depth, branchBudget: int,
+            subringLimitArg, subringSortArg, subringRsortArg: string,
             paginationArg, sortArg, rsortArg: string,
             tls: bool, tlsCaFile, tlsServerName: string,
             tlsInsecureSkipVerify: bool) =
@@ -861,6 +901,17 @@ proc runGet(dataDir, peers, username, password, authToken, secretKey,
   try:
     db.configureRing(ring, 60.0)
     let subrings = parseSubrings(subringArg)
+    let subringLimits = parseNamedIntMap(subringLimitArg, "--subring-limit")
+    var subringSortFields = parseNamedSortMap(subringSortArg, "--subring-sort")
+    let subringRsortFields = parseNamedSortMap(subringRsortArg, "--subring-rsort")
+    var subringSortDirections = initTable[string, KoutenReadSortDirection]()
+    for name in subringSortFields.keys:
+      subringSortDirections[name] = rsAsc
+    for name, field in subringRsortFields:
+      if name in subringSortFields:
+        raise newException(ValueError, "--subring-sort and --subring-rsort cannot target the same subring")
+      subringSortFields[name] = field
+      subringSortDirections[name] = rsDesc
     let options = KoutenReadOptions(
       filter: filterWithId(filterNode, resolvedId),
       selection: selection,
@@ -876,6 +927,9 @@ proc runGet(dataDir, peers, username, password, authToken, secretKey,
         filter: options.filter,
         selection: selection,
         limitPerRing: limit,
+        subringLimits: subringLimits,
+        subringSortFields: subringSortFields,
+        subringSortDirections: subringSortDirections,
         maxDepth: depth,
         branchBudget: branchBudget,
         subrings: subrings,
@@ -2139,16 +2193,18 @@ proc runDump(dataDir, outPath: string, includeVectors: bool) =
     echo &"dump OK bytes={stats.bytes} records={stats.records} rings={stats.rings} documents={stats.documents} to={stats.destination}"
 
 proc runImportJsonl(dataDir, inPath, defaultRing, ringField, ringPrefix,
-                    payloadField, vecField: string, maxRecords: int) =
+                    payloadField, vecField: string, maxRecords,
+                    batchSize: int) =
   if dataDir.len == 0 or inPath.len == 0:
     raise newException(ValueError, "import-jsonl requires --data=DIR --in=FILE")
   var db = open(dataDir = dataDir)
   let stats = db.importJsonl(inPath, defaultRing = defaultRing,
                              ringField = ringField, ringPrefix = ringPrefix,
                              payloadField = payloadField, vecField = vecField,
-                             maxRecords = maxRecords)
+                             maxRecords = maxRecords,
+                             batchSize = batchSize)
   db.close()
-  echo &"import-jsonl OK read={stats.read} imported={stats.imported} skipped={stats.skipped} errors={stats.errors} rings={stats.rings} source={stats.source}"
+  echo &"import-jsonl OK read={stats.read} imported={stats.imported} skipped={stats.skipped} errors={stats.errors} rings={stats.rings} batches={stats.batches} batchSize={stats.batchSize} source={stats.source}"
 
 proc universeSyncEventNode(event: UniverseSyncEvent): JsonNode =
   %*{
@@ -2415,7 +2471,7 @@ proc printHelp() =
   echo ""
   echo "Usage:"
   echo "  kouten put [--data=DIR | --peers=host:port,...] --ring=RING [--near=BASE_RING] [--payload=TEXT | --in=FILE] [--codec=auto|raw|json|nif|bif]"
-  echo "  kouten get [--data=DIR | --peers=host:port,...] [--ring=RING | --stellar=RING] [--subring=orders,billing] [--filter='{\"id\":\"RAW_ID\"}'] [--selection=SEL] [--limit=N] [--cursor=CURSOR] [--sort=id|time] [--rsort=id|time] [--pagination=on|off] [--page=N] [--pagelimit=N]"
+  echo "  kouten get [--data=DIR | --peers=host:port,...] [--ring=RING | --stellar=RING] [--subring=orders,billing] [--subring-limit=orders:10] [--subring-sort=orders:id] [--subring-rsort=billing:time] [--filter='{\"id\":\"RAW_ID\"}'] [--selection=SEL] [--limit=N] [--cursor=CURSOR] [--sort=id|time] [--rsort=id|time] [--pagination=on|off] [--page=N] [--pagelimit=N]"
   echo "  kouten stellar attach|detach|list --stellar=RING [--ring=RING]"
   echo "  kouten time-orbit --data=DIR --ring=RING [--bucket-ms=N] [--bits=60] [--phase=N] [--salt=TEXT]"
   echo "  kouten time-put --data=DIR --ring=RING --time-ms=N [--payload=TEXT | --in=FILE]"
@@ -2433,7 +2489,7 @@ proc printHelp() =
   echo "  kouten backup --data=DIR --backup=DIR [--durability=buffered|strong]"
   echo "  kouten restore --backup=DIR --data=DIR [--overwrite] [--durability=buffered|strong]"
   echo "  kouten dump --data=DIR [--out=FILE] [--no-vectors]"
-  echo "  kouten import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING]"
+  echo "  kouten import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING] [--batch-size=N]"
   echo "  kouten universe-sync --data=SOURCE_DIR [--target-data=TARGET_DIR | --peers=host:port,...] [--prune-acked]"
   echo "  kouten universe-status [--data=DIR | --peers=host:port,...] [--metrics]"
   echo "  kouten recovery-status [--mirror=DIR...] [--universe-config=FILE] [--required-healthy=N] [--metrics]"
@@ -2468,6 +2524,9 @@ proc main() =
   var idArg = ""
   var nearRingBase = ""
   var subringArg = ""
+  var subringLimitArg = ""
+  var subringSortArg = ""
+  var subringRsortArg = ""
   var whereArg = ""
   var filterArg = ""
   var sortArg = ""
@@ -2516,6 +2575,7 @@ proc main() =
   var routedBudget = 3
   var ringCount = 100
   var payloadBytes = 100
+  var importBatchSize = 1000
   var priority = 0
   var snapshotSeq: BiggestInt = 0
   var requiredHealthy = 1
@@ -2606,6 +2666,9 @@ proc main() =
       of "id": idArg = val
       of "near": nearRingBase = val
       of "subring", "subrings": subringArg = val
+      of "subring-limit", "subring-limits": subringLimitArg = val
+      of "subring-sort": subringSortArg = val
+      of "subring-rsort": subringRsortArg = val
       of "where": whereArg = val
       of "filter": filterArg = val
       of "sort":
@@ -2693,6 +2756,7 @@ proc main() =
       of "routed-budget": routedBudget = parseInt(val)
       of "rings": ringCount = parseInt(val)
       of "payload-bytes": payloadBytes = parseInt(val)
+      of "batch-size": importBatchSize = parseInt(val)
       of "priority": priority = parseInt(val)
       of "snapshot-seq": snapshotSeq = parseBiggestInt(val)
       of "required-healthy":
@@ -2730,8 +2794,9 @@ proc main() =
     let readFilter = effectiveFilter(filterArg, whereArg)
     runGet(dataDir, peers, username, password, authToken, secretKey, galaxy,
            idArg, readFilter, ringName, subringArg, view, selection, cursor,
-           limit, page, pageLimit, depth, branchBudget, paginationArg, sortArg,
-           rsortArg, tls, tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
+           limit, page, pageLimit, depth, branchBudget, subringLimitArg,
+           subringSortArg, subringRsortArg, paginationArg, sortArg, rsortArg,
+           tls, tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
   of "stellar":
     runStellar(dataDir, peers, username, password, authToken, secretKey, galaxy,
                positionals, stellarName, ringName, tls, tlsCaFile,
@@ -2852,7 +2917,8 @@ proc main() =
                        backupPassphrase, overwrite, durability)
   of "dump": runDump(dataDir, outPath, includeVectors)
   of "import-jsonl": runImportJsonl(dataDir, inPath, defaultRing, ringField,
-                                    ringPrefix, payloadField, vecField, n)
+                                    ringPrefix, payloadField, vecField, n,
+                                    importBatchSize)
   of "universe-export": runUniverseExport(dataDir, outPath)
   of "universe-apply": runUniverseApply(dataDir, inPath)
   of "universe-sync":

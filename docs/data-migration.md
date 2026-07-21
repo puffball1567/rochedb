@@ -16,6 +16,16 @@ kouten dump --data=./source-db --out=./koutendb-dump.jsonl
 kouten import-jsonl --data=./target-db --in=./koutendb-dump.jsonl
 ```
 
+For larger imports, use chunked commits:
+
+```bash
+kouten import-jsonl --data=./target-db --in=./koutendb-dump.jsonl --batch-size=10000
+```
+
+`--batch-size` controls how many successfully parsed records are committed per
+WAL transaction. Larger batches reduce flush overhead during bulk load. Smaller
+batches reduce the amount of work retried after a failed chunk.
+
 This path is intended for:
 
 - cross-version migration while the internal WAL format can still evolve;
@@ -56,7 +66,8 @@ kouten import-jsonl \
   --ring-field=tenant \
   --ring-prefix=tenant/ \
   --payload-field=body \
-  --vec-field=embedding
+  --vec-field=embedding \
+  --batch-size=10000
 ```
 
 If `ring-field` is missing or empty for a row, KoutenDB uses `--default-ring`.
@@ -75,4 +86,3 @@ kouten restore --backup=./backup --data=./restored-db
 Backup/restore preserves the internal store more directly and is meant for
 same-version recovery. Dump/import is the safer public boundary when the goal is
 portability, reviewability, or release-to-release migration.
-

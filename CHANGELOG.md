@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.9.0 - 2026-07-21
+
+### Added
+
+- Added `examples/subring_bundle_bench.nim` for heterogeneous related-data
+  bundle reads with per-subring limits and per-subring sort directions.
+- Added `examples/subring_bundle_postgres_bench.sh` to compare the same
+  logical user-detail workload against PostgreSQL indexed queries and a JSON
+  aggregate query.
+- Added benchmark documentation for bounded stellar/subring reads where one
+  request reads profile, addresses, career, preferences, orders, and
+  notifications with different limits.
+
+### Changed
+
+- Reused prepared projection state inside `readStellar` so a multi-subring read
+  does not reparse the same selection for every subring.
+- Added a bounded ring-window read path for simple embedded reads with empty
+  filters, positive limits, and `id` or `time` sorting.
+- Added cached disk segment read streams so bounded disk-backed reads do not
+  repeatedly open and close the same segment files.
+- Updated effect-validation and benchmark comparison docs with the latest
+  13.5M-record stress result, pinpoint user read result, user bundle
+  PostgreSQL comparison, and heterogeneous subring bundle comparison.
+
+### Fixed / Hardened
+
+- Expanded public API tests for `readStellar` subring limits and per-subring
+  descending time sorts.
+- Kept the broad-scan and RAG effect-validation numbers separate from the
+  PostgreSQL/Redis latency comparisons so the documented claims remain scoped
+  to the measured workloads.
+- Bumped package metadata to `0.9.0`.
+
+## v0.8.1 - 2026-07-20
+
+### Added
+
+- Added `examples/effect_validation_demo.sh` and
+  `examples/effect_validation_demo.nim`.
+- Added `examples/effect_validation_matrix.sh` for multi-case generated corpus
+  validation, including noisy and near-distractor workloads. The default manual
+  matrix can scale to 13,500,000 generated records; the large opt-in case can
+  scale to 98,000,000.
+- Added `examples/offline_effect_validation.sh` for pre-production validation
+  against copied/exported JSONL data without production traffic.
+- Added optional Apache JMeter TCP health-load smoke plan and wrapper:
+  `examples/jmeter/koutendb-health-load.jmx` and
+  `examples/jmeter_load_smoke.sh`.
+- Added chunked JSONL bulk-load commits through `importJsonl(..., batchSize=N)`
+  and `kouten import-jsonl --batch-size=N`.
+- The demo imports a deterministic JSONL corpus, compares global vs ring-routed
+  retrieval, reports import latency, scanned-record and estimated-token
+  reduction, retrieval latency, writes a compact prompt, and can optionally pass
+  that prompt to a trusted tiny local LLM command.
+- Documented Gemma 4 E2B through Ollama as the recommended trusted small-model
+  demo target.
+- Added effect-validation prompt generation to the demo smoke matrix without
+  requiring a model download in CI.
+
 ## v0.8.0 - 2026-07-20
 
 ### Changed

@@ -36,6 +36,12 @@ proc payloadCodecName*(codec: PayloadCodec): string =
   of pcBif: "bif"
 
 proc parsePayloadCodec*(value: string): PayloadCodec =
+  case value
+  of "raw", "bytes", "application/octet-stream": return pcRaw
+  of "json", "application/json": return pcJson
+  of "nif", "application/nif": return pcNif
+  of "bif", "application/bif": return pcBif
+  else: discard
   case value.toLowerAscii()
   of "raw", "bytes", "application/octet-stream": pcRaw
   of "json", "application/json": pcJson
