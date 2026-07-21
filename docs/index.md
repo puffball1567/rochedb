@@ -56,4 +56,4 @@ downstream AI/RAG or application logic.
 ## Release
 
 - [Release Checklist](release-checklist.md)
-- [GitHub Release Draft](github-release-v0.7.0.md)
+- [GitHub Release Draft](github-release-v0.9.0.md)

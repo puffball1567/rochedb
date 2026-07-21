@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.9.0 - 2026-07-21
+
+### Added
+
+- Added `examples/subring_bundle_bench.nim` for heterogeneous related-data
+  bundle reads with per-subring limits and per-subring sort directions.
+- Added `examples/subring_bundle_postgres_bench.sh` to compare the same
+  logical user-detail workload against PostgreSQL indexed queries and a JSON
+  aggregate query.
+- Added benchmark documentation for bounded stellar/subring reads where one
+  request reads profile, addresses, career, preferences, orders, and
+  notifications with different limits.
+
+### Changed
+
+- Reused prepared projection state inside `readStellar` so a multi-subring read
+  does not reparse the same selection for every subring.
+- Added a bounded ring-window read path for simple embedded reads with empty
+  filters, positive limits, and `id` or `time` sorting.
+- Added cached disk segment read streams so bounded disk-backed reads do not
+  repeatedly open and close the same segment files.
+- Updated effect-validation and benchmark comparison docs with the latest
+  13.5M-record stress result, pinpoint user read result, user bundle
+  PostgreSQL comparison, and heterogeneous subring bundle comparison.
+
+### Fixed / Hardened
+
+- Expanded public API tests for `readStellar` subring limits and per-subring
+  descending time sorts.
+- Kept the broad-scan and RAG effect-validation numbers separate from the
+  PostgreSQL/Redis latency comparisons so the documented claims remain scoped
+  to the measured workloads.
+- Bumped package metadata to `0.9.0`.
+
 ## v0.8.1 - 2026-07-20
 
 ### Added

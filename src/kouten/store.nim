@@ -209,6 +209,7 @@ type
     logPath: string
     segmentDir: string
     segmentFiles: Table[uint64, File]
+    segmentReadStreams: Table[uint64, FileStream]
     lockFd: cint
     persistent: bool
     diskBacked*: bool
@@ -455,6 +456,12 @@ proc closeSegmentFiles(s: Store) =
     file.close()
   s.segmentFiles.clear()
 
+proc closeSegmentReadStreams(s: Store) =
+  for _, stream in s.segmentReadStreams.mpairs:
+    if stream != nil:
+      stream.close()
+  s.segmentReadStreams.clear()
+
 proc flushSegmentFiles(s: Store) =
   for _, file in s.segmentFiles.mpairs:
     file.flushFile()
@@ -609,6 +616,17 @@ proc openSegmentReadStream(s: Store, ring: uint64): FileStream =
   if result.isNil:
     raise newException(IOError, "cannot open ring segment for read")
 
+proc cachedSegmentReadStream(s: Store, ring: uint64): FileStream =
+  if s.segmentDir.len == 0:
+    raise newException(IOError, "ring segment directory is not configured")
+  s.flushSegmentFiles()
+  if ring notin s.segmentReadStreams or s.segmentReadStreams[ring].isNil:
+    let stream = newFileStream(s.segmentPath(ring), fmRead)
+    if stream.isNil:
+      raise newException(IOError, "cannot open ring segment for read")
+    s.segmentReadStreams[ring] = stream
+  s.segmentReadStreams[ring]
+
 proc readParticleRecordAtCurrent(fs: Stream, line: string): Particle =
   var parts = line.split(' ')
   var recordStream: Stream = fs
@@ -661,6 +679,58 @@ iterator particlesByRing*(s: Store, ring: uint64): Particle =
       if k in s.items:
         yield s.items[k]
 
+proc particlesByRingWindow*(s: Store, ring: uint64, limit: int,
+                            reverse = false): seq[Particle] =
+  ## Read a bounded ring-local window without scanning the whole ring.
+  ## This is used by read paths such as latest-N subring bundle reads.
+  if limit <= 0:
+    return
+  let keys = s.itemsByRing.getOrDefault(ring, @[])
+  if keys.len == 0:
+    return
+  var selected: seq[(uint64, uint32)] = @[]
+  if reverse:
+    var i = keys.high
+    while i >= 0 and selected.len < limit:
+      let k = keys[i]
+      if s.diskBacked:
+        if k in s.items or k in s.itemSegmentOffsets or k in s.itemOffsets:
+          selected.add k
+      elif k in s.items:
+        selected.add k
+      dec i
+  else:
+    for k in keys:
+      if selected.len >= limit:
+        break
+      if s.diskBacked:
+        if k in s.items or k in s.itemSegmentOffsets or k in s.itemOffsets:
+          selected.add k
+      elif k in s.items:
+        selected.add k
+  if selected.len == 0:
+    return
+  if s.diskBacked:
+    var walStream: FileStream = nil
+    try:
+      for k in selected:
+        if k in s.items:
+          result.add s.items[k]
+        elif k in s.itemSegmentOffsets:
+          let segmentStream = s.cachedSegmentReadStream(ring)
+          result.add segmentStream.readParticleAtStream(s.itemSegmentOffsets[k])
+        elif k in s.itemOffsets:
+          if walStream == nil:
+            walStream = s.openWalReadStream()
+          result.add walStream.readParticleAtStream(s.itemOffsets[k])
+    finally:
+      if walStream != nil:
+        walStream.close()
+  else:
+    for k in selected:
+      if k in s.items:
+        result.add s.items[k]
+
 iterator allParticles*(s: Store): Particle =
   for ring in s.itemsByRing.keys:
     for p in s.particlesByRing(ring):
@@ -711,6 +781,7 @@ proc rebuildRingSegments*(s: Store): SegmentPackStats {.discardable.} =
     return
   s.flushDiskBackedLog()
   s.closeSegmentFiles()
+  s.closeSegmentReadStreams()
   if dirExists(s.segmentDir):
     removeDir(s.segmentDir)
   createDir(s.segmentDir)
@@ -1251,6 +1322,7 @@ proc isPersistent*(s: Store): bool =
 
 proc close*(s: Store) =
   s.closeSegmentFiles()
+  s.closeSegmentReadStreams()
   if s.persistent:
     if not s.writeFailed:
       try:

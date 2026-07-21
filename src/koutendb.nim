@@ -2203,11 +2203,16 @@ proc compareReadRecords(a, b: KoutenRecord, options: KoutenReadOptions): int =
   if options.sortDirection == rsDesc:
     result = -result
 
-proc readRing*(db: KoutenDb, ring: string,
-               options: KoutenReadOptions = defaultReadOptions()): KoutenReadPage =
-  ## Read records from one ring with filter, projection, limit/cursor,
-  ## page/pagelimit, and page-local sort controls.
-  let opts = normalizedReadOptions(options)
+proc canUseRingWindowFastPath(db: KoutenDb, ring: string,
+                              opts: KoutenReadOptions): bool =
+  db.mode == mEmbedded and ring in db.ringNames and
+    (opts.filter.isNil or opts.filter.kind == JObject and opts.filter.len == 0) and
+    opts.cursor.len == 0 and opts.pagination == rpOff and opts.limit > 0 and
+    opts.sortField in ["id", "time"]
+
+proc readRingPrepared(db: KoutenDb, ring: string, opts: KoutenReadOptions;
+                      preparedSelection: PreparedSelection;
+                      hasSelection: bool): KoutenReadPage =
   let requested =
     if opts.pagination == rpOn: opts.page * opts.pageLimit
     else: opts.limit
@@ -2227,10 +2232,19 @@ proc readRing*(db: KoutenDb, ring: string,
 
   if requested <= 0:
     return
-  let hasSelection = opts.selection.len > 0
-  let preparedSelection =
-    if hasSelection: prepareSelection(opts.selection)
-    else: PreparedSelection()
+
+  if db.canUseRingWindowFastPath(ring, opts):
+    let key = db.ringNames[ring]
+    let reverse = opts.sortDirection == rsDesc
+    let particles = db.st.particlesByRingWindow(key, take, reverse)
+    for p in particles:
+      let item = KoutenRecord(
+        id: KoutenId(parent: p.parent, epoch: db.tbl.epoch, seq: p.seq,
+                    tWrite: p.tWrite),
+        payload: p.payload, codec: p.codec)
+      result.items.add projectReadRecord(item, preparedSelection, hasSelection)
+    result.count = result.items.len
+    return
 
   var matched: seq[KoutenRecord] = @[]
   var nextCursor = opts.cursor
@@ -2251,6 +2265,17 @@ proc readRing*(db: KoutenDb, ring: string,
     result.items.add projectReadRecord(matched[i], preparedSelection, hasSelection)
   result.count = result.items.len
   result.nextCursor = nextCursor
+
+proc readRing*(db: KoutenDb, ring: string,
+               options: KoutenReadOptions = defaultReadOptions()): KoutenReadPage =
+  ## Read records from one ring with filter, projection, limit/cursor,
+  ## page/pagelimit, and page-local sort controls.
+  let opts = normalizedReadOptions(options)
+  let hasSelection = opts.selection.len > 0
+  let preparedSelection =
+    if hasSelection: prepareSelection(opts.selection)
+    else: PreparedSelection()
+  db.readRingPrepared(ring, opts, preparedSelection, hasSelection)
 
 proc eventTimeMsOf(item: KoutenRecord): tuple[ok: bool, value: int64] =
   if not item.codec.supportsJsonProjection:
@@ -2547,6 +2572,10 @@ proc readStellar*(db: KoutenDb, root: string,
   ## naturally visible, and subrings narrow the field when needed. It does not
   ## chase distant coordinates just to emulate a global join.
   let opts = normalizedStellarOptions(options)
+  let hasSelection = opts.selection.len > 0
+  let preparedSelection =
+    if hasSelection: prepareSelection(opts.selection)
+    else: PreparedSelection()
   result.root = root
   result.maxDepth = opts.maxDepth
   result.branchBudget = opts.branchBudget
@@ -2581,12 +2610,14 @@ proc readStellar*(db: KoutenDb, root: string,
     let ringName = db.ringNameOf(key)
     let ringLimit = stellarLimitFor(root, ringName, opts)
     let ringSort = stellarSortFor(root, ringName, opts)
-    let page = db.readRing(ringName, KoutenReadOptions(
+    let readOptions = normalizedReadOptions(KoutenReadOptions(
       filter: opts.filter,
       selection: opts.selection,
       limit: ringLimit,
       sortField: ringSort.field,
       sortDirection: ringSort.direction))
+    let page = db.readRingPrepared(ringName, readOptions, preparedSelection,
+                                   hasSelection)
     if page.items.len == 0:
       continue
     result.rings.add KoutenStellarRingPage(ring: ringName,

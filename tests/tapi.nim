@@ -413,6 +413,25 @@ suite "public api":
         tunedBilling = ringPage.items.len
     check tunedOrders == 2
     check tunedBilling == 1
+    var latestLimit = initTable[string, int]()
+    latestLimit["orders"] = 1
+    var latestSort = initTable[string, string]()
+    latestSort["orders"] = "time"
+    var latestSortDirections = initTable[string, KoutenReadSortDirection]()
+    latestSortDirections["orders"] = rsDesc
+    let latestOrder = db.readStellar("users/123", KoutenStellarOptions(
+      filter: newJObject(),
+      limitPerRing: 10,
+      subringLimits: latestLimit,
+      subringSortFields: latestSort,
+      subringSortDirections: latestSortDirections,
+      maxDepth: 1,
+      subrings: @["orders"],
+      includeRoot: false,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check latestOrder.count == 1
+    check parseJson(latestOrder.rings[0].items[0].payload)["orderNo"].getStr() == "A-003"
     db.close()
 
   test "stellar attach/detach links existing coordinates without copying data":

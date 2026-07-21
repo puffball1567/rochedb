@@ -88,6 +88,45 @@ prints insertion and pack timings; the 100,000-user run inserted 2,000,000
 logical records at `33.442073 us/record`, which makes bulk load and many-ring
 metadata creation clear follow-up optimization targets.
 
+### Heterogeneous Subring Bundle
+
+This benchmark is closer to a real application detail endpoint: each related
+collection has its own limit and sort order. KoutenDB reads a `users/<id>/*`
+stellar neighborhood with per-subring options:
+
+```sh
+kouten get --ring=users/<id> \
+  --subring=profile,addresses,career,preferences,orders,notifications \
+  --subring-limit=profile:1,addresses:3,career:2,preferences:1,orders:10,notifications:5 \
+  --subring-rsort=orders:time,notifications:time
+```
+
+PostgreSQL stores the same logical data in normalized indexed tables. The
+comparison includes both multiple indexed `SELECT` statements and a single
+`jsonb_build_object` / `jsonb_agg` query with limited subqueries.
+
+Reproduction helper:
+
+```sh
+N=10000 READS=1000 examples/subring_bundle_postgres_bench.sh
+```
+
+Measured on the same local machine as the other local PostgreSQL benchmarks:
+AMD Ryzen 5 5600H, Linux 6.8, Nim 2.2.10, PostgreSQL 14.23, local temporary
+PostgreSQL cluster, KoutenDB disk-backed mode, fresh temporary data directories,
+single client, `N=10000`, `READS=1000`. Measured on 2026-07-21.
+
+| Users | Logical records | Group | Query shape | Returned records | read latency us |
+|---:|---:|---|---|---:|---:|
+| 10,000 | 1,050,000 | KoutenDB | `users/<id>/*` stellar read with per-subring limits/sorts | 22 across 6 rings | 196.859 |
+| 10,000 | 1,050,000 | PostgreSQL 14.23 | six indexed `SELECT` statements | 22 | 515 |
+| 10,000 | 1,050,000 | PostgreSQL 14.23 | one JSON aggregate query over indexed limited subqueries | 1 JSON bundle | 236 |
+
+This is not a universal PostgreSQL claim. It is a specific related-data bundle
+shape where KoutenDB can express the access pattern directly as bounded nearby
+subrings. PostgreSQL can express the same result with advanced SQL, but the
+query shape is no longer a plain join.
+
 ## Redis Reference
 
 Environment summary: same machine as KoutenDB, AMD Ryzen 5 5600H, Linux 6.8,

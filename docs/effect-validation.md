@@ -197,6 +197,35 @@ helper. That is good enough for the read-locality validation, but bulk load and
 many-ring metadata creation should be optimized before treating this shape as a
 final ingestion design.
 
+## Per-Subring Limit And Sort Case Study
+
+The heterogeneous subring bundle benchmark checks a shape that is awkward to
+express as a plain relational join: one root user plus several related
+collections where each collection has a different limit and sort order.
+
+Example read shape:
+
+```sh
+kouten get --ring=users/<id> \
+  --subring=profile,addresses,career,preferences,orders,notifications \
+  --subring-limit=profile:1,addresses:3,career:2,preferences:1,orders:10,notifications:5 \
+  --subring-rsort=orders:time,notifications:time
+```
+
+Local disk-backed result, measured with
+`N=10000 READS=1000 examples/subring_bundle_postgres_bench.sh` on
+2026-07-21:
+
+| users | logical records | KoutenDB subring bundle read us | PostgreSQL 6 SELECT us | PostgreSQL JSON aggregate us |
+| ---: | ---: | ---: | ---: | ---: |
+| 10,000 | 1,050,000 | 196.859 | 515 | 236 |
+
+The important distinction is the model. KoutenDB treats the related collections
+as nearby subrings and applies the bounds at the read boundary. PostgreSQL can
+still express the shape with indexed limited subqueries and JSON aggregation,
+but it is no longer a simple join and it pushes more response-shaping work into
+SQL.
+
 ## Offline Real-Data Copy
 
 Generated workloads are useful for repeatability, but the next pre-production
