@@ -1346,6 +1346,8 @@ suite "永続化":
       check db.get(a).contains("alpha")
       check db.getEncoded(b).codec == pcNif
       check db.countByRing("docs/a") == 2
+      db.packDiskBackedSegments()
+      check dirExists(dir / "segments")
       let page = db.listByRing("docs/a", limit = 10)
       check page.items.len == 2
       check page.items[1].codec == pcNif
@@ -1357,6 +1359,7 @@ suite "永続化":
 
       var reopened = open(dataDir = dir, diskBacked = true)
       check reopened.get(a).contains("alpha")
+      check dirExists(dir / "segments")
       check reopened.getEncoded(b).codec == pcNif
       check reopened.countByRing("docs/a") == 2
       let reopenedRead = reopened.retrieveWithStats(@[1.0'f32, 0.0'f32],

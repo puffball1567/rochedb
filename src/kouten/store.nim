@@ -88,6 +88,7 @@ type
     of txUpsert:
       p: Particle
       walOffset: int64
+      segmentOffset: int64
     of txRemove:
       remParent: uint64
       remSeq: uint32
@@ -172,6 +173,7 @@ type
     items*: Table[(uint64, uint32), Particle]
     itemsByRing*: Table[uint64, seq[(uint64, uint32)]]
     itemOffsets*: Table[(uint64, uint32), int64]
+    itemSegmentOffsets*: Table[(uint64, uint32), int64]
     itemHasVector*: Table[(uint64, uint32), bool]
     vectorCount*: int
     vectorCountByRing*: Table[uint64, int]
@@ -198,6 +200,8 @@ type
     nextTxId: uint64
     logFile: File
     logPath: string
+    segmentDir: string
+    segmentFiles: Table[uint64, File]
     lockFd: cint
     persistent: bool
     diskBacked*: bool
@@ -371,6 +375,8 @@ proc applyOp(s: Store, op: TxOp) =
     if s.diskBacked:
       if op.walOffset >= 0:
         s.itemOffsets[k] = op.walOffset
+      if op.segmentOffset >= 0:
+        s.itemSegmentOffsets[k] = op.segmentOffset
       s.items.del k
     else:
       s.items[k] = p
@@ -378,6 +384,7 @@ proc applyOp(s: Store, op: TxOp) =
     let k = key(op.remParent, op.remSeq)
     s.items.del k
     s.itemOffsets.del k
+    s.itemSegmentOffsets.del k
     if s.itemHasVector.getOrDefault(k, false):
       s.vectorCount = max(0, s.vectorCount - 1)
       let n = max(0, s.vectorCountByRing.getOrDefault(op.remParent, 0) - 1)
@@ -421,6 +428,38 @@ proc particleRecordBody(tag: string, txid: uint64, p: Particle): string =
 proc writeParticleRecord(file: File, tag: string, txid: uint64, p: Particle) =
   file.writeWalRecord(particleRecordBody(tag, txid, p))
 
+proc segmentFileName(ring: uint64): string =
+  toHex(ring, 16) & ".seg"
+
+proc segmentPath(s: Store, ring: uint64): string =
+  s.segmentDir / segmentFileName(ring)
+
+proc segmentFileForAppend(s: Store, ring: uint64): File =
+  if s.segmentDir.len == 0:
+    raise newException(IOError, "ring segment directory is not configured")
+  createDir(s.segmentDir)
+  if ring notin s.segmentFiles:
+    s.segmentFiles[ring] = open(s.segmentPath(ring), fmAppend)
+  s.segmentFiles[ring]
+
+proc closeSegmentFiles(s: Store) =
+  for _, file in s.segmentFiles.mpairs:
+    file.flushFile()
+    file.close()
+  s.segmentFiles.clear()
+
+proc flushSegmentFiles(s: Store) =
+  for _, file in s.segmentFiles.mpairs:
+    file.flushFile()
+
+proc writeSegmentParticle(s: Store, p: Particle): int64 =
+  if not s.diskBacked or not s.persistent:
+    return -1'i64
+  var file = s.segmentFileForAppend(p.parent)
+  result = file.getFilePos()
+  file.write(particleRecordBody("", 0, p))
+  s.segmentFiles[p.parent] = file
+
 proc clusterTxOpBody(txid: uint64, op: ClusterTxOp): string =
   let kind = if op.kind == ctxDelete: "D" else: "P"
   result = "CP " & $txid & " " & kind & " " & $op.parent & " " & $op.seq & " " &
@@ -454,7 +493,8 @@ proc readParticleRecord(fs: Stream, parts: seq[string], firstData: int): Particl
   fs.readRecordSep()
 
 proc readParticleAtStream(fs: Stream, offset: int64): Particle =
-  fs.setPosition(offset)
+  if fs.getPosition() != offset:
+    fs.setPosition(offset)
   var line = ""
   if not fs.readLine(line):
     raise newException(IOError, "missing WAL record at offset " & $offset)
@@ -495,15 +535,61 @@ proc readParticleAt*(s: Store, offset: int64): Particle =
   finally:
     fs.close()
 
+proc openSegmentReadStream(s: Store, ring: uint64): FileStream =
+  if s.segmentDir.len == 0:
+    raise newException(IOError, "ring segment directory is not configured")
+  s.flushSegmentFiles()
+  result = newFileStream(s.segmentPath(ring), fmRead)
+  if result.isNil:
+    raise newException(IOError, "cannot open ring segment for read")
+
+proc readParticleRecordAtCurrent(fs: Stream, line: string): Particle =
+  var parts = line.split(' ')
+  var recordStream: Stream = fs
+  var bodyStream: StringStream = nil
+  if parts[0] == WalRecordTag:
+    let body = checkedWalBody(fs, parts)
+    bodyStream = newStringStream(body)
+    var bodyLine = ""
+    if not bodyStream.readLine(bodyLine):
+      raise newException(WalCorruptionError, "empty segment record body")
+    parts = bodyLine.split(' ')
+    recordStream = bodyStream
+  case parts[0]
+  of "P":
+    result = recordStream.readParticleRecord(parts, 1)
+  of "XP":
+    result = recordStream.readParticleRecord(parts, 2)
+  else:
+    raise newException(IOError, "segment record is not a particle")
+
 iterator particlesByRing*(s: Store, ring: uint64): Particle =
   if s.diskBacked:
-    let fs = s.openWalReadStream()
-    try:
-      for k in s.itemsByRing.getOrDefault(ring, @[]):
-        if k in s.itemOffsets:
-          yield fs.readParticleAtStream(s.itemOffsets[k])
-    finally:
-      fs.close()
+    var yieldedFromSegment = false
+    var walStream: FileStream = nil
+    if s.segmentDir.len > 0 and fileExists(s.segmentPath(ring)):
+      let segmentStream = s.openSegmentReadStream(ring)
+      try:
+        var line = ""
+        while segmentStream.readLine(line):
+          let recordStart = segmentStream.getPosition() - line.len - 1
+          let p = segmentStream.readParticleRecordAtCurrent(line)
+          let k = key(p.parent, p.seq)
+          if k in s.itemSegmentOffsets and s.itemSegmentOffsets[k] == recordStart:
+            yieldedFromSegment = true
+            yield p
+      finally:
+        segmentStream.close()
+    if not yieldedFromSegment:
+      try:
+        for k in s.itemsByRing.getOrDefault(ring, @[]):
+          if k in s.itemOffsets:
+            if walStream == nil:
+              walStream = s.openWalReadStream()
+            yield walStream.readParticleAtStream(s.itemOffsets[k])
+      finally:
+        if walStream != nil:
+          walStream.close()
   else:
     for k in s.itemsByRing.getOrDefault(ring, @[]):
       if k in s.items:
@@ -518,9 +604,43 @@ proc getParticle*(s: Store, parent: uint64, seq: uint32): Particle =
   let k = key(parent, seq)
   if k in s.items:
     return s.items[k]
+  if k in s.itemSegmentOffsets:
+    let fs = s.openSegmentReadStream(parent)
+    try:
+      return fs.readParticleAtStream(s.itemSegmentOffsets[k])
+    finally:
+      fs.close()
   if k in s.itemOffsets:
     return s.readParticleAt(s.itemOffsets[k])
   raise newException(KeyError, "particle not found")
+
+proc rebuildRingSegmentsFromOffsets(s: Store, wal: FileStream) =
+  var rings: seq[uint64] = @[]
+  for ring in s.itemsByRing.keys:
+    rings.add ring
+  rings.sort()
+  for ring in rings:
+    for k in s.itemsByRing.getOrDefault(ring, @[]):
+      if k in s.itemOffsets:
+        let p = wal.readParticleAtStream(s.itemOffsets[k])
+        s.itemSegmentOffsets[k] = s.writeSegmentParticle(p)
+
+proc rebuildRingSegments*(s: Store) =
+  if not s.diskBacked or not s.persistent or s.segmentDir.len == 0:
+    return
+  s.flushDiskBackedLog()
+  s.closeSegmentFiles()
+  if dirExists(s.segmentDir):
+    removeDir(s.segmentDir)
+  createDir(s.segmentDir)
+  s.itemSegmentOffsets.clear()
+  let wal = newFileStream(s.logPath, fmRead)
+  if wal.isNil:
+    raise newException(IOError, "cannot open WAL for segment rebuild")
+  try:
+    s.rebuildRingSegmentsFromOffsets(wal)
+  finally:
+    wal.close()
 
 proc readClusterTxOp(fs: Stream, parts: seq[string], firstData: int): ClusterTxOp =
   var data = firstData
@@ -765,7 +885,8 @@ proc replay(s: Store, path: string, repair = true) =
         recordStream.readRecordSep()
       of "P":
         let p = recordStream.readParticleRecord(parts, 1)
-        s.applyOp(TxOp(kind: txUpsert, p: p, walOffset: recordStart))
+        s.applyOp(TxOp(kind: txUpsert, p: p, walOffset: recordStart,
+                       segmentOffset: -1'i64))
       of "E":
         let parent = parseBiggestUInt(parts[1]).uint64
         let seq = parseUInt(parts[2]).uint32
@@ -811,7 +932,8 @@ proc replay(s: Store, path: string, repair = true) =
         let txid = parseBiggestUInt(parts[1]).uint64
         let p = recordStream.readParticleRecord(parts, 2)
         pending.mgetOrPut(txid, @[]).add TxOp(kind: txUpsert, p: p,
-                                              walOffset: recordStart)
+                                              walOffset: recordStart,
+                                              segmentOffset: -1'i64)
         s.nextTxId = max(s.nextTxId, txid + 1)
       of "XD":
         let txid = parseBiggestUInt(parts[1]).uint64
@@ -980,13 +1102,17 @@ proc openStore*(dir: string, durability: StoreDurability = durBuffered,
     createDir(dir)
     result.lockFd = acquireDataDirLock(dir)
     let path = dir / "kouten.log"
+    if diskBacked:
+      result.segmentDir = dir / "segments"
     try:
       recoverCompaction(path)
       let newLog = not fileExists(path) or getFileSize(path) == 0
       result.replay(path)
-      result.logFile = open(path, fmAppend)
       result.logPath = path
       result.persistent = true
+      if diskBacked and not newLog:
+        result.rebuildRingSegments()
+      result.logFile = open(path, fmAppend)
       if newLog:
         result.logFile.write(WalMagicLine & "\n")
         result.flushMaybe(force = true)
@@ -1042,6 +1168,7 @@ proc isPersistent*(s: Store): bool =
   s.persistent
 
 proc close*(s: Store) =
+  s.closeSegmentFiles()
   if s.persistent:
     if not s.writeFailed:
       try:
@@ -1664,7 +1791,8 @@ proc upsert*(s: Store, p: Particle) =
     walOffset = s.logFile.getFilePos()
     s.logFile.writeParticleRecord("", 0, p)
     s.flushMaybe()
-  s.applyOp(TxOp(kind: txUpsert, p: p, walOffset: walOffset))
+  s.applyOp(TxOp(kind: txUpsert, p: p, walOffset: walOffset,
+                 segmentOffset: -1'i64))
 
 proc putForwarder*(s: Store, oldParent: uint64, oldSeq: uint32, f: Forwarder) =
   s.ensureWritable()
@@ -1720,7 +1848,8 @@ proc reserveTxId*(s: Store): uint64 =
 
 proc upsert*(tx: StoreTxn, p: Particle) =
   doAssert not tx.closed, "transaction is closed"
-  tx.ops.add TxOp(kind: txUpsert, p: p)
+  tx.ops.add TxOp(kind: txUpsert, p: p, walOffset: -1'i64,
+                  segmentOffset: -1'i64)
 
 proc remove*(tx: StoreTxn, parent: uint64, seq: uint32) =
   doAssert not tx.closed, "transaction is closed"
@@ -1772,8 +1901,8 @@ proc commit*(tx: StoreTxn) =
                                  $op.ringName.len & "\n" & op.ringName & "\n")
       of txUpsert:
         op.walOffset = s.logFile.getFilePos()
-        tx.ops[i] = op
         s.logFile.writeParticleRecord("XP", tx.id, op.p)
+        tx.ops[i] = op
       of txRemove:
         s.logFile.writeWalLine("XD " & $tx.id & " " & $op.remParent & " " & $op.remSeq)
       of txForwarder:

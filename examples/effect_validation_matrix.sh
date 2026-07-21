@@ -2,7 +2,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK="${TMPDIR:-/tmp}/koutendb-effect-matrix-$$"
+if [[ -n "${KOUTEN_EFFECT_WORKDIR:-}" ]]; then
+  WORK="$KOUTEN_EFFECT_WORKDIR"
+else
+  WORK="$(mktemp -d "${TMPDIR:-/tmp}/koutendb-effect-matrix.XXXXXX")"
+fi
 BIN="$ROOT/bin/effect_validation_demo"
 SCALE="${KOUTEN_EFFECT_SCALE:-1000}"
 BATCH_SIZE="${KOUTEN_EFFECT_BATCH_SIZE:-10000}"
@@ -90,6 +94,7 @@ run_case() {
   local data="$case_dir/data"
   local prompt="$case_dir/prompt.txt"
   local out="$case_dir/metrics.txt"
+  rm -rf "$case_dir"
   mkdir -p "$case_dir"
 
   generate_corpus "$corpus" "$docs_per_target" "$docs_per_neighbor" "$noise_docs" "$distractor_docs"
@@ -105,10 +110,11 @@ run_case() {
     $([[ "$DISK_BACKED" == "1" ]] && printf '%s' "--disk-backed") \
     --metrics > "$out"
 
-  local docs global_scanned routed_scanned global_tokens routed_tokens scan_red token_red prompt_bytes global_us routed_us set_us set_us_record
+  local docs global_scanned routed_scanned global_tokens routed_tokens scan_red token_red prompt_bytes global_us routed_us set_us set_us_record pack_us
   docs="$(wc -l < "$corpus")"
   set_us="$(metric effectSetLatencyUs "$out")"
   set_us_record="$(metric effectSetLatencyUsPerRecord "$out")"
+  pack_us="$(metric effectPackLatencyUs "$out")"
   global_scanned="$(metric effectGlobalScanned "$out")"
   routed_scanned="$(metric effectRoutedScanned "$out")"
   global_tokens="$(metric effectGlobalTokens "$out")"
@@ -119,9 +125,9 @@ run_case() {
   token_red="$(metric effectTokenReductionPct "$out")"
   prompt_bytes="$(metric effectPromptBytes "$out")"
 
-  printf '| %s | %s | %s | %s | %s | %s | %s -> %s | %s -> %s | %s -> %s | %s%% | %s%% | %s |\n' \
+  printf '| %s | %s | %s | %s | %s | %s | %s | %s -> %s | %s -> %s | %s -> %s | %s%% | %s%% | %s |\n' \
     "$name" "$docs" "$global_budget" "$routed_budget" \
-    "$set_us" "$set_us_record" \
+    "$set_us" "$set_us_record" "$pack_us" \
     "$global_scanned" "$routed_scanned" "$global_tokens" "$routed_tokens" \
     "$global_us" "$routed_us" "$scan_red" "$token_red" "$prompt_bytes"
 }
@@ -137,8 +143,8 @@ echo "scale: $SCALE"
 echo "batch size: $BATCH_SIZE"
 echo "disk backed: $DISK_BACKED"
 echo
-echo "| case | docs | global budget | routed budget | set latency us | set us/record | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |"
-echo "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+echo "| case | docs | global budget | routed budget | set latency us | set us/record | pack latency us | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |"
+echo "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
 run_case "small-balanced" "$(scaled 24)" "$(scaled 24)" "$(scaled 96)" 0 8 3
 run_case "near-distractors" "$(scaled 120)" "$(scaled 120)" "$(scaled 1000)" "$(scaled 500)" 20 5
 run_case "medium-noisy" "$(scaled 500)" "$(scaled 500)" "$(scaled 10000)" "$(scaled 2000)" 30 8

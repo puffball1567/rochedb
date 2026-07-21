@@ -96,6 +96,11 @@ proc main() =
       setUs / float(stats.imported)
     else:
       0.0
+  var packUs = 0.0
+  if diskBacked:
+    t = getMonoTime()
+    db.packDiskBackedSegments()
+    packUs = float((getMonoTime() - t).inNanoseconds) / 1e3
 
   let queryVec =
     if ring == "docs/japan":
@@ -136,6 +141,7 @@ proc main() =
     echo &"effectRing {ring}"
     echo &"effectSetLatencyUs {setUs:.3f}"
     echo &"effectSetLatencyUsPerRecord {setUsPerRecord:.6f}"
+    echo &"effectPackLatencyUs {packUs:.3f}"
     echo &"effectGlobalScanned {global.stats.scanned}"
     echo &"effectGlobalTotal {global.stats.totalVectors}"
     echo &"effectGlobalTokens {global.stats.estimatedTokens}"
@@ -155,6 +161,8 @@ proc main() =
   echo &"corpus={corpus}"
   echo &"import read={stats.read} imported={stats.imported} skipped={stats.skipped} errors={stats.errors} rings={stats.rings}"
   echo &"set latency_us={setUs:.3f} set_us_per_record={setUsPerRecord:.6f}"
+  if diskBacked:
+    echo &"pack latency_us={packUs:.3f}"
   echo &"question={question}"
   echo &"ring={ring}"
   echo &"global scanned={global.stats.scanned}/{global.stats.totalVectors} tokens~={global.stats.estimatedTokens} hits={global.hits.len} latency_us={globalUs:.3f}"

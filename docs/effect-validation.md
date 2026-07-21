@@ -69,20 +69,44 @@ you intentionally want to compare the legacy in-memory validation path.
 
 Quick local sanity result from this repository state:
 
-| case | docs | global budget | routed budget | set latency us | set us/record | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-balanced | 168 | 8 | 3 | 2167.157 | 12.899744 | 168 -> 24 | 692 -> 260 | 953.418 -> 152.616 | 85.714% | 62.428% | 1356 |
-| near-distractors | 1860 | 20 | 5 | 27266.134 | 14.659212 | 1860 -> 120 | 1730 -> 433 | 11846.404 -> 816.167 | 93.548% | 74.971% | 2064 |
-| medium-noisy | 13500 | 30 | 8 | 186953.713 | 13.848423 | 13500 -> 500 | 2595 -> 692 | 81631.116 -> 3151.097 | 96.296% | 73.333% | 3124 |
+| case | docs | global budget | routed budget | set latency us | set us/record | pack latency us | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-balanced | 168 | 8 | 3 | 2402.263 | 14.299185 | 9400.976 | 168 -> 24 | 692 -> 260 | 382.484 -> 59.650 | 85.714% | 62.428% | 1356 |
+| near-distractors | 1860 | 20 | 5 | 26948.886 | 14.488648 | 102680.060 | 1860 -> 120 | 1730 -> 433 | 3388.369 -> 233.430 | 93.548% | 74.971% | 2064 |
+| medium-noisy | 13500 | 30 | 8 | 177783.235 | 13.169129 | 681991.471 | 13500 -> 500 | 2595 -> 692 | 23756.021 -> 852.418 | 96.296% | 73.333% | 3124 |
 
 Larger local validation with `KOUTEN_EFFECT_SCALE=100` and
 `KOUTEN_EFFECT_BATCH_SIZE=10000`:
 
+| case | docs | global budget | routed budget | set latency us | set us/record | pack latency us | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-balanced | 16800 | 8 | 3 | 231157.641 | 13.759383 | 848768.915 | 16800 -> 2400 | 692 -> 260 | 28377.546 -> 4254.966 | 85.714% | 62.428% | 1360 |
+| near-distractors | 186000 | 20 | 5 | 2523403.771 | 13.566687 | 9585530.665 | 186000 -> 12000 | 1730 -> 433 | 348492.042 -> 22159.867 | 93.548% | 74.971% | 2068 |
+| medium-noisy | 1350000 | 30 | 8 | 17674021.261 | 13.091868 | 68635114.386 | 1350000 -> 50000 | 2595 -> 692 | 2588003.358 -> 92612.321 | 96.296% | 73.333% | 3128 |
+
+The disk-backed path now separates two costs:
+
+- `set latency`: normal JSONL import into the WAL-backed store;
+- `pack latency`: an explicit physical-layout step that builds ring-local
+  segment files for faster reads.
+
+The WAL remains the source of truth. Ring segment files are rebuildable read
+layout, similar in operational role to a compaction or optimize step. They are
+not required for correctness.
+
+Earlier scale-1000 WAL-baseline validation also completed on this machine with
+the disk-backed matrix path. That pre-segment run is retained here as a stress
+baseline, not as the current optimized read result:
+
 | case | docs | global budget | routed budget | set latency us | set us/record | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-balanced | 16800 | 8 | 3 | 228004.308 | 13.571685 | 16800 -> 2400 | 692 -> 260 | 94720.037 -> 14593.993 | 85.714% | 62.428% | 1360 |
-| near-distractors | 186000 | 20 | 5 | 2489114.827 | 13.382338 | 186000 -> 12000 | 1730 -> 433 | 1075884.485 -> 73365.860 | 93.548% | 74.971% | 2068 |
-| medium-noisy | 1350000 | 30 | 8 | 16805714.971 | 12.448678 | 1350000 -> 50000 | 2595 -> 692 | 7410629.343 -> 289838.357 | 96.296% | 73.333% | 3128 |
+| small-balanced | 168000 | 8 | 3 | 2269360.968 | 13.508101 | 168000 -> 24000 | 692 -> 260 | 951587.552 -> 146019.973 | 85.714% | 62.428% | 1362 |
+| near-distractors | 1860000 | 20 | 5 | 24689153.892 | 13.273739 | 1860000 -> 120000 | 1730 -> 433 | 10530762.520 -> 732946.083 | 93.548% | 74.971% | 2070 |
+| medium-noisy | 13500000 | 30 | 8 | 184747113.507 | 13.684971 | 13500000 -> 500000 | 2595 -> 692 | 81464731.931 -> 3228825.983 | 96.296% | 73.333% | 3130 |
+
+The scale-1000 stress baseline showed that the generated 13.5M-record case
+completed without the previous OOM kill. The current segment-pack path should be
+used for optimized disk-backed read measurements.
 
 The important part is not that these generated numbers are universal. They show
 how to test the effect: compare broad retrieval with placement-aware retrieval,

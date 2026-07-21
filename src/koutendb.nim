@@ -1236,6 +1236,13 @@ proc configureVectorBackend*(db: KoutenDb, kind: VectorBackendKind) =
       for _, p in db.st.items:
         db.vectorBackend.upsert p
 
+proc packDiskBackedSegments*(db: KoutenDb) =
+  ## Build ring-local physical segment files for disk-backed embedded reads.
+  ## WAL remains the source of truth; segments are rebuildable read layout.
+  doAssert db.mode == mEmbedded, "packDiskBackedSegments は組み込みモード専用"
+  if db.st.diskBacked:
+    db.st.rebuildRingSegments()
+
 proc configurePlannerBackend*(db: KoutenDb, kind: PlannerBackendKind) =
   ## retrieval planner backend を選ぶ。
   ## KoutenDB core は deterministic heuristic planner を使う。
