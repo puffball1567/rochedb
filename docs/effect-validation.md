@@ -69,20 +69,20 @@ you intentionally want to compare the legacy in-memory validation path.
 
 Quick local sanity result from this repository state:
 
-| case | docs | global budget | routed budget | set latency us | set us/record | pack latency us | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-balanced | 168 | 8 | 3 | 2824.351 | 16.811613 | 9668.352 | 168 -> 24 | 692 -> 260 | 444.299 -> 67.193 | 85.714% | 62.428% | 1356 |
-| near-distractors | 1860 | 20 | 5 | 30915.313 | 16.621136 | 110760.569 | 1860 -> 120 | 1730 -> 433 | 3662.520 -> 241.323 | 93.548% | 74.971% | 2064 |
-| medium-noisy | 13500 | 30 | 8 | 470689.989 | 34.865925 | 1193051.601 | 13500 -> 500 | 2595 -> 692 | 39787.963 -> 1592.871 | 96.296% | 73.333% | 3124 |
+| case | docs | global budget | routed budget | set latency us | set us/record | pack latency us | pack records/rings/bytes | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-balanced | 168 | 8 | 3 | 2633.178 | 15.673679 | 1393.456 | 168 / 4 / 61352 | 168 -> 24 | 692 -> 260 | 436.058 -> 65.097 | 85.714% | 62.428% | 1356 |
+| near-distractors | 1860 | 20 | 5 | 31467.527 | 16.918025 | 11232.515 | 1860 / 5 / 681730 | 1860 -> 120 | 1730 -> 433 | 3745.988 -> 313.336 | 93.548% | 74.971% | 2064 |
+| medium-noisy | 13500 | 30 | 8 | 242687.915 | 17.976883 | 83254.021 | 13500 / 5 / 4855950 | 13500 -> 500 | 2595 -> 692 | 40209.632 -> 1339.184 | 96.296% | 73.333% | 3124 |
 
 Larger local validation with `KOUTEN_EFFECT_SCALE=100` and
 `KOUTEN_EFFECT_BATCH_SIZE=10000`:
 
-| case | docs | global budget | routed budget | set latency us | set us/record | pack latency us | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-balanced | 16800 | 8 | 3 | 259143.133 | 15.425186 | 977187.126 | 16800 -> 2400 | 692 -> 260 | 33234.527 -> 4920.891 | 85.714% | 62.428% | 1360 |
-| near-distractors | 186000 | 20 | 5 | 2926573.643 | 15.734267 | 10575583.829 | 186000 -> 12000 | 1730 -> 433 | 350721.571 -> 22751.475 | 93.548% | 74.971% | 2068 |
-| medium-noisy | 1350000 | 30 | 8 | 19314316.115 | 14.306901 | 74683629.765 | 1350000 -> 50000 | 2595 -> 692 | 2753617.075 -> 101526.529 | 96.296% | 73.333% | 3128 |
+| case | docs | global budget | routed budget | set latency us | set us/record | pack latency us | pack records/rings/bytes | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-balanced | 16800 | 8 | 3 | 314644.394 | 18.728833 | 109623.244 | 16800 / 4 / 6168360 | 16800 -> 2400 | 692 -> 260 | 36175.873 -> 4904.967 | 85.714% | 62.428% | 1360 |
+| near-distractors | 186000 | 20 | 5 | 2533458.449 | 13.620744 | 915392.821 | 186000 / 5 / 68640450 | 186000 -> 12000 | 1730 -> 433 | 346236.598 -> 21702.646 | 93.548% | 74.971% | 2068 |
+| medium-noisy | 1350000 | 30 | 8 | 18698431.608 | 13.850690 | 6939743.991 | 1350000 / 5 / 489914450 | 1350000 -> 50000 | 2595 -> 692 | 2493589.324 -> 89259.154 | 96.296% | 73.333% | 3128 |
 
 The disk-backed path now separates two costs:
 
@@ -94,27 +94,31 @@ The WAL remains the source of truth. Ring segment files are rebuildable read
 layout, similar in operational role to a compaction or optimize step. They are
 not required for correctness.
 
-The current segment-pack implementation improves disk-backed read locality, but
-explicit post-import packing is still a bottleneck at multi-million-record
-scale. The `effectPackRecords`, `effectPackRings`, and `effectPackBytes`
-metrics expose that cost so future pack optimization can be measured directly.
+The current segment-pack implementation uses buffered ring-local writes and
+improves disk-backed read locality without making import-time packing the
+default. Explicit post-import packing is now fast enough for the scale-100
+validation path, but it is still a visible cost at the largest multi-million
+stress scale. The `effectPackRecords`, `effectPackRings`, and
+`effectPackBytes` metrics expose that cost so future pack optimization can be
+measured directly.
 `KOUTEN_EFFECT_PACK_DURING_IMPORT=1` can be used to test import-time segment
 construction, but it is not the default because it currently increases normal
 import latency too much.
 
-Earlier scale-1000 WAL-baseline validation also completed on this machine with
-the disk-backed matrix path. That pre-segment run is retained here as a stress
-baseline, not as the current optimized read result:
+Scale-1000 validation also completed on this machine with the current
+disk-backed segment path:
 
-| case | docs | global budget | routed budget | set latency us | set us/record | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-balanced | 168000 | 8 | 3 | 2269360.968 | 13.508101 | 168000 -> 24000 | 692 -> 260 | 951587.552 -> 146019.973 | 85.714% | 62.428% | 1362 |
-| near-distractors | 1860000 | 20 | 5 | 24689153.892 | 13.273739 | 1860000 -> 120000 | 1730 -> 433 | 10530762.520 -> 732946.083 | 93.548% | 74.971% | 2070 |
-| medium-noisy | 13500000 | 30 | 8 | 184747113.507 | 13.684971 | 13500000 -> 500000 | 2595 -> 692 | 81464731.931 -> 3228825.983 | 96.296% | 73.333% | 3130 |
+| case | docs | global budget | routed budget | set latency us | set us/record | pack latency us | pack records/rings/bytes | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-balanced | 168000 | 8 | 3 | 2268312.838 | 13.501862 | 808368.180 | 168000 / 4 / 61929560 | 168000 -> 24000 | 692 -> 260 | 289622.808 -> 42232.274 | 85.714% | 62.428% | 1362 |
+| near-distractors | 1860000 | 20 | 5 | 24940651.107 | 13.408952 | 9361622.001 | 1860000 / 5 / 689944450 | 1860000 -> 120000 | 1730 -> 433 | 3481719.378 -> 227453.701 | 93.548% | 74.971% | 2070 |
+| medium-noisy | 13500000 | 30 | 8 | 203851078.694 | 15.100080 | 72425799.771 | 13500000 / 5 / 4955874450 | 13500000 -> 500000 | 2595 -> 692 | 30082232.678 -> 1101752.063 | 96.296% | 73.333% | 3130 |
 
-The scale-1000 stress baseline showed that the generated 13.5M-record case
-completed without the previous OOM kill. The current segment-pack path should be
-used for optimized disk-backed read measurements.
+The scale-1000 stress path shows that the generated 13.5M-record case completes
+without the previous OOM kill. It also shows the next performance target:
+post-import segment packing is much faster than the earlier unbuffered path, but
+the largest pack step is still large enough to deserve more optimization before
+calling the v0.9 line final.
 
 The important part is not that these generated numbers are universal. They show
 how to test the effect: compare broad retrieval with placement-aware retrieval,

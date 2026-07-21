@@ -543,6 +543,43 @@ proc readParticleBodyAtStream(fs: Stream, offset: int64): string =
     else:
       raise newException(IOError, "WAL offset does not point to a particle record")
 
+const SegmentPackFlushBytes = 4 * 1024 * 1024
+
+type
+  SegmentPackWriter = object
+    file: File
+    pos: int64
+    buffer: string
+
+proc flushPackWriter(writer: var SegmentPackWriter) =
+  if writer.buffer.len > 0:
+    writer.file.write(writer.buffer)
+    writer.pos += writer.buffer.len.int64
+    writer.buffer.setLen(0)
+
+proc appendPackBody(s: Store,
+                    writers: var seq[SegmentPackWriter],
+                    writerIndexes: var Table[uint64, int],
+                    ring: uint64,
+                    body: string): int64 =
+  if ring notin writerIndexes:
+    writerIndexes[ring] = writers.len
+    writers.add SegmentPackWriter(file: open(s.segmentPath(ring), fmWrite),
+                                  pos: 0,
+                                  buffer: "")
+  let idx = writerIndexes[ring]
+  result = writers[idx].pos + writers[idx].buffer.len.int64
+  writers[idx].buffer.add(body)
+  if writers[idx].buffer.len >= SegmentPackFlushBytes:
+    writers[idx].flushPackWriter()
+
+proc closePackWriters(writers: var seq[SegmentPackWriter]) =
+  for writer in writers.mitems:
+    writer.flushPackWriter()
+    writer.file.flushFile()
+    writer.file.close()
+  writers.setLen(0)
+
 proc flushDiskBackedLog(s: Store) =
   if s.logFile != nil:
     s.logFile.flushFile()
@@ -645,32 +682,37 @@ proc rebuildRingSegmentsFromOffsets(s: Store, wal: FileStream): SegmentPackStats
   type SegmentSource = tuple[offset: int64, k: (uint64, uint32)]
   var live: seq[SegmentSource] = @[]
   var packedRings = initTable[uint64, bool]()
+  var writers: seq[SegmentPackWriter] = @[]
+  var writerIndexes = initTable[uint64, int]()
   for k, offset in s.itemOffsets:
     live.add (offset: offset, k: k)
   live.sort do (a, b: SegmentSource) -> int:
     cmp(a.offset, b.offset)
-  for entry in live:
-    let body = wal.readParticleBodyAtStream(entry.offset)
-    let firstLineEnd = body.find('\n')
-    if firstLineEnd < 0:
-      raise newException(WalCorruptionError, "particle WAL body has no header")
-    let parts = body[0 ..< firstLineEnd].split(' ')
-    var firstData = -1
-    case parts[0]
-    of "P":
-      firstData = 1
-    of "XP":
-      firstData = 2
-    else:
-      raise newException(IOError, "WAL offset does not point to a particle record")
-    let k = key(parseBiggestUInt(parts[firstData]).uint64,
-                parseUInt(parts[firstData + 1]).uint32)
-    if k != entry.k:
-      raise newException(WalCorruptionError, "particle WAL offset key mismatch")
-    s.itemSegmentOffsets[k] = s.writeSegmentBody(k[0], body)
-    inc result.records
-    result.bytes += body.len.int64
-    packedRings[k[0]] = true
+  try:
+    for entry in live:
+      let body = wal.readParticleBodyAtStream(entry.offset)
+      let firstLineEnd = body.find('\n')
+      if firstLineEnd < 0:
+        raise newException(WalCorruptionError, "particle WAL body has no header")
+      let parts = body[0 ..< firstLineEnd].split(' ')
+      var firstData = -1
+      case parts[0]
+      of "P":
+        firstData = 1
+      of "XP":
+        firstData = 2
+      else:
+        raise newException(IOError, "WAL offset does not point to a particle record")
+      let k = key(parseBiggestUInt(parts[firstData]).uint64,
+                  parseUInt(parts[firstData + 1]).uint32)
+      if k != entry.k:
+        raise newException(WalCorruptionError, "particle WAL offset key mismatch")
+      s.itemSegmentOffsets[k] = s.appendPackBody(writers, writerIndexes, k[0], body)
+      inc result.records
+      result.bytes += body.len.int64
+      packedRings[k[0]] = true
+  finally:
+    writers.closePackWriters()
   result.rings = packedRings.len
 
 proc rebuildRingSegments*(s: Store): SegmentPackStats {.discardable.} =
