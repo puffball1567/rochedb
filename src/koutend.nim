@@ -643,7 +643,9 @@ proc handleFrame(sv: Server, sock: Socket): bool =
         sock.denyRingKey(op.parent)
         return true
       op.payload = sock.readExact(payloadLen)
-      op.vec = sock.readExact(checkedVecBytes(vecDim)).bytesVec(vecDim).normalize()
+      op.vec =
+        if vecDim == 0: @[]
+        else: sock.readExact(checkedVecBytes(vecDim)).bytesVec(vecDim).normalize()
       discard sock.readExact(1) # op 区切りの '\n'
       ops.add op
     sv.st.putClusterTxIntent ClusterTxIntent(id: txid, ops: ops, committed: true)
@@ -745,7 +747,9 @@ proc handleFrame(sv: Server, sock: Socket): bool =
                      codec: codec,
                      lastHere: now)
     p.payload = sock.readExact(payloadLen)
-    p.vec = sock.readExact(checkedVecBytes(vecDim)).bytesVec(vecDim).normalize()
+    p.vec =
+      if vecDim == 0: @[]
+      else: sock.readExact(checkedVecBytes(vecDim)).bytesVec(vecDim).normalize()
     if isDelete:
       if sv.st.contains(parent, seq):
         sv.st.remove(parent, seq)
@@ -838,7 +842,9 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       sock.denyRingName(ringName)
       return true
     let payload = sock.readExact(payloadLen)
-    let vec = sock.readExact(checkedVecBytes(vecDim)).bytesVec(vecDim).normalize()
+    let vec =
+      if vecDim == 0: @[]
+      else: sock.readExact(checkedVecBytes(vecDim)).bytesVec(vecDim).normalize()
     let ri = sv.ringInfo(ringName)
     let owner = int(sv.tbl.owner(ri.head))
     if owner != sv.myId:
@@ -870,7 +876,9 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       sock.denyRingKey(ringKey)
       return true
     let payload = sock.readExact(payloadLen)
-    let vec = sock.readExact(checkedVecBytes(vecDim)).bytesVec(vecDim).normalize()
+    let vec =
+      if vecDim == 0: @[]
+      else: sock.readExact(checkedVecBytes(vecDim)).bytesVec(vecDim).normalize()
     let seq = sv.st.nextSeq(ringKey)
     if ringKey notin sv.st.ringMeta:
       sv.st.putRingMeta(ringKey, period, head)
@@ -1057,7 +1065,9 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       sock.denyRingKey(p.parent)
       return true
     p.payload = sock.readExact(payloadLen)
-    p.vec = sock.readExact(checkedVecBytes(vecDim)).bytesVec(vecDim).normalize()
+    p.vec =
+      if vecDim == 0: @[]
+      else: sock.readExact(checkedVecBytes(vecDim)).bytesVec(vecDim).normalize()
     if p.parent notin sv.st.ringMeta:
       sv.st.putRingMeta(p.parent, p.period, p.head)
     # 追い越し対策: 相手起点の seq 採番と衝突しないよう max を取る

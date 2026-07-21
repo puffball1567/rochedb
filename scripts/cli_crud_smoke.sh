@@ -90,6 +90,26 @@ if grep -q '"ring": "users/123/billing"' <<<"$stellar_named"; then
   echo "stellar read included billing" >&2
   exit 1
 fi
+bin/kouten put --ring=orders --near=users/123 \
+  --payload='{"kind":"order","orderNo":"A-002"}' --codec=json >/dev/null
+bin/kouten put --ring=orders --near=users/123 \
+  --payload='{"kind":"order","orderNo":"A-003"}' --codec=json >/dev/null
+bin/kouten put --ring=billing --near=users/123 \
+  --payload='{"kind":"billing","plan":"team"}' --codec=json >/dev/null
+stellar_subring_limits="$(bin/kouten get --ring=users/123 \
+  --subring=orders,billing --limit=10 \
+  --subring-limit=orders:2,billing:1 --subring-sort=orders:id)"
+grep -q '"orderNo": "A-001"' <<<"$stellar_subring_limits"
+grep -q '"orderNo": "A-002"' <<<"$stellar_subring_limits"
+if grep -q '"orderNo": "A-003"' <<<"$stellar_subring_limits"; then
+  echo "subring limit included too many orders" >&2
+  exit 1
+fi
+if grep -q '"plan": "pro"' <<<"$stellar_subring_limits" &&
+   grep -q '"plan": "team"' <<<"$stellar_subring_limits"; then
+  echo "subring limit included too many billing records" >&2
+  exit 1
+fi
 bin/kouten put --ring=shops/1123 \
   --payload='{"kind":"shop","name":"Shop 1123"}' --codec=json >/dev/null
 bin/kouten put --ring=orders/A-002 \

@@ -1,6 +1,6 @@
 ## 公開 API（src/koutendb.nim）のテスト
 
-import std/[json, os, strutils, tempfiles, times, unittest]
+import std/[json, os, strutils, tempfiles, tables, times, unittest]
 import ../src/koutendb
 
 suite "public api":
@@ -378,6 +378,60 @@ suite "public api":
     check profile.toRaw().parent != order.toRaw().parent
     check nearRing("users/123", "orders") == "users/123/orders"
     check billing.toRaw().parent != distant.toRaw().parent
+
+    discard db.putNear("users/123", %*{"kind": "order", "orderNo": "A-002"},
+                       ring = "orders")
+    discard db.putNear("users/123", %*{"kind": "order", "orderNo": "A-003"},
+                       ring = "orders")
+    discard db.putNear("users/123", %*{"kind": "billing", "plan": "team"},
+                       ring = "billing")
+    var perSubringLimits = initTable[string, int]()
+    perSubringLimits["orders"] = 2
+    perSubringLimits["billing"] = 1
+    var perSubringSort = initTable[string, string]()
+    perSubringSort["orders"] = "id"
+    var perSubringSortDirections = initTable[string, KoutenReadSortDirection]()
+    perSubringSortDirections["orders"] = rsAsc
+    let tunedSubrings = db.readStellar("users/123", KoutenStellarOptions(
+      filter: newJObject(),
+      limitPerRing: 10,
+      subringLimits: perSubringLimits,
+      subringSortFields: perSubringSort,
+      subringSortDirections: perSubringSortDirections,
+      maxDepth: 1,
+      subrings: @["orders", "billing"],
+      includeRoot: false,
+      sortField: "time",
+      sortDirection: rsDesc))
+    var tunedOrders = 0
+    var tunedBilling = 0
+    for ringPage in tunedSubrings.rings:
+      if ringPage.ring == "users/123/orders":
+        tunedOrders = ringPage.items.len
+        check ringPage.items[0].id == order
+      if ringPage.ring == "users/123/billing":
+        tunedBilling = ringPage.items.len
+    check tunedOrders == 2
+    check tunedBilling == 1
+    var latestLimit = initTable[string, int]()
+    latestLimit["orders"] = 1
+    var latestSort = initTable[string, string]()
+    latestSort["orders"] = "time"
+    var latestSortDirections = initTable[string, KoutenReadSortDirection]()
+    latestSortDirections["orders"] = rsDesc
+    let latestOrder = db.readStellar("users/123", KoutenStellarOptions(
+      filter: newJObject(),
+      limitPerRing: 10,
+      subringLimits: latestLimit,
+      subringSortFields: latestSort,
+      subringSortDirections: latestSortDirections,
+      maxDepth: 1,
+      subrings: @["orders"],
+      includeRoot: false,
+      sortField: "id",
+      sortDirection: rsAsc))
+    check latestOrder.count == 1
+    check parseJson(latestOrder.rings[0].items[0].payload)["orderNo"].getStr() == "A-003"
     db.close()
 
   test "stellar attach/detach links existing coordinates without copying data":
@@ -1330,6 +1384,101 @@ suite "永続化":
     dst.close()
     removeDir(root)
 
+  test "disk-backed mode keeps payloads in WAL while preserving public reads":
+    let root = createTempDir("koutendb", "disk-backed")
+    let dir = root / "db"
+    let importPath = root / "input.jsonl"
+    try:
+      var db = open(dataDir = dir, diskBacked = true)
+      let a = db.put(%*{"title": "alpha", "kind": "doc"}, ring = "docs/a",
+                     vec = @[1.0'f32, 0.0'f32])
+      let b = db.put(encodedPayload("(object (title beta))", pcNif), ring = "docs/a",
+                     vec = @[0.8'f32, 0.2'f32])
+      discard db.put(%*{"title": "gamma", "kind": "note"}, ring = "docs/b",
+                     vec = @[0.0'f32, 1.0'f32])
+
+      check db.get(a).contains("alpha")
+      check db.getEncoded(b).codec == pcNif
+      check db.countByRing("docs/a") == 2
+      db.packDiskBackedSegments()
+      check dirExists(dir / "segments")
+      let page = db.listByRing("docs/a", limit = 10)
+      check page.items.len == 2
+      check page.items[1].codec == pcNif
+      let rr = db.retrieveWithStats(@[1.0'f32, 0.0'f32], ring = "docs/a", budget = 2)
+      check rr.hits.len == 2
+      check rr.stats.totalVectors == 3
+      check rr.stats.scanned == 2
+      db.close()
+
+      var reopened = open(dataDir = dir, diskBacked = true)
+      check reopened.get(a).contains("alpha")
+      check dirExists(dir / "segments")
+      check reopened.getEncoded(b).codec == pcNif
+      check reopened.countByRing("docs/a") == 2
+      let reopenedRead = reopened.retrieveWithStats(@[1.0'f32, 0.0'f32],
+                                                    ring = "docs/a", budget = 2)
+      check reopenedRead.hits.len == 2
+      check reopenedRead.stats.scanned == 2
+
+      writeFile(importPath,
+        "{\"ring\":\"imports/a\",\"payload\":{\"title\":\"one\"},\"vec\":[1,0]}\n" &
+        "{\"ring\":\"imports/a\",\"payload\":{\"title\":\"two\"},\"vec\":[0.9,0.1]}\n" &
+        "{\"ring\":\"imports/b\",\"payload\":{\"title\":\"three\"},\"vec\":[0,1]}\n")
+      let stats = reopened.importJsonl(importPath, ringField = "ring",
+                                       payloadField = "payload", vecField = "vec",
+                                       batchSize = 2)
+      check stats.imported == 3
+      check stats.batches == 2
+      check reopened.countByRing("imports/a") == 2
+      check reopened.retrieveWithStats(@[1.0'f32, 0.0'f32],
+                                       ring = "imports/a", budget = 2).stats.scanned == 2
+      reopened.close()
+    finally:
+      removeDir(root)
+
+  test "disk-backed segment pack skips tiny rings and keeps WAL-offset reads":
+    let root = createTempDir("koutendb", "disk-backed-segment-threshold")
+    let dir = root / "db"
+    try:
+      var db = open(dataDir = dir, diskBacked = true)
+      let tiny = db.put(%*{"title": "tiny"}, ring = "users/user-00000001")
+      for i in 0 ..< 16:
+        discard db.put(%*{"title": "large", "n": i}, ring = "docs/large")
+
+      let packed = db.packDiskBackedSegments()
+      check packed.records == 16
+      check packed.rings == 1
+      check db.readRing("users/user-00000001").items.len == 1
+      check db.get(tiny).contains("tiny")
+      check db.readRing("docs/large", KoutenReadOptions(
+        filter: newJObject(),
+        selection: "",
+        limit: 20,
+        cursor: "",
+        pagination: rpOff,
+        page: 1,
+        pageLimit: 20,
+        sortField: "time",
+        sortDirection: rsDesc)).items.len == 16
+      db.close()
+
+      var reopened = open(dataDir = dir, diskBacked = true)
+      check reopened.readRing("users/user-00000001").items.len == 1
+      check reopened.readRing("docs/large", KoutenReadOptions(
+        filter: newJObject(),
+        selection: "",
+        limit: 20,
+        cursor: "",
+        pagination: rpOff,
+        page: 1,
+        pageLimit: 20,
+        sortField: "time",
+        sortDirection: rsDesc)).items.len == 16
+      reopened.close()
+    finally:
+      removeDir(root)
+
   test "importJsonl は外部 NoSQL JSONL を ring に割り振って保存できる":
     let dir = createTempDir("koutendb", "import-jsonl")
     let input = dir / "mongo-export.jsonl"
@@ -1342,10 +1491,13 @@ suite "永続化":
                                ringField = "tenant",
                                ringPrefix = "tenant/",
                                payloadField = "body",
-                               vecField = "embedding")
+                               vecField = "embedding",
+                               batchSize = 2)
     check stats.read == 3
     check stats.imported == 3
     check stats.rings == 3
+    check stats.batches == 2
+    check stats.batchSize == 2
 
     let aHits = db.retrieve(@[1.0'f32, 0.0'f32],
                             ring = "tenant/a", budget = 2)

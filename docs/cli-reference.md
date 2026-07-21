@@ -143,6 +143,7 @@ kouten get --ring=docs/japan
 kouten put --ring=orders --near=users/123 --payload='{"orderNo":"A-001"}' --codec=json
 kouten get --ring=users/123 --subring=orders
 kouten get --stellar=users/123 --filter='{"kind":"order"}' --subring=orders
+kouten get --ring=users/123 --subring=profile,orders,billing --subring-limit=orders:10,billing:1 --subring-rsort=orders:time
 kouten stellar attach --stellar=commerce/order/A-001 --ring=users/123
 kouten stellar detach --stellar=commerce/order/A-001 --ring=users/123
 kouten get --ring=docs/japan --limit=1 --rsort=time
@@ -179,7 +180,7 @@ kouten get --ring=logs/raw --limit=1
 | Command | Required flags | Purpose |
 |---|---|---|
 | `put` | `--ring=RING` plus `--payload=TEXT` or `--in=FILE`; optional `--near=BASE_RING`, `--codec=auto|raw|json|nif|bif` | Store a document and print `id`, `rawId`, resolved ring, and codec. `--near=users/123 --ring=orders` stores into the nearby coordinate `users/123/orders`. `auto` uses the ring profile. |
-| `get` | `--ring=RING` or `--stellar=RING`; optional `--subring=a,b`, `--filter=JSON`, `--selection=SEL`, `--limit=N`, `--cursor=CURSOR`, `--sort=id|time`, `--rsort=id|time`, `--pagination=on|off`, `--page=N`, `--pagelimit=N`, `--view=raw|auto|base64|hex` | Read the ring or stellar coordinate's neighborhood. It always returns an `items` array and includes per-ring groups in `rings`. Use `--subring` to narrow the field of view. A `--filter='{"id":"RAW_ID"}'` read stays on the exact ring path for script compatibility. Sorting is applied to the fetched page/filter window, not as a global full-ring sort. The default view is `auto`: payload codec is inferred from stored metadata. |
+| `get` | `--ring=RING` or `--stellar=RING`; optional `--subring=a,b`, `--subring-limit=a:10,b:1`, `--subring-sort=a:id`, `--subring-rsort=b:time`, `--filter=JSON`, `--selection=SEL`, `--limit=N`, `--cursor=CURSOR`, `--sort=id|time`, `--rsort=id|time`, `--pagination=on|off`, `--page=N`, `--pagelimit=N`, `--view=raw|auto|base64|hex` | Read the ring or stellar coordinate's neighborhood. It always returns an `items` array and includes per-ring groups in `rings`. Use `--subring` to narrow the field of view. `--limit` is the default per-ring limit for stellar reads; `--subring-limit` overrides it for named subrings. `--subring-sort` and `--subring-rsort` override sort order for named subrings. A `--filter='{"id":"RAW_ID"}'` read stays on the exact ring path for script compatibility. Sorting is applied to the fetched page/filter window, not as a global full-ring sort. The default view is `auto`: payload codec is inferred from stored metadata. |
 | `stellar attach` | `--stellar=RING --ring=RING` | Add an existing ring coordinate to a stellar coordinate's visible lens. Payloads are not copied. |
 | `stellar detach` | `--stellar=RING --ring=RING` | Remove a ring coordinate from a stellar coordinate's visible lens. Payloads are not deleted. |
 | `stellar list` | `--stellar=RING` | List rings attached to a stellar coordinate. |
@@ -309,14 +310,16 @@ For scripts and reproducible examples, prefer the single-shot commands above.
 | `backup-encrypted` | `--data=DIR --backup=DIR --passphrase=TEXT` | Create encrypted backup. |
 | `restore-encrypted` | `--backup=DIR --data=DIR --passphrase=TEXT` | Restore encrypted backup. |
 | `dump` | `--data=DIR` | Export JSONL. |
-| `import-jsonl` | `--data=DIR --in=FILE` | Import JSONL. |
+| `import-jsonl` | `--data=DIR --in=FILE`; optional `--batch-size=N` | Import JSONL with chunked commits. |
 | `describe-galaxy` | `--data=DIR --description=TEXT` | Set galaxy map description. |
 | `describe-ring` | `--data=DIR --ring=RING --description=TEXT` | Set ring map description. |
 
 `dump` / `import-jsonl` are the portable migration boundary while KoutenDB's
 pre-v1.0 internal WAL format can still evolve. `import-jsonl` recognizes
 `koutendb.dump.v1` files produced by `dump`, and can also route external JSONL
-exports through `--ring-field`, `--payload-field`, and `--vec-field`. See
+exports through `--ring-field`, `--payload-field`, and `--vec-field`.
+`--batch-size=N` controls how many successfully parsed records are committed per
+WAL transaction during bulk load. See
 [Data Migration](data-migration.md).
 
 ## Recovery Commands
