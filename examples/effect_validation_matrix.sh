@@ -152,6 +152,8 @@ echo
 echo "| case | docs | global budget | routed budget | set latency us | set us/record | pack latency us | pack records/rings/bytes | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |"
 echo "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
 run_case "small-balanced" "$(scaled 24)" "$(scaled 24)" "$(scaled 96)" 0 8 3
+run_case "focused-pinpoint" "$(scaled 5)" "$(scaled 20)" "$(scaled 10000)" "$(scaled 2000)" 30 3
+run_case "focused-small-context" "$(scaled 50)" "$(scaled 50)" "$(scaled 10000)" "$(scaled 2000)" 30 5
 run_case "near-distractors" "$(scaled 120)" "$(scaled 120)" "$(scaled 1000)" "$(scaled 500)" 20 5
 run_case "medium-noisy" "$(scaled 500)" "$(scaled 500)" "$(scaled 10000)" "$(scaled 2000)" 30 8
 

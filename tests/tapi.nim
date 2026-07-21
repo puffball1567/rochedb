@@ -1383,6 +1383,48 @@ suite "永続化":
     finally:
       removeDir(root)
 
+  test "disk-backed segment pack skips tiny rings and keeps WAL-offset reads":
+    let root = createTempDir("koutendb", "disk-backed-segment-threshold")
+    let dir = root / "db"
+    try:
+      var db = open(dataDir = dir, diskBacked = true)
+      let tiny = db.put(%*{"title": "tiny"}, ring = "users/user-00000001")
+      for i in 0 ..< 16:
+        discard db.put(%*{"title": "large", "n": i}, ring = "docs/large")
+
+      let packed = db.packDiskBackedSegments()
+      check packed.records == 16
+      check packed.rings == 1
+      check db.readRing("users/user-00000001").items.len == 1
+      check db.get(tiny).contains("tiny")
+      check db.readRing("docs/large", KoutenReadOptions(
+        filter: newJObject(),
+        selection: "",
+        limit: 20,
+        cursor: "",
+        pagination: rpOff,
+        page: 1,
+        pageLimit: 20,
+        sortField: "time",
+        sortDirection: rsDesc)).items.len == 16
+      db.close()
+
+      var reopened = open(dataDir = dir, diskBacked = true)
+      check reopened.readRing("users/user-00000001").items.len == 1
+      check reopened.readRing("docs/large", KoutenReadOptions(
+        filter: newJObject(),
+        selection: "",
+        limit: 20,
+        cursor: "",
+        pagination: rpOff,
+        page: 1,
+        pageLimit: 20,
+        sortField: "time",
+        sortDirection: rsDesc)).items.len == 16
+      reopened.close()
+    finally:
+      removeDir(root)
+
   test "importJsonl は外部 NoSQL JSONL を ring に割り振って保存できる":
     let dir = createTempDir("koutendb", "import-jsonl")
     let input = dir / "mongo-export.jsonl"

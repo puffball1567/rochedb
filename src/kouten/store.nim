@@ -543,7 +543,9 @@ proc readParticleBodyAtStream(fs: Stream, offset: int64): string =
     else:
       raise newException(IOError, "WAL offset does not point to a particle record")
 
-const SegmentPackFlushBytes = 4 * 1024 * 1024
+const
+  SegmentPackFlushBytes = 4 * 1024 * 1024
+  SegmentPackMinRecords = 16
 
 type
   SegmentPackWriter = object
@@ -681,32 +683,21 @@ proc getParticle*(s: Store, parent: uint64, seq: uint32): Particle =
 proc rebuildRingSegmentsFromOffsets(s: Store, wal: FileStream): SegmentPackStats =
   type SegmentSource = tuple[offset: int64, k: (uint64, uint32)]
   var live: seq[SegmentSource] = @[]
+  var ringCounts = initTable[uint64, int]()
   var packedRings = initTable[uint64, bool]()
   var writers: seq[SegmentPackWriter] = @[]
   var writerIndexes = initTable[uint64, int]()
+  for k in s.itemOffsets.keys:
+    inc ringCounts.mgetOrPut(k[0], 0)
   for k, offset in s.itemOffsets:
-    live.add (offset: offset, k: k)
+    if ringCounts.getOrDefault(k[0], 0) >= SegmentPackMinRecords:
+      live.add (offset: offset, k: k)
   live.sort do (a, b: SegmentSource) -> int:
     cmp(a.offset, b.offset)
   try:
     for entry in live:
       let body = wal.readParticleBodyAtStream(entry.offset)
-      let firstLineEnd = body.find('\n')
-      if firstLineEnd < 0:
-        raise newException(WalCorruptionError, "particle WAL body has no header")
-      let parts = body[0 ..< firstLineEnd].split(' ')
-      var firstData = -1
-      case parts[0]
-      of "P":
-        firstData = 1
-      of "XP":
-        firstData = 2
-      else:
-        raise newException(IOError, "WAL offset does not point to a particle record")
-      let k = key(parseBiggestUInt(parts[firstData]).uint64,
-                  parseUInt(parts[firstData + 1]).uint32)
-      if k != entry.k:
-        raise newException(WalCorruptionError, "particle WAL offset key mismatch")
+      let k = entry.k
       s.itemSegmentOffsets[k] = s.appendPackBody(writers, writerIndexes, k[0], body)
       inc result.records
       result.bytes += body.len.int64

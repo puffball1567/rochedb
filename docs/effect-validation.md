@@ -71,18 +71,22 @@ Quick local sanity result from this repository state:
 
 | case | docs | global budget | routed budget | set latency us | set us/record | pack latency us | pack records/rings/bytes | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-balanced | 168 | 8 | 3 | 2633.178 | 15.673679 | 1393.456 | 168 / 4 / 61352 | 168 -> 24 | 692 -> 260 | 436.058 -> 65.097 | 85.714% | 62.428% | 1356 |
-| near-distractors | 1860 | 20 | 5 | 31467.527 | 16.918025 | 11232.515 | 1860 / 5 / 681730 | 1860 -> 120 | 1730 -> 433 | 3745.988 -> 313.336 | 93.548% | 74.971% | 2064 |
-| medium-noisy | 13500 | 30 | 8 | 242687.915 | 17.976883 | 83254.021 | 13500 / 5 / 4855950 | 13500 -> 500 | 2595 -> 692 | 40209.632 -> 1339.184 | 96.296% | 73.333% | 3124 |
+| small-balanced | 168 | 8 | 3 | 2250.065 | 13.393244 | 987.782 | 168 / 4 / 61352 | 168 -> 24 | 692 -> 260 | 321.089 -> 55.249 | 85.714% | 62.428% | 1356 |
+| focused-pinpoint | 12045 | 30 | 3 | 166421.501 | 13.816646 | 56405.995 | 12040 / 4 / 4286760 | 12045 -> 5 | 2408 -> 260 | 19804.821 -> 60.418 | 99.958% | 89.203% | 1357 |
+| focused-small-context | 12150 | 30 | 5 | 168488.497 | 13.867366 | 57476.127 | 12150 / 5 / 4330050 | 12150 -> 50 | 2595 -> 433 | 19583.824 -> 102.117 | 99.588% | 83.314% | 2064 |
+| near-distractors | 1860 | 20 | 5 | 28328.164 | 15.230196 | 9541.160 | 1860 / 5 / 681730 | 1860 -> 120 | 1730 -> 433 | 3375.936 -> 221.486 | 93.548% | 74.971% | 2064 |
+| medium-noisy | 13500 | 30 | 8 | 190560.775 | 14.115613 | 62926.742 | 13500 / 5 / 4855950 | 13500 -> 500 | 2595 -> 692 | 22898.644 -> 867.784 | 96.296% | 73.333% | 3124 |
 
 Larger local validation with `KOUTEN_EFFECT_SCALE=100` and
 `KOUTEN_EFFECT_BATCH_SIZE=10000`:
 
 | case | docs | global budget | routed budget | set latency us | set us/record | pack latency us | pack records/rings/bytes | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-balanced | 16800 | 8 | 3 | 314644.394 | 18.728833 | 109623.244 | 16800 / 4 / 6168360 | 16800 -> 2400 | 692 -> 260 | 36175.873 -> 4904.967 | 85.714% | 62.428% | 1360 |
-| near-distractors | 186000 | 20 | 5 | 2533458.449 | 13.620744 | 915392.821 | 186000 / 5 / 68640450 | 186000 -> 12000 | 1730 -> 433 | 346236.598 -> 21702.646 | 93.548% | 74.971% | 2068 |
-| medium-noisy | 1350000 | 30 | 8 | 18698431.608 | 13.850690 | 6939743.991 | 1350000 / 5 / 489914450 | 1350000 -> 50000 | 2595 -> 692 | 2493589.324 -> 89259.154 | 96.296% | 73.333% | 3128 |
+| small-balanced | 16800 | 8 | 3 | 235716.932 | 14.030770 | 82063.821 | 16800 / 4 / 6168360 | 16800 -> 2400 | 692 -> 260 | 27384.316 -> 4239.180 | 85.714% | 62.428% | 1360 |
+| focused-pinpoint | 1204500 | 30 | 3 | 16409354.387 | 13.623374 | 6158327.700 | 1204500 / 5 / 432620950 | 1204500 -> 500 | 2595 -> 260 | 2730205.122 -> 901.451 | 99.958% | 89.981% | 1361 |
+| focused-small-context | 1215000 | 30 | 5 | 16650765.840 | 13.704334 | 5555622.287 | 1215000 / 5 / 436784450 | 1215000 -> 5000 | 2595 -> 433 | 2353292.649 -> 8855.607 | 99.588% | 83.314% | 2068 |
+| near-distractors | 186000 | 20 | 5 | 2529182.669 | 13.597756 | 835860.620 | 186000 / 5 / 68640450 | 186000 -> 12000 | 1730 -> 433 | 325546.670 -> 20660.522 | 93.548% | 74.971% | 2068 |
+| medium-noisy | 1350000 | 30 | 8 | 17598824.700 | 13.036166 | 5875386.987 | 1350000 / 5 / 489914450 | 1350000 -> 50000 | 2595 -> 692 | 2530113.316 -> 86388.774 | 96.296% | 73.333% | 3128 |
 
 The disk-backed path now separates two costs:
 
@@ -95,12 +99,13 @@ layout, similar in operational role to a compaction or optimize step. They are
 not required for correctness.
 
 The current segment-pack implementation uses buffered ring-local writes and
-improves disk-backed read locality without making import-time packing the
-default. Explicit post-import packing is now fast enough for the scale-100
-validation path, but it is still a visible cost at the largest multi-million
-stress scale. The `effectPackRecords`, `effectPackRings`, and
-`effectPackBytes` metrics expose that cost so future pack optimization can be
-measured directly.
+skips very small rings. Large rings benefit from contiguous segment files, while
+tiny rings such as `users/<id>` can stay on WAL-offset reads without paying the
+cost of one segment file per ring. Explicit post-import packing is now fast
+enough for the scale-100 validation path, but it is still a visible cost at the
+largest multi-million stress scale. The `effectPackRecords`,
+`effectPackRings`, and `effectPackBytes` metrics expose that cost so future pack
+optimization can be measured directly.
 `KOUTEN_EFFECT_PACK_DURING_IMPORT=1` can be used to test import-time segment
 construction, but it is not the default because it currently increases normal
 import latency too much.
@@ -124,6 +129,35 @@ The important part is not that these generated numbers are universal. They show
 how to test the effect: compare broad retrieval with placement-aware retrieval,
 then report import latency, scanned records, estimated tokens, retrieval
 latency, and prompt bytes.
+
+## Pinpoint User Read
+
+`examples/pinpoint_user_read_bench.sh` measures a common application pattern:
+many users exist, but a request already knows the target user. It compares two
+layouts with the same logical records:
+
+- broad layout: every profile is stored in one `users` ring and read with an
+  `id` filter;
+- local layout: each profile is stored in `users/<id>` and read by ring.
+
+Run:
+
+```sh
+KOUTEN_PINPOINT_USERS=100000 examples/pinpoint_user_read_bench.sh
+```
+
+Local disk-backed result with 100,000 users:
+
+| layout | set latency us | set us/record | pack latency us | read mode | read latency us |
+| --- | ---: | ---: | ---: | --- | ---: |
+| broad users ring | 783773.641 | 7.837736 | 360499.095 | filter id in users | 1906854.458 |
+| local users/<id> ring | 10297185.434 | 102.971854 | 11704.754 | read users/<id> limit=1 | 70.755 |
+| local users/<id> ring | 10297185.434 | 102.971854 | 11704.754 | read users/<id> limit=20 | 77.601 |
+
+The local layout has a higher write/setup cost because it creates many ring
+metadata entries. The read path is the important result: once the application
+places data at `users/<id>`, the request does not need to scan the broad `users`
+ring and can read the target ring directly.
 
 ## Offline Real-Data Copy
 
