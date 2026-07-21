@@ -1784,7 +1784,7 @@ proc batchDeleteAtomic*(db: KoutenDb, ids: seq[KoutenId]) =
 # ---------------------------------------------------------------- 読み出し
 
 proc fetchClusterPayload(db: KoutenDb, id: KoutenId, selection: string,
-                         fwdDepth = 0): EncodedPayload =
+                         fwdDepth = 0, needCodec = true): EncodedPayload =
   ## 現在の所有ノードから取得。取りこぼしのフォールバック順:
   ##   primary → 1つ手前（尾流コピー, §6.1）→ もう一度 primary
   ## 最後の再試行は「手前を見ている間に粒子が前方へハンドオフされた」TOCTOU
@@ -1813,12 +1813,20 @@ proc fetchClusterPayload(db: KoutenDb, id: KoutenId, selection: string,
     var r: tuple[found: bool, node: int, value: string, codec: PayloadCodec, forwarded: bool,
                  newParent: uint64, newSeq: uint32, newTWrite: float]
     try:
-      r =
-        if selection.len == 0:
-          db.client.getReq(node, id.parent, id.seq, ri.period, ri.headAngle, id.tWrite)
-        else:
-          db.client.queryReq(node, id.parent, id.seq, ri.period, ri.headAngle,
-                             id.tWrite, selection)
+      if selection.len == 0 and not needCodec:
+        let raw = db.client.getValueReq(node, id.parent, id.seq, ri.period,
+                                        ri.headAngle, id.tWrite)
+        r = (found: raw.found, node: raw.node, value: raw.value,
+             codec: pcRaw, forwarded: raw.forwarded,
+             newParent: raw.newParent, newSeq: raw.newSeq,
+             newTWrite: raw.newTWrite)
+      else:
+        r =
+          if selection.len == 0:
+            db.client.getReq(node, id.parent, id.seq, ri.period, ri.headAngle, id.tWrite)
+          else:
+            db.client.queryReq(node, id.parent, id.seq, ri.period, ri.headAngle,
+                               id.tWrite, selection)
     except IOError, OSError:
       let pendingRetry = landingRead()
       if pendingRetry.deleted:
@@ -1835,7 +1843,7 @@ proc fetchClusterPayload(db: KoutenDb, id: KoutenId, selection: string,
         raise newException(KeyError, "FWD 先の環メタがない（parent=" & $r.newParent & "）")
       return db.fetchClusterPayload(KoutenId(parent: r.newParent, epoch: id.epoch,
                                             seq: r.newSeq, tWrite: r.newTWrite),
-                                    selection, fwdDepth + 1)
+                                    selection, fwdDepth + 1, needCodec)
     let pendingRetry = landingRead()
     if pendingRetry.deleted:
       raise newException(KeyError, "id は cluster tx landing intent で削除済み")
@@ -1850,7 +1858,7 @@ proc get*(db: KoutenDb, id: KoutenId): string =
   of mEmbedded:
     db.st.getParticle(id.parent, id.seq).payload
   of mCluster:
-    db.fetchClusterPayload(id, "").data
+    db.fetchClusterPayload(id, "", needCodec = false).data
 
 proc getEncoded*(db: KoutenDb, id: KoutenId): EncodedPayload =
   ## Read payload bytes together with the persisted format identifier.
@@ -2031,20 +2039,17 @@ proc listByRing*(db: KoutenDb, ring: string, limit = 100,
     return
   var emitted = 0
   var lastSeq = -1'i64
-  for itemKey in db.st.itemsByRing.getOrDefault(key, @[]):
-    if itemKey[1].int64 <= afterSeq:
-      continue
-    if not db.st.contains(itemKey[0], itemKey[1]):
+  for p in db.st.particlesByRing(key):
+    if p.seq.int64 <= afterSeq:
       continue
     if emitted >= limit:
       result.nextCursor = $lastSeq
       break
-    let p = db.st.getParticle(itemKey[0], itemKey[1])
     result.items.add KoutenRecord(
       id: KoutenId(parent: p.parent, epoch: db.tbl.epoch, seq: p.seq,
                   tWrite: p.tWrite),
       payload: p.payload, codec: p.codec)
-    lastSeq = itemKey[1].int64
+    lastSeq = p.seq.int64
     inc emitted
 
 proc defaultReadOptions*(): KoutenReadOptions =
@@ -2170,14 +2175,15 @@ proc recordMatchesReadFilter(item: KoutenRecord, filterNode: JsonNode): bool =
       return false
   true
 
-proc projectReadRecord(item: KoutenRecord, selection: string): KoutenRecord =
+proc projectReadRecord(item: KoutenRecord; prepared: PreparedSelection;
+                       hasSelection: bool): KoutenRecord =
   result = item
-  if selection.len == 0:
+  if not hasSelection:
     return
   if not item.codec.supportsJsonProjection:
     raise newException(ValueError,
       "payload codec " & item.codec.payloadCodecName & " does not support JSON projection")
-  result.payload = $applySelection(prepareSelection(selection), parseJson(item.payload))
+  result.payload = $applySelection(prepared, parseJson(item.payload))
   result.codec = pcJson
 
 proc compareReadRecords(a, b: KoutenRecord, options: KoutenReadOptions): int =
@@ -2215,6 +2221,10 @@ proc readRing*(db: KoutenDb, ring: string,
 
   if requested <= 0:
     return
+  let hasSelection = opts.selection.len > 0
+  let preparedSelection =
+    if hasSelection: prepareSelection(opts.selection)
+    else: PreparedSelection()
 
   var matched: seq[KoutenRecord] = @[]
   var nextCursor = opts.cursor
@@ -2232,7 +2242,7 @@ proc readRing*(db: KoutenDb, ring: string,
 
   matched.sort(proc(a, b: KoutenRecord): int = compareReadRecords(a, b, opts))
   for i in skip ..< min(skip + take, matched.len):
-    result.items.add projectReadRecord(matched[i], opts.selection)
+    result.items.add projectReadRecord(matched[i], preparedSelection, hasSelection)
   result.count = result.items.len
   result.nextCursor = nextCursor
 

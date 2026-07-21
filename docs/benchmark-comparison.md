@@ -15,7 +15,7 @@ These are local measurements, not universal performance claims.
 
 Environment summary: same machine as KoutenDB, AMD Ryzen 5 5600H, Linux 6.8,
 Nim 2.2.10, PostgreSQL 14.23, local TCP, single client, 100-byte payload where
-applicable. Measured on 2026-07-15.
+applicable. Measured on 2026-07-21.
 
 Reproduction helper: `N=10000 examples/postgres_bench.sh`.
 The helper creates a fresh temporary KoutenDB data directory and a fresh
@@ -25,13 +25,13 @@ Docker reproduction helper: `N=10000 examples/postgres_docker_bench.sh`.
 
 | Group | Operation | us/op | Notes |
 |---|---|---:|---|
-| KoutenDB | single-key read | 46.8 | Three `koutend` nodes, persistence enabled |
-| KoutenDB | single-row write | 48.8 | Three `koutend` nodes, persistence enabled |
-| KoutenDB | query projection | 53.3 | Server-side JSON projection |
+| KoutenDB | single-key read | 53.5 | Three `koutend` nodes, persistence enabled |
+| KoutenDB | single-row write | 61.1 | Three `koutend` nodes, persistence enabled |
+| KoutenDB | query projection | 61.1 | Server-side JSON projection |
 | KoutenDB | strong-durability write | not measured | `durStrong` / `--durability=strong` was not part of this comparison |
-| PostgreSQL 14.23 | primary-key `SELECT` | 68 | `pgbench -M prepared`, 14,659 tps |
-| PostgreSQL 14.23 | single-row write, `synchronous_commit=off` | 80 | `pgbench -M prepared`, 12,433 tps |
-| PostgreSQL 14.23 | single-row write, `synchronous_commit=on` | 1935 | `pgbench -M prepared`, 517 tps |
+| PostgreSQL 14.23 | primary-key `SELECT` | 86 | `pgbench -M prepared`, 11,570 tps |
+| PostgreSQL 14.23 | single-row write, `synchronous_commit=off` | 104 | `pgbench -M prepared`, 9,621 tps |
+| PostgreSQL 14.23 | single-row write, `synchronous_commit=on` | 1941 | `pgbench -M prepared`, 515 tps |
 
 ## PostgreSQL Docker Reference
 
@@ -55,17 +55,52 @@ exit.
 | PostgreSQL 14 Docker | single-row write, `synchronous_commit=off` | 149 | `pgbench -M prepared`, 6,720 tps |
 | PostgreSQL 14 Docker | single-row write, `synchronous_commit=on` | 1162 | `pgbench -M prepared`, 860 tps |
 
+## User Bundle PostgreSQL Reference
+
+Environment summary: same machine as KoutenDB, AMD Ryzen 5 5600H, Linux 6.8,
+Nim 2.2.10, PostgreSQL 14.23, local temporary PostgreSQL cluster,
+single client, prepared statements. Measured on 2026-07-21.
+
+Reproduction helper:
+`N=100000 READS=500 examples/user_bundle_postgres_bench.sh`.
+
+This benchmark is not a single primary-key lookup. It models a user-detail
+bundle where each user has profile, addresses, career entries, preferences, and
+orders. KoutenDB stores the records under coordinate-local rings such as
+`users/<id>/profile` and reads the bundle with a narrowed stellar read.
+PostgreSQL stores the same logical data in normalized indexed tables.
+
+| Users | Logical records | Group | Query shape | read latency us |
+|---:|---:|---|---|---:|
+| 1,000 | 20,000 | KoutenDB | `users/<id>/*` stellar depth read | 213.248 |
+| 1,000 | 20,000 | PostgreSQL 14.23 | five indexed `SELECT` statements | 424 |
+| 1,000 | 20,000 | PostgreSQL 14.23 | one JSON aggregate query | 246 |
+| 10,000 | 200,000 | KoutenDB | `users/<id>/*` stellar depth read | 202.668 |
+| 10,000 | 200,000 | PostgreSQL 14.23 | five indexed `SELECT` statements | 442 |
+| 10,000 | 200,000 | PostgreSQL 14.23 | one JSON aggregate query | 257 |
+| 100,000 | 2,000,000 | KoutenDB | `users/<id>/*` stellar depth read | 205.799 |
+| 100,000 | 2,000,000 | PostgreSQL 14.23 | five indexed `SELECT` statements | 407 |
+| 100,000 | 2,000,000 | PostgreSQL 14.23 | one JSON aggregate query | 240 |
+
+The KoutenDB read path stayed roughly flat here because the query starts from
+the user coordinate and only visits the requested subrings. The helper also
+prints insertion and pack timings; the 100,000-user run inserted 2,000,000
+logical records at `33.442073 us/record`, which makes bulk load and many-ring
+metadata creation clear follow-up optimization targets.
+
 ## Redis Reference
 
 Environment summary: same machine as KoutenDB, AMD Ryzen 5 5600H, Linux 6.8,
-Nim 2.2.10, local Redis 6.0.16, one local `koutend`, persistence disabled,
+Nim 2.2.10, local Redis 6.0.16, one local `koutend`, buffered durability with
+a fresh temporary data directory,
 local TCP, single client, 100-byte payload, `n=1000`, Redis pipeline batch size
-256. Measured on 2026-07-15.
+256. Measured on 2026-07-21.
 
 Local reproduction helper: `N=1000 examples/redis_local_bench.sh`.
-The helper starts KoutenDB with a fresh temporary data directory and removes it on
-exit. Redis local uses the existing Redis server, but the benchmark writes under
-a unique `koutendb:bench:<timestamp>:` prefix and deletes those keys before exit.
+The helper starts KoutenDB with a fresh temporary data directory and removes it
+on exit. Redis local uses the configured Redis endpoint; the benchmark writes
+under a unique `koutendb:bench:<timestamp>:` prefix and deletes those keys
+before exit.
 
 Docker reproduction helper: `N=1000 examples/redis_docker_bench.sh`.
 The Docker helper starts fresh Redis and KoutenDB containers on a fresh Docker
@@ -73,11 +108,11 @@ network and removes them on exit.
 
 | Group | Operation | us/op | Notes |
 |---|---|---:|---|
-| KoutenDB | embedded get | 0.03 | In-process hot path; no TCP |
-| KoutenDB | TCP GET | 45.26 | One request / one response |
-| KoutenDB | TCP BGET | 1.48 | Batch read; comparable axis to Redis pipeline |
-| Redis 6.0.16 | TCP GET | 42.85 | Non-pipelined local Redis |
-| Redis 6.0.16 | pipeline GET | 3.53 | Batch size 256 |
+| KoutenDB | embedded get | 0.09 | In-process hot path; no TCP |
+| KoutenDB | TCP GET | 52.88 | One request / one response |
+| KoutenDB | TCP BGET | 1.81 | Batch read; comparable axis to Redis pipeline |
+| Redis 6.0.16 | TCP GET | 44.93 | Non-pipelined local Redis |
+| Redis 6.0.16 | pipeline GET | 3.55 | Batch size 256 |
 
 Docker-Docker measurements under the same benchmark shape:
 

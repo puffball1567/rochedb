@@ -341,10 +341,19 @@ proc socketFor(c: ClusterClient, node: int): Socket =
     result.sendFrame("HELLO " & c.galaxy)
     let r = result.readHeader()
     expect(r, "OK", "HELLO")
-  result.sendFrame("CODECMETA ON")
-  let codecReply = result.readHeader()
-  c.codecMetadata[node] = codecReply.len > 0 and codecReply[0] == "OK"
   c.socks[node] = result
+
+proc ensureCodecMetadata*(c: ClusterClient, node: int) =
+  ## Enable codec metadata only for calls that need it. Keeping ordinary
+  ## get()/batchGet() on the legacy payload-only response avoids an extra
+  ## per-response suffix check on the hottest wire path.
+  if c.codecMetadata.getOrDefault(node, false):
+    return
+  let sock = c.socketFor(node)
+  sock.sendFrame("CODECMETA ON")
+  let r = sock.readHeader()
+  expect(r, "OK", "CODECMETA")
+  c.codecMetadata[node] = true
 
 proc rpc(c: ClusterClient, node: int, header: string,
          payload: string = "", timeoutMs = 10_000): seq[string] =
@@ -358,13 +367,16 @@ proc rpc(c: ClusterClient, node: int, header: string,
       sock.disableSecure()
       sock.close()
       c.socks.del node
+      c.codecMetadata.del node
       if attempt == 1: raise
   @[]
 
 proc putReq*(c: ClusterClient, node: int, ringKey: uint64,
              period, head: float, payload: string,
              vec: seq[float32] = @[], codec = pcRaw): tuple[seq: uint32, tWrite: float] =
-  let body = payload & vec.vecBytes
+  let body =
+    if vec.len == 0: payload
+    else: payload & vec.vecBytes
   let r = c.rpc(node, "PUT " & $ringKey & " " & $period & " " & $head & " " &
                 $payload.len & " " & $vec.len & " " & codec.payloadCodecName, body)
   expect(r, "OK", "PUT")
@@ -373,7 +385,9 @@ proc putReq*(c: ClusterClient, node: int, ringKey: uint64,
 proc putRingReq*(c: ClusterClient, node: int, ring: string, payload: string,
                  vec: seq[float32] = @[], codec = pcRaw): WireId =
   ## Named put for drivers. ringKey/period/head are server-side conventions.
-  let body = ring & payload & vec.vecBytes
+  let body =
+    if vec.len == 0: ring & payload
+    else: ring & payload & vec.vecBytes
   let r = c.rpc(node, "PUTR " & $ring.len & " " & $payload.len & " " & $vec.len &
                 " " & codec.payloadCodecName,
                 body)
@@ -386,6 +400,7 @@ proc putRingReq*(c: ClusterClient, node: int, ring: string, payload: string,
          head: parseFloat(r[6]))
 
 proc getIdReq*(c: ClusterClient, node: int, id: WireId): WireGetResult =
+  c.ensureCodecMetadata(node)
   let r = c.rpc(node, "GETID " & $id.parent & " " & $id.epoch & " " &
                 $id.seq & " " & $id.tWrite & " " & $id.period & " " &
                 $id.head)
@@ -431,6 +446,8 @@ proc txGetIdReq*(c: ClusterClient, node: int, id: WireId,
                  selection: string = ""): WireGetResult =
   ## Read committed cluster transaction intent from the landing zone.
   ## Used as read-your-writes fallback before asynchronous owner apply.
+  if selection.len == 0:
+    c.ensureCodecMetadata(node)
   let op = if selection.len == 0: "TXGETID" else: "TXQRYID"
   let header = op & " " & $id.parent & " " & $id.epoch & " " &
                $id.seq & " " & $id.tWrite & " " & $id.period & " " &
@@ -454,6 +471,7 @@ proc getReq*(c: ClusterClient, node: int, parent: uint64, seq: uint32,
                                                   codec: PayloadCodec,
                                                   forwarded: bool, newParent: uint64,
                                                   newSeq: uint32, newTWrite: float] =
+  c.ensureCodecMetadata(node)
   let r = c.rpc(node, "GET " & $parent & " " & $seq & " " & $period & " " &
                 $head & " " & $tWrite)
   if r[0] == "MISS": return (false, node, "", pcRaw, false, 0'u64, 0'u32, 0.0)
@@ -463,6 +481,26 @@ proc getReq*(c: ClusterClient, node: int, parent: uint64, seq: uint32,
   expect(r, "VAL", "GET")
   (true, parseInt(r[1]), c.socks[node].readExact(parseInt(r[2])),
    (if r.len >= 4: parsePayloadCodec(r[3]) else: pcRaw),
+   false, 0'u64, 0'u32, 0.0)
+
+proc getValueReq*(c: ClusterClient, node: int, parent: uint64, seq: uint32,
+                  period, head, tWrite: float): tuple[found: bool, node: int,
+                                                       value: string,
+                                                       forwarded: bool,
+                                                       newParent: uint64,
+                                                       newSeq: uint32,
+                                                       newTWrite: float] =
+  ## Hot path for ordinary get(). It intentionally ignores optional codec
+  ## metadata because callers only need the payload bytes.
+  let r = c.rpc(node, "GET " & $parent & " " & $seq & " " & $period & " " &
+                $head & " " & $tWrite)
+  if r[0] == "MISS":
+    return (false, node, "", false, 0'u64, 0'u32, 0.0)
+  if r[0] == "FWD":
+    return (false, node, "", true, parseBiggestUInt(r[1]).uint64,
+            parseUInt(r[2]).uint32, parseFloat(r[3]))
+  expect(r, "VAL", "GET")
+  (true, parseInt(r[1]), c.socks[node].readExact(parseInt(r[2])),
    false, 0'u64, 0'u32, 0.0)
 
 proc batchGetReq*(c: ClusterClient, node: int,
@@ -488,6 +526,7 @@ proc batchGetReq*(c: ClusterClient, node: int,
 
 proc listRingReq*(c: ClusterClient, node: int, ringKey: uint64, limit: int,
                   cursor: string = ""): WireListResult =
+  c.ensureCodecMetadata(node)
   let r = c.rpc(node, "LISTR " & $ringKey & " " & $limit & " " & $cursor.len,
                 cursor)
   expect(r, "LVAL", "LISTR")
@@ -533,7 +572,9 @@ proc transferReq*(c: ClusterClient, node: int, parent: uint64, seq: uint32,
                   timeoutMs = 10_000) =
   ## Inter-node handoff. koutend is single-threaded, so callers should pass a
   ## short timeoutMs to avoid long blocking during mutual transfer.
-  let body = payload & vec.vecBytes
+  let body =
+    if vec.len == 0: payload
+    else: payload & vec.vecBytes
   let r = c.rpc(node, "TRF " & $parent & " " & $seq & " " & $period & " " &
                 $head & " " & $tWrite & " " & $payload.len & " " & $vec.len &
                 " " & codec.payloadCodecName, body,
@@ -559,7 +600,8 @@ proc txCommitReq*(c: ClusterClient, node: int, txid: uint64, ops: seq[TxWireOp])
              $op.head & " " & $op.tWrite & " " & $op.payload.len & " " &
              $op.vec.len & " " & op.codec.payloadCodecName & "\n")
     body.add(op.payload)
-    body.add(op.vec.vecBytes)
+    if op.vec.len > 0:
+      body.add(op.vec.vecBytes)
     body.add("\n")
   let r = c.rpc(node, "TXCOMMIT " & $txid & " " & $ops.len, body)
   expect(r, "OK", "TXCOMMIT")
@@ -596,7 +638,9 @@ proc universeStatusReq*(c: ClusterClient, node: int): UniverseWireStatus =
 
 proc applyTxReq*(c: ClusterClient, node: int, txid: uint64, op: TxWireOp,
                  timeoutMs = 10_000) =
-  let body = op.payload & op.vec.vecBytes
+  let body =
+    if op.vec.len == 0: op.payload
+    else: op.payload & op.vec.vecBytes
   let kind = if op.delete: "D" else: "P"
   let r = c.rpc(node, "APPLYTX " & $txid & " " & kind & " " & $op.parent & " " & $op.seq & " " &
                 $op.period & " " & $op.head & " " & $op.tWrite & " " &
@@ -606,6 +650,7 @@ proc applyTxReq*(c: ClusterClient, node: int, txid: uint64, op: TxWireOp,
 
 proc retrieveReq*(c: ClusterClient, node: int, hasRing: bool, ringKey: uint64,
                   queryVec: seq[float32], budget: int): RetrieveWireResult =
+  c.ensureCodecMetadata(node)
   let body = queryVec.vecBytes
   let r = c.rpc(node, "RETRIEVE " & (if hasRing: "1" else: "0") & " " &
                 $ringKey & " " & $budget & " " & $queryVec.len, body)

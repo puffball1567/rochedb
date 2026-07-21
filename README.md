@@ -344,21 +344,22 @@ Reference latency results are tracked in
 in [docs/benchmark-comparison.md](docs/benchmark-comparison.md). The short
 version is:
 
-- KoutenDB 3-node TCP with persistence enabled measured `46.8 us` per
-  single-key read and `48.8 us` per single-key write in the PostgreSQL
+- KoutenDB 3-node TCP with persistence enabled measured `53.5 us` per
+  single-key read and `61.1 us` per single-key write in the PostgreSQL
   comparison helper run. KoutenDB strong durability was not part of that
   PostgreSQL reference comparison.
-- PostgreSQL 14.23 on the same machine measured `68 us` for primary-key read
-  and `80 us` for `synchronous_commit=off` single-row write over local TCP.
+- PostgreSQL 14.23 on the same machine measured `86 us` for primary-key read
+  and `104 us` for `synchronous_commit=off` single-row write over local TCP.
 - The PostgreSQL comparison also has a Docker-Docker reproduction helper; in
   the included run KoutenDB measured `61.3 us` read / `103.6 us` write, while
   PostgreSQL measured `103 us` primary-key read / `149 us`
   `synchronous_commit=off` write.
-- Local Redis 6.0.16 measured `42.85 us/op` for single GET and `3.53 us/op`
-  for pipeline GET. KoutenDB TCP GET measured `45.26 us/op`; KoutenDB TCP BGET
-  measured `1.48 us/op` in the same local single-client benchmark shape.
-  This Redis comparison uses KoutenDB persistence disabled and measures simple
-  GET/BGET latency, not the working-set reduction benchmarks.
+- Local Redis 6.0.16 measured `44.93 us/op` for single GET and `3.55 us/op`
+  for pipeline GET. KoutenDB TCP GET measured `52.88 us/op`; KoutenDB TCP BGET
+  measured `1.81 us/op` in the same local single-client benchmark shape.
+  This Redis comparison uses KoutenDB buffered durability with a fresh temporary
+  data directory and measures simple GET/BGET latency, not the working-set
+  reduction benchmarks.
 - In the Docker-Docker Redis comparison, Redis 7 measured `48.74 us/op` for
   single GET and `2.06 us/op` for pipeline GET. KoutenDB TCP GET measured
   `55.78 us/op`; KoutenDB TCP BGET measured `1.71 us/op`.

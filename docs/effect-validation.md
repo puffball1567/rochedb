@@ -159,6 +159,44 @@ metadata entries. The read path is the important result: once the application
 places data at `users/<id>`, the request does not need to scan the broad `users`
 ring and can read the target ring directly.
 
+## User Bundle Read Compared With PostgreSQL
+
+`examples/user_bundle_postgres_bench.sh` measures a user-detail page shape
+rather than a single primary-key lookup. Each user has 20 logical records:
+profile, addresses, career entries, preferences, and orders. KoutenDB stores
+them under coordinate-local rings such as `users/<id>/profile` and
+`users/<id>/orders`, then reads the bundle with a narrowed stellar read:
+
+```sh
+N=100000 READS=500 examples/user_bundle_postgres_bench.sh
+```
+
+PostgreSQL stores the same logical data in normalized indexed tables and is
+measured in two shapes:
+
+- five prepared indexed `SELECT` statements in one transaction;
+- one prepared JSON aggregate query over the same indexed tables.
+
+Local disk-backed results:
+
+| users | logical records | KoutenDB bundle read us | PostgreSQL 5 SELECT us | PostgreSQL JSON aggregate us |
+| ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 20,000 | 213.248 | 424 | 246 |
+| 10,000 | 200,000 | 202.668 | 442 | 257 |
+| 100,000 | 2,000,000 | 205.799 | 407 | 240 |
+
+The KoutenDB read path stayed roughly flat in this benchmark because the query
+starts from `users/<id>` and only visits the requested subrings:
+`profile`, `addresses`, `career`, `preferences`, and `orders`. This is the
+intended locality model: related records can be retrieved together without
+turning every request into a broad collection scan or a multi-table join.
+
+The write/setup side is still a performance target. At 100,000 users,
+KoutenDB inserted 2,000,000 logical records at `33.442073 us/record` in this
+helper. That is good enough for the read-locality validation, but bulk load and
+many-ring metadata creation should be optimized before treating this shape as a
+final ingestion design.
+
 ## Offline Real-Data Copy
 
 Generated workloads are useful for repeatability, but the next pre-production

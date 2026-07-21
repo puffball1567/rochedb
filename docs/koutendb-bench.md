@@ -122,9 +122,9 @@ measured layer: core `27.5 ns`, public API `54.7 ns`, and C ABI `77.7 ns`.
 
 | Operation | us/op | ops/s |
 |---|---:|---:|
-| put, location calculation + 1 RTT + append log | 48.8 | 20,490 |
-| get, location calculation + 1 RTT | 46.8 | 21,368 |
-| query, server-side JSON projection | 53.3 | 18,772 |
+| put, location calculation + 1 RTT + append log | 61.1 | 16,362 |
+| get, location calculation + 1 RTT | 53.5 | 18,707 |
+| query, server-side JSON projection | 61.1 | 16,359 |
 
 ## PostgreSQL 14 Reference
 
@@ -135,29 +135,29 @@ thread, local TCP endpoint, `pgbench -M prepared`.
 
 | Operation | us/op | Notes |
 |---|---:|---|
-| single-key read | 46.8 | Three `koutend` nodes, persistence enabled |
-| single-row write | 48.8 | Three `koutend` nodes, persistence enabled |
-| query projection | 53.3 | Server-side JSON projection |
+| single-key read | 53.5 | Three `koutend` nodes, persistence enabled |
+| single-row write | 61.1 | Three `koutend` nodes, persistence enabled |
+| query projection | 61.1 | Server-side JSON projection |
 | strong-durability write | not measured | `durStrong` / `--durability=strong` was not part of this comparison |
 
 ### PostgreSQL Measurements
 
 | Operation | us/op | Notes |
 |---|---:|---|
-| primary-key `SELECT` | 68 | 14,659 tps |
-| single-row write, `synchronous_commit=off` | 80 | 12,433 tps |
-| single-row write, `synchronous_commit=on` | 1935 | 517 tps |
+| primary-key `SELECT` | 86 | 11,570 tps |
+| single-row write, `synchronous_commit=off` | 104 | 9,621 tps |
+| single-row write, `synchronous_commit=on` | 1941 | 515 tps |
 
 Interpretation: this compares a thin KV/document path with a SQL RDBMS path that
 includes parsing, planning, MVCC, and index maintenance. The defensible claim is
 that KoutenDB's network KV path is in the same latency class as PostgreSQL
 primary-key access and is ahead under these local conditions: PostgreSQL SELECT
-was about 1.45x slower than KoutenDB read, and PostgreSQL
-`synchronous_commit=off` write was about 1.64x slower than KoutenDB write in this
+was about 1.6x slower than KoutenDB read, and PostgreSQL
+`synchronous_commit=off` write was about 1.7x slower than KoutenDB write in this
 run. KoutenDB's durability mode in this comparison was closer to
 `synchronous_commit=off`.
 KoutenDB now has `durStrong` / `--durability=strong`, but that path was not part
-of the 2026-07-15 PostgreSQL comparison.
+of the 2026-07-21 PostgreSQL comparison.
 
 ## Docker-Docker PostgreSQL Reference
 
@@ -220,21 +220,21 @@ revisit fixes this because movement is forward-only.
 
 # Redis Approximation and BGET
 
-- Date: 2026-07-15
+- Date: 2026-07-21
 - Environment: same machine, AMD Ryzen 5 5600H / Linux 6.8 / Nim 2.2.10
   `-d:release`
-- Redis: local `/usr/bin/redis-server`, Redis 6.0.16, endpoint
-  `127.0.0.1:6379`
+- Redis: local `/usr/bin/redis-server`, Redis 6.0.16, temporary local endpoint
 - KoutenDB TCP: local one-node `koutend`, endpoint `127.0.0.1:17301`,
-  persistence disabled, persistent TCP connection
+  buffered durability with a fresh temporary data directory, persistent TCP
+  connection
 - Conditions: 100-byte payload, `n=1000`, single client, Redis pipeline batch
   size 256
-- Reproduction: start one local `koutend`, then run
-  `kouten redis-bench --n=1000 --payload-bytes=100 --redis=127.0.0.1:6379
+- Reproduction: start one local Redis endpoint and one local `koutend`, then run
+  `kouten redis-bench --n=1000 --payload-bytes=100 --redis=<redis-host:port>
   --peers=127.0.0.1:17301`
 - Local reproduction helper: `N=1000 examples/redis_local_bench.sh` starts one
-  local `koutend` with a fresh temporary data directory and compares it with an
-  existing local Redis endpoint. Redis keys use a unique
+  local `koutend` with a fresh temporary data directory and compares it with the
+  configured local Redis endpoint. Redis keys use a unique
   `koutendb:bench:<timestamp>:` prefix and are deleted before exit.
 - Docker reproduction helper: `N=1000 examples/redis_docker_bench.sh` builds a
   KoutenDB Docker image, starts Redis and KoutenDB on the same Docker network, and
@@ -245,16 +245,16 @@ revisit fixes this because movement is forward-only.
 
 | Operation | us/op | Interpretation |
 |---|---:|---|
-| KoutenDB embedded get | 0.03 | In-process hot path; no TCP |
-| KoutenDB TCP get | 45.26 | One request / one response |
-| KoutenDB TCP BGET | 1.48 | Batch read; comparable axis to Redis pipeline |
+| KoutenDB embedded get | 0.09 | In-process hot path; no TCP |
+| KoutenDB TCP get | 52.88 | One request / one response |
+| KoutenDB TCP BGET | 1.81 | Batch read; comparable axis to Redis pipeline |
 
 Redis measurements under the same local benchmark shape:
 
 | Operation | us/op | Interpretation |
 |---|---:|---|
-| Redis TCP GET | 42.85 | Local Redis, non-pipelined |
-| Redis pipeline GET | 3.53 | Batch size 256 |
+| Redis TCP GET | 44.93 | Local Redis, non-pipelined |
+| Redis pipeline GET | 3.55 | Batch size 256 |
 
 Docker-Docker measurements under the same benchmark shape:
 
@@ -268,7 +268,7 @@ Docker-Docker measurements under the same benchmark shape:
 
 Interpretation: KoutenDB TCP get is in the same latency class as non-pipelined
 Redis GET, but local Redis was slightly faster for single GET. In this smoke
-test, KoutenDB TCP BGET was about 2.4x faster than Redis pipeline GET. In the
+test, KoutenDB TCP BGET was about 2.0x faster than Redis pipeline GET. In the
 Docker-Docker run, KoutenDB TCP BGET was about 1.2x faster than Redis pipeline
 GET. This is
 not a claim that KoutenDB is always faster than Redis.
