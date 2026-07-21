@@ -1,6 +1,6 @@
 ## 公開 API（src/koutendb.nim）のテスト
 
-import std/[json, os, strutils, tempfiles, times, unittest]
+import std/[json, os, strutils, tempfiles, tables, times, unittest]
 import ../src/koutendb
 
 suite "public api":
@@ -378,6 +378,41 @@ suite "public api":
     check profile.toRaw().parent != order.toRaw().parent
     check nearRing("users/123", "orders") == "users/123/orders"
     check billing.toRaw().parent != distant.toRaw().parent
+
+    discard db.putNear("users/123", %*{"kind": "order", "orderNo": "A-002"},
+                       ring = "orders")
+    discard db.putNear("users/123", %*{"kind": "order", "orderNo": "A-003"},
+                       ring = "orders")
+    discard db.putNear("users/123", %*{"kind": "billing", "plan": "team"},
+                       ring = "billing")
+    var perSubringLimits = initTable[string, int]()
+    perSubringLimits["orders"] = 2
+    perSubringLimits["billing"] = 1
+    var perSubringSort = initTable[string, string]()
+    perSubringSort["orders"] = "id"
+    var perSubringSortDirections = initTable[string, KoutenReadSortDirection]()
+    perSubringSortDirections["orders"] = rsAsc
+    let tunedSubrings = db.readStellar("users/123", KoutenStellarOptions(
+      filter: newJObject(),
+      limitPerRing: 10,
+      subringLimits: perSubringLimits,
+      subringSortFields: perSubringSort,
+      subringSortDirections: perSubringSortDirections,
+      maxDepth: 1,
+      subrings: @["orders", "billing"],
+      includeRoot: false,
+      sortField: "time",
+      sortDirection: rsDesc))
+    var tunedOrders = 0
+    var tunedBilling = 0
+    for ringPage in tunedSubrings.rings:
+      if ringPage.ring == "users/123/orders":
+        tunedOrders = ringPage.items.len
+        check ringPage.items[0].id == order
+      if ringPage.ring == "users/123/billing":
+        tunedBilling = ringPage.items.len
+    check tunedOrders == 2
+    check tunedBilling == 1
     db.close()
 
   test "stellar attach/detach links existing coordinates without copying data":

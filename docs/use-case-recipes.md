@@ -31,6 +31,7 @@ kouten put --near=users/123 --ring=billing --payload='{"kind":"billing","plan":"
 
 kouten get --ring=users --limit=20 --selection='{ id name status }'
 kouten get --ring=users/123 --subring=profile,orders,billing --selection='{ kind name tier orderNo total plan }'
+kouten get --ring=users/123 --subring=profile,orders,billing --subring-limit=orders:10,billing:1 --subring-rsort=orders:time
 ```
 
 The detail read starts from `users/123`. It does not need to scan every order or
@@ -45,6 +46,10 @@ let page = db.readRing("users", listOpts)
 
 var detailOpts = defaultStellarOptions()
 detailOpts.subrings = @["profile", "orders", "billing"]
+detailOpts.subringLimits["orders"] = 10
+detailOpts.subringLimits["billing"] = 1
+detailOpts.subringSortFields["orders"] = "time"
+detailOpts.subringSortDirections["orders"] = rsDesc
 let detail = db.readStellar("users/123", detailOpts)
 ```
 

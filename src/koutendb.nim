@@ -302,6 +302,9 @@ type
     filter*: JsonNode
     selection*: string
     limitPerRing*: int
+    subringLimits*: Table[string, int]
+    subringSortFields*: Table[string, string]
+    subringSortDirections*: Table[string, KoutenReadSortDirection]
     maxDepth*: int
     branchBudget*: int
     subrings*: seq[string]
@@ -2069,6 +2072,9 @@ proc defaultStellarOptions*(): KoutenStellarOptions =
     filter: newJObject(),
     selection: "",
     limitPerRing: 20,
+    subringLimits: initTable[string, int](),
+    subringSortFields: initTable[string, string](),
+    subringSortDirections: initTable[string, KoutenReadSortDirection](),
     maxDepth: 1,
     branchBudget: 0,
     subrings: @[],
@@ -2426,6 +2432,36 @@ proc normalizedStellarOptions(options: KoutenStellarOptions): KoutenStellarOptio
     result.filter = newJObject()
   if result.limitPerRing <= 0:
     result.limitPerRing = 20
+  var normalizedLimits = initTable[string, int]()
+  for name, value in result.subringLimits:
+    let clean = normalizedCoordinate(name)
+    if clean.len == 0:
+      continue
+    if value <= 0:
+      raise newException(ValueError, "subring limit must be positive")
+    normalizedLimits[clean] = value
+  result.subringLimits = normalizedLimits
+  var normalizedSortFields = initTable[string, string]()
+  for name, value in result.subringSortFields:
+    let clean = normalizedCoordinate(name)
+    if clean.len == 0:
+      continue
+    if value.len == 0:
+      continue
+    if value == "write":
+      normalizedSortFields[clean] = "time"
+    elif value in ["id", "time"]:
+      normalizedSortFields[clean] = value
+    else:
+      raise newException(ValueError, "subring sort field must be id, time, or write")
+  result.subringSortFields = normalizedSortFields
+  var normalizedSortDirections = initTable[string, KoutenReadSortDirection]()
+  for name, value in result.subringSortDirections:
+    let clean = normalizedCoordinate(name)
+    if clean.len == 0:
+      continue
+    normalizedSortDirections[clean] = value
+  result.subringSortDirections = normalizedSortDirections
   if result.maxDepth < 0:
     result.maxDepth = 0
   if result.branchBudget < 0:
@@ -2455,6 +2491,54 @@ proc subringMatches(root, ringName: string, subrings: seq[string]): bool =
     if ringClean.endsWith("/" & sub):
       return true
   false
+
+proc subringNameMatches(root, ringName, subring: string): bool =
+  let rootClean = normalizedCoordinate(root)
+  let ringClean = normalizedCoordinate(ringName)
+  let sub = normalizedCoordinate(subring)
+  if sub.len == 0:
+    return false
+  if ringClean == rootClean & "/" & sub:
+    return true
+  if ringClean == sub or ringClean.startsWith(sub & "/"):
+    return true
+  if ringClean.endsWith("/" & sub):
+    return true
+  false
+
+proc stellarLimitFor(root, ringName: string,
+                     opts: KoutenStellarOptions): int =
+  result = opts.limitPerRing
+  if opts.subringLimits.len == 0:
+    return
+  let rootClean = normalizedCoordinate(root)
+  if normalizedCoordinate(ringName) == rootClean:
+    return
+  var bestLen = -1
+  for subring, limit in opts.subringLimits:
+    let clean = normalizedCoordinate(subring)
+    if clean.len > bestLen and subringNameMatches(root, ringName, clean):
+      result = limit
+      bestLen = clean.len
+
+proc stellarSortFor(root, ringName: string,
+                    opts: KoutenStellarOptions):
+                    tuple[field: string, direction: KoutenReadSortDirection] =
+  result = (opts.sortField, opts.sortDirection)
+  if normalizedCoordinate(ringName) == normalizedCoordinate(root):
+    return
+  var bestFieldLen = -1
+  for subring, field in opts.subringSortFields:
+    let clean = normalizedCoordinate(subring)
+    if clean.len > bestFieldLen and subringNameMatches(root, ringName, clean):
+      result.field = field
+      bestFieldLen = clean.len
+  var bestDirectionLen = -1
+  for subring, direction in opts.subringSortDirections:
+    let clean = normalizedCoordinate(subring)
+    if clean.len > bestDirectionLen and subringNameMatches(root, ringName, clean):
+      result.direction = direction
+      bestDirectionLen = clean.len
 
 proc readStellar*(db: KoutenDb, root: string,
                   options: KoutenStellarOptions = defaultStellarOptions()): KoutenStellarPage =
@@ -2495,12 +2579,14 @@ proc readStellar*(db: KoutenDb, root: string,
       keys.addUniqueRingKey db.ringNames[ringName]
   for key in keys:
     let ringName = db.ringNameOf(key)
+    let ringLimit = stellarLimitFor(root, ringName, opts)
+    let ringSort = stellarSortFor(root, ringName, opts)
     let page = db.readRing(ringName, KoutenReadOptions(
       filter: opts.filter,
       selection: opts.selection,
-      limit: opts.limitPerRing,
-      sortField: opts.sortField,
-      sortDirection: opts.sortDirection))
+      limit: ringLimit,
+      sortField: ringSort.field,
+      sortDirection: ringSort.direction))
     if page.items.len == 0:
       continue
     result.rings.add KoutenStellarRingPage(ring: ringName,
