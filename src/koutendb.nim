@@ -1099,7 +1099,8 @@ proc pathVector(node: JsonNode, path: string): seq[float32] =
 proc importJsonl*(db: KoutenDb, path: string, defaultRing = "imported",
                   ringField = "", ringPrefix = "", payloadField = "",
                   vecField = "", maxRecords = 0,
-                  batchSize = 1000): ImportStats =
+                  batchSize = 1000,
+                  packSegments = false): ImportStats =
   ## JSON Lines を読み込み、ringField の値で ring に割り振りながら保存する。
   ## MongoDB export のような 1 行 1 JSON ドキュメントの移行入口。
   if db.mode != mEmbedded:
@@ -1128,6 +1129,8 @@ proc importJsonl*(db: KoutenDb, path: string, defaultRing = "imported",
       tx = db.st.beginTxn()
       return
     tx.commit()
+    if packSegments and db.st.diskBacked:
+      tx.packCommittedSegments()
     if not db.st.diskBacked:
       for p in staged:
         db.vectorBackend.upsert p
@@ -1236,12 +1239,12 @@ proc configureVectorBackend*(db: KoutenDb, kind: VectorBackendKind) =
       for _, p in db.st.items:
         db.vectorBackend.upsert p
 
-proc packDiskBackedSegments*(db: KoutenDb) =
+proc packDiskBackedSegments*(db: KoutenDb): SegmentPackStats {.discardable.} =
   ## Build ring-local physical segment files for disk-backed embedded reads.
   ## WAL remains the source of truth; segments are rebuildable read layout.
   doAssert db.mode == mEmbedded, "packDiskBackedSegments は組み込みモード専用"
   if db.st.diskBacked:
-    db.st.rebuildRingSegments()
+    result = db.st.rebuildRingSegments()
 
 proc configurePlannerBackend*(db: KoutenDb, kind: PlannerBackendKind) =
   ## retrieval planner backend を選ぶ。

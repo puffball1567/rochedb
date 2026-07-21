@@ -51,6 +51,7 @@ proc main() =
   var routedBudget = 3
   var batchSize = 1000
   var diskBacked = false
+  var packDuringImport = false
   var metrics = false
 
   for kind, key, val in getopt():
@@ -66,6 +67,7 @@ proc main() =
       of "routed-budget": routedBudget = parseInt(val)
       of "batch-size": batchSize = parseInt(val)
       of "disk-backed": diskBacked = true
+      of "pack-during-import": packDuringImport = true
       of "metrics": metrics = true
       else: discard
     of cmdArgument, cmdShortOption, cmdEnd:
@@ -89,7 +91,8 @@ proc main() =
                              ringField = "ring",
                              payloadField = "body",
                              vecField = "embedding",
-                             batchSize = batchSize)
+                             batchSize = batchSize,
+                             packSegments = packDuringImport)
   let setUs = float((getMonoTime() - t).inNanoseconds) / 1e3
   let setUsPerRecord =
     if stats.imported > 0:
@@ -97,9 +100,15 @@ proc main() =
     else:
       0.0
   var packUs = 0.0
-  if diskBacked:
+  var packRecords = 0
+  var packRings = 0
+  var packBytes = 0'i64
+  if diskBacked and not packDuringImport:
     t = getMonoTime()
-    db.packDiskBackedSegments()
+    let packStats = db.packDiskBackedSegments()
+    packRecords = packStats.records
+    packRings = packStats.rings
+    packBytes = packStats.bytes
     packUs = float((getMonoTime() - t).inNanoseconds) / 1e3
 
   let queryVec =
@@ -137,6 +146,10 @@ proc main() =
     echo &"effectImportBatches {stats.batches}"
     echo &"effectImportBatchSize {stats.batchSize}"
     echo &"effectDiskBacked {int(diskBacked)}"
+    echo &"effectPackDuringImport {int(packDuringImport)}"
+    echo &"effectPackRecords {packRecords}"
+    echo &"effectPackRings {packRings}"
+    echo &"effectPackBytes {packBytes}"
     echo &"effectRings {stats.rings}"
     echo &"effectRing {ring}"
     echo &"effectSetLatencyUs {setUs:.3f}"
@@ -161,6 +174,7 @@ proc main() =
   echo &"corpus={corpus}"
   echo &"import read={stats.read} imported={stats.imported} skipped={stats.skipped} errors={stats.errors} rings={stats.rings}"
   echo &"set latency_us={setUs:.3f} set_us_per_record={setUsPerRecord:.6f}"
+  echo &"pack_during_import={packDuringImport}"
   if diskBacked:
     echo &"pack latency_us={packUs:.3f}"
   echo &"question={question}"

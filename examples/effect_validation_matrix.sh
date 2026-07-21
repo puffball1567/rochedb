@@ -11,6 +11,7 @@ BIN="$ROOT/bin/effect_validation_demo"
 SCALE="${KOUTEN_EFFECT_SCALE:-1000}"
 BATCH_SIZE="${KOUTEN_EFFECT_BATCH_SIZE:-10000}"
 DISK_BACKED="${KOUTEN_EFFECT_DISK_BACKED:-1}"
+PACK_DURING_IMPORT="${KOUTEN_EFFECT_PACK_DURING_IMPORT:-0}"
 
 if [[ "${KOUTEN_EFFECT_QUICK:-0}" == "1" ]]; then
   SCALE=1
@@ -108,13 +109,17 @@ run_case() {
     --routed-budget="$routed_budget" \
     --batch-size="$BATCH_SIZE" \
     $([[ "$DISK_BACKED" == "1" ]] && printf '%s' "--disk-backed") \
+    $([[ "$PACK_DURING_IMPORT" == "1" ]] && printf '%s' "--pack-during-import") \
     --metrics > "$out"
 
-  local docs global_scanned routed_scanned global_tokens routed_tokens scan_red token_red prompt_bytes global_us routed_us set_us set_us_record pack_us
+  local docs global_scanned routed_scanned global_tokens routed_tokens scan_red token_red prompt_bytes global_us routed_us set_us set_us_record pack_us pack_records pack_rings pack_bytes
   docs="$(wc -l < "$corpus")"
   set_us="$(metric effectSetLatencyUs "$out")"
   set_us_record="$(metric effectSetLatencyUsPerRecord "$out")"
   pack_us="$(metric effectPackLatencyUs "$out")"
+  pack_records="$(metric effectPackRecords "$out")"
+  pack_rings="$(metric effectPackRings "$out")"
+  pack_bytes="$(metric effectPackBytes "$out")"
   global_scanned="$(metric effectGlobalScanned "$out")"
   routed_scanned="$(metric effectRoutedScanned "$out")"
   global_tokens="$(metric effectGlobalTokens "$out")"
@@ -125,9 +130,9 @@ run_case() {
   token_red="$(metric effectTokenReductionPct "$out")"
   prompt_bytes="$(metric effectPromptBytes "$out")"
 
-  printf '| %s | %s | %s | %s | %s | %s | %s | %s -> %s | %s -> %s | %s -> %s | %s%% | %s%% | %s |\n' \
+  printf '| %s | %s | %s | %s | %s | %s | %s | %s / %s / %s | %s -> %s | %s -> %s | %s -> %s | %s%% | %s%% | %s |\n' \
     "$name" "$docs" "$global_budget" "$routed_budget" \
-    "$set_us" "$set_us_record" "$pack_us" \
+    "$set_us" "$set_us_record" "$pack_us" "$pack_records" "$pack_rings" "$pack_bytes" \
     "$global_scanned" "$routed_scanned" "$global_tokens" "$routed_tokens" \
     "$global_us" "$routed_us" "$scan_red" "$token_red" "$prompt_bytes"
 }
@@ -142,9 +147,10 @@ echo "== KoutenDB effect validation matrix =="
 echo "scale: $SCALE"
 echo "batch size: $BATCH_SIZE"
 echo "disk backed: $DISK_BACKED"
+echo "pack during import: $PACK_DURING_IMPORT"
 echo
-echo "| case | docs | global budget | routed budget | set latency us | set us/record | pack latency us | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |"
-echo "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+echo "| case | docs | global budget | routed budget | set latency us | set us/record | pack latency us | pack records/rings/bytes | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |"
+echo "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
 run_case "small-balanced" "$(scaled 24)" "$(scaled 24)" "$(scaled 96)" 0 8 3
 run_case "near-distractors" "$(scaled 120)" "$(scaled 120)" "$(scaled 1000)" "$(scaled 500)" 20 5
 run_case "medium-noisy" "$(scaled 500)" "$(scaled 500)" "$(scaled 10000)" "$(scaled 2000)" 30 8
@@ -158,4 +164,5 @@ echo "Set KOUTEN_EFFECT_QUICK=1 for the small fast matrix."
 echo "Set KOUTEN_EFFECT_SCALE=N to control generated corpus size."
 echo "Set KOUTEN_EFFECT_BATCH_SIZE=N to control JSONL import chunk commits."
 echo "Set KOUTEN_EFFECT_DISK_BACKED=0 to force the legacy in-memory validation path."
+echo "Set KOUTEN_EFFECT_PACK_DURING_IMPORT=0 to measure explicit post-import segment packing."
 echo "Set KOUTEN_EFFECT_LARGE=1 to include the larger stress case."

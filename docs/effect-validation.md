@@ -71,18 +71,18 @@ Quick local sanity result from this repository state:
 
 | case | docs | global budget | routed budget | set latency us | set us/record | pack latency us | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-balanced | 168 | 8 | 3 | 2402.263 | 14.299185 | 9400.976 | 168 -> 24 | 692 -> 260 | 382.484 -> 59.650 | 85.714% | 62.428% | 1356 |
-| near-distractors | 1860 | 20 | 5 | 26948.886 | 14.488648 | 102680.060 | 1860 -> 120 | 1730 -> 433 | 3388.369 -> 233.430 | 93.548% | 74.971% | 2064 |
-| medium-noisy | 13500 | 30 | 8 | 177783.235 | 13.169129 | 681991.471 | 13500 -> 500 | 2595 -> 692 | 23756.021 -> 852.418 | 96.296% | 73.333% | 3124 |
+| small-balanced | 168 | 8 | 3 | 2824.351 | 16.811613 | 9668.352 | 168 -> 24 | 692 -> 260 | 444.299 -> 67.193 | 85.714% | 62.428% | 1356 |
+| near-distractors | 1860 | 20 | 5 | 30915.313 | 16.621136 | 110760.569 | 1860 -> 120 | 1730 -> 433 | 3662.520 -> 241.323 | 93.548% | 74.971% | 2064 |
+| medium-noisy | 13500 | 30 | 8 | 470689.989 | 34.865925 | 1193051.601 | 13500 -> 500 | 2595 -> 692 | 39787.963 -> 1592.871 | 96.296% | 73.333% | 3124 |
 
 Larger local validation with `KOUTEN_EFFECT_SCALE=100` and
 `KOUTEN_EFFECT_BATCH_SIZE=10000`:
 
 | case | docs | global budget | routed budget | set latency us | set us/record | pack latency us | scanned | tokens | retrieve latency us | scanned reduction | token reduction | prompt bytes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-balanced | 16800 | 8 | 3 | 231157.641 | 13.759383 | 848768.915 | 16800 -> 2400 | 692 -> 260 | 28377.546 -> 4254.966 | 85.714% | 62.428% | 1360 |
-| near-distractors | 186000 | 20 | 5 | 2523403.771 | 13.566687 | 9585530.665 | 186000 -> 12000 | 1730 -> 433 | 348492.042 -> 22159.867 | 93.548% | 74.971% | 2068 |
-| medium-noisy | 1350000 | 30 | 8 | 17674021.261 | 13.091868 | 68635114.386 | 1350000 -> 50000 | 2595 -> 692 | 2588003.358 -> 92612.321 | 96.296% | 73.333% | 3128 |
+| small-balanced | 16800 | 8 | 3 | 259143.133 | 15.425186 | 977187.126 | 16800 -> 2400 | 692 -> 260 | 33234.527 -> 4920.891 | 85.714% | 62.428% | 1360 |
+| near-distractors | 186000 | 20 | 5 | 2926573.643 | 15.734267 | 10575583.829 | 186000 -> 12000 | 1730 -> 433 | 350721.571 -> 22751.475 | 93.548% | 74.971% | 2068 |
+| medium-noisy | 1350000 | 30 | 8 | 19314316.115 | 14.306901 | 74683629.765 | 1350000 -> 50000 | 2595 -> 692 | 2753617.075 -> 101526.529 | 96.296% | 73.333% | 3128 |
 
 The disk-backed path now separates two costs:
 
@@ -93,6 +93,14 @@ The disk-backed path now separates two costs:
 The WAL remains the source of truth. Ring segment files are rebuildable read
 layout, similar in operational role to a compaction or optimize step. They are
 not required for correctness.
+
+The current segment-pack implementation improves disk-backed read locality, but
+explicit post-import packing is still a bottleneck at multi-million-record
+scale. The `effectPackRecords`, `effectPackRings`, and `effectPackBytes`
+metrics expose that cost so future pack optimization can be measured directly.
+`KOUTEN_EFFECT_PACK_DURING_IMPORT=1` can be used to test import-time segment
+construction, but it is not the default because it currently increases normal
+import latency too much.
 
 Earlier scale-1000 WAL-baseline validation also completed on this machine with
 the disk-backed matrix path. That pre-segment run is retained here as a stress
