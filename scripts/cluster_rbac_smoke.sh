@@ -26,11 +26,26 @@ echo "[cluster-rbac] build koutencli"
 nim c -d:release --nimcache:/tmp/nimcache_koutencli_rbac -o:src/koutencli src/koutencli.nim
 
 echo "[cluster-rbac] start node on $PEERS"
-src/koutend --id=0 --peers="$PEERS" --data="$DATA/node0" \
-  --slow-tick=0.05 \
-  --role=reader:read:reader:allowed \
-  --role=writer:write:writer:allowed \
-  --role=admin:admin:admin:allowed &
+printf 'read\n' > "$DATA/reader-password"
+cat >"$DATA/server.json" <<JSON
+{
+  "id": 0,
+  "peers": "$PEERS",
+  "data": "$DATA/node0",
+  "slow-tick": 0.05,
+  "roles": [
+    {
+      "user": "reader",
+      "passwordFile": "$DATA/reader-password",
+      "role": "reader",
+      "prefixes": ["allowed"]
+    },
+    "writer:write:writer:allowed",
+    "admin:admin:admin:allowed"
+  ]
+}
+JSON
+src/koutend --config="$DATA/server.json" &
 PID="$!"
 
 echo "[cluster-rbac] wait for health"

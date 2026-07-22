@@ -61,7 +61,9 @@ Do not use the default values in production.
 ## Operational Trial
 
 `operational-trial.compose.yml` is a v0.10-style production trial shape. It
-separates live health checks from offline maintenance:
+loads non-secret server defaults from `operational-server.json` and keeps
+password / secret-key values as Compose environment overrides. It separates
+live health checks from offline maintenance:
 
 - while the server is running, use `health`;
 - when the server is stopped, use `verify`, `backup`, `restore`, and the audit

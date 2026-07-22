@@ -15,7 +15,10 @@ to make a small trial repeatable:
 
 ## Compose Trial
 
-Use `examples/compose/operational-trial.compose.yml`.
+Use `examples/compose/operational-trial.compose.yml`. The server reads static
+node settings from `examples/compose/operational-server.json`; the Compose file
+still passes password and secret-key values as overrides so the checked-in JSON
+does not need to contain deployment secrets.
 
 Start the node:
 

@@ -57,8 +57,46 @@ provides it.
 
 ## `koutend` Server Flags
 
+`koutend` can load these server defaults from JSON with `--config=FILE` or
+`KOUTEN_SERVER_CONFIG=FILE`. Command-line flags override the file.
+
+```json
+{
+  "id": 0,
+  "peers": ["127.0.0.1:7301", "127.0.0.1:7302", "127.0.0.1:7303"],
+  "dataDir": "/var/lib/koutendb/node0",
+  "slowTick": 0.05,
+  "durability": "strong",
+  "galaxy": "app-main",
+  "user": "app",
+  "passwordFile": "/run/secrets/koutendb-password",
+  "secretKeyFile": "/run/secrets/koutendb-secret-key",
+  "allowRing": ["users", "orders"],
+  "roles": [
+    {
+      "user": "reader",
+      "passwordFile": "/run/secrets/koutendb-reader-password",
+      "role": "reader",
+      "prefixes": ["users"]
+    }
+  ],
+  "tlsCertFile": "/etc/koutendb/server.crt",
+  "tlsKeyFile": "/etc/koutendb/server.key",
+  "tlsCaFile": "/etc/koutendb/ca.crt",
+  "tlsServerName": "koutendb.internal"
+}
+```
+
+The config accepts camelCase names and flag-style aliases such as
+`password-file`, `secret-key-file`, `tls-cert`, and `allow-ring`. `peers` may be
+a comma-separated string or an array. `allowRing` / `allow-ring` may be a
+comma-separated string or an array. `roles` may contain either
+`"user:password:role[:prefix1,prefix2]"` strings or objects with `user`,
+`password`, `role`, and optional `prefixes`.
+
 | Flag | Meaning |
 |---|---|
+| `--config=FILE` | Load server defaults from JSON. `KOUTEN_SERVER_CONFIG` can point to the same file. |
 | `--id=N` | Node index in the peer list. |
 | `--peers=host:port,...` | Static cluster peer list. |
 | `--data=DIR` | Persistent data directory. |

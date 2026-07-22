@@ -208,6 +208,74 @@ proc parsePrefixes(s: string): seq[string] =
     if prefix.len > 0:
       result.add prefix
 
+proc parseStringList(node: JsonNode, key: string): seq[string] =
+  if node.kind != JObject or not node.hasKey(key):
+    return @[]
+  let value = node[key]
+  case value.kind
+  of JString:
+    result = parsePrefixes(value.getStr())
+  of JArray:
+    for item in value:
+      if item.kind != JString:
+        raise newException(ValueError, "config " & key & " entries must be strings")
+      let part = item.getStr().strip()
+      if part.len > 0:
+        result.add part
+  else:
+    raise newException(ValueError, "config " & key & " must be a string or array")
+
+proc jsonStringOpt(node: JsonNode, key, default: string): string =
+  if node.kind == JObject and node.hasKey(key):
+    if node[key].kind != JString:
+      raise newException(ValueError, "config " & key & " must be a string")
+    node[key].getStr()
+  else:
+    default
+
+proc jsonIntOpt(node: JsonNode, key: string, default: int): int =
+  if node.kind == JObject and node.hasKey(key):
+    node[key].getInt().int
+  else:
+    default
+
+proc jsonFloatOpt(node: JsonNode, key: string, default: float): float =
+  if node.kind == JObject and node.hasKey(key):
+    node[key].getFloat()
+  else:
+    default
+
+proc jsonBoolOpt(node: JsonNode, key: string, default: bool): bool =
+  if node.kind == JObject and node.hasKey(key):
+    node[key].getBool()
+  else:
+    default
+
+proc jsonPeersOpt(node: JsonNode, default: string): string =
+  if node.kind != JObject or not node.hasKey("peers"):
+    return default
+  let peersNode = node["peers"]
+  case peersNode.kind
+  of JString:
+    peersNode.getStr()
+  of JArray:
+    var parts: seq[string] = @[]
+    for item in peersNode:
+      if item.kind != JString:
+        raise newException(ValueError, "config peers entries must be strings")
+      parts.add item.getStr()
+    parts.join(",")
+  else:
+    raise newException(ValueError, "config peers must be a string or array")
+
+proc parseDurabilityValue(value: string): StoreDurability =
+  case value
+  of "buffered": durBuffered
+  of "strong": durStrong
+  else:
+    raise newException(ValueError,
+      "--durability must be 'buffered' or 'strong'")
+
 proc parseUserRule(spec: string): tuple[user: string, rule: UserRule] =
   let parts = spec.split(':', maxsplit = 3)
   if parts.len < 3:
@@ -219,6 +287,96 @@ proc parseUserRule(spec: string): tuple[user: string, rule: UserRule] =
                          prefixes: if parts.len >= 4: parsePrefixes(parts[3]) else: @[])
   if result.user.len == 0:
     raise newException(ValueError, "--role user must not be empty")
+
+proc parseUserRule(node: JsonNode): tuple[user: string, rule: UserRule] =
+  if node.kind == JString:
+    return parseUserRule(node.getStr())
+  if node.kind != JObject:
+    raise newException(ValueError, "config roles entries must be strings or objects")
+  result.user = jsonStringOpt(node, "user", jsonStringOpt(node, "username", ""))
+  let passwordFile = jsonStringOpt(node, "passwordFile",
+                                   jsonStringOpt(node, "password-file", ""))
+  let password =
+    if passwordFile.len > 0: readSecretFile(passwordFile, "role password")
+    else: jsonStringOpt(node, "password", "")
+  result.rule = UserRule(
+    password: password,
+    role: parseRole(jsonStringOpt(node, "role", "")),
+    prefixes: parseStringList(node, "prefixes"))
+  if result.user.len == 0:
+    raise newException(ValueError, "config role user must not be empty")
+  if result.rule.password.len == 0:
+    raise newException(ValueError, "config role password must not be empty")
+
+proc loadServerConfig(path: string, id: var int, peersStr, dataDir: var string,
+                      slowTickSec: var float, authUser, authPassword,
+                      authPasswordFile, authTokenFile, authSecretKey,
+                      authSecretKeyFile, tlsCertFile, tlsKeyFile, tlsCaFile,
+                      tlsServerName: var string,
+                      tlsInsecureSkipVerify: var bool,
+                      users: var Table[string, UserRule], galaxy: var string,
+                      allowedRingPrefixes: var seq[string],
+                      durability: var StoreDurability) =
+  let cfg = parseFile(path)
+  if cfg.kind != JObject:
+    raise newException(ValueError, "server config file must contain a JSON object")
+  id = jsonIntOpt(cfg, "id", id)
+  peersStr = jsonPeersOpt(cfg, peersStr)
+  dataDir = jsonStringOpt(cfg, "data", dataDir)
+  dataDir = jsonStringOpt(cfg, "dataDir", dataDir)
+  slowTickSec = jsonFloatOpt(cfg, "slowTick", slowTickSec)
+  slowTickSec = jsonFloatOpt(cfg, "slow-tick", slowTickSec)
+  authUser = jsonStringOpt(cfg, "user", authUser)
+  authUser = jsonStringOpt(cfg, "username", authUser)
+  authPassword = jsonStringOpt(cfg, "password", authPassword)
+  authPasswordFile = jsonStringOpt(cfg, "passwordFile", authPasswordFile)
+  authPasswordFile = jsonStringOpt(cfg, "password-file", authPasswordFile)
+  authSecretKey = jsonStringOpt(cfg, "secretKey", authSecretKey)
+  authSecretKey = jsonStringOpt(cfg, "secret-key", authSecretKey)
+  authSecretKeyFile = jsonStringOpt(cfg, "secretKeyFile", authSecretKeyFile)
+  authSecretKeyFile = jsonStringOpt(cfg, "secret-key-file", authSecretKeyFile)
+  tlsCertFile = jsonStringOpt(cfg, "tlsCertFile", tlsCertFile)
+  tlsCertFile = jsonStringOpt(cfg, "tls-cert", tlsCertFile)
+  tlsKeyFile = jsonStringOpt(cfg, "tlsKeyFile", tlsKeyFile)
+  tlsKeyFile = jsonStringOpt(cfg, "tls-key", tlsKeyFile)
+  tlsCaFile = jsonStringOpt(cfg, "tlsCaFile", tlsCaFile)
+  tlsCaFile = jsonStringOpt(cfg, "tls-ca", tlsCaFile)
+  tlsServerName = jsonStringOpt(cfg, "tlsServerName", tlsServerName)
+  tlsServerName = jsonStringOpt(cfg, "tls-server-name", tlsServerName)
+  tlsInsecureSkipVerify = jsonBoolOpt(cfg, "tlsInsecureSkipVerify",
+                                      tlsInsecureSkipVerify)
+  tlsInsecureSkipVerify = jsonBoolOpt(cfg, "tls-insecure-skip-verify",
+                                      tlsInsecureSkipVerify)
+  galaxy = jsonStringOpt(cfg, "galaxy", galaxy)
+  for prefix in parseStringList(cfg, "allowRing"):
+    allowedRingPrefixes.add prefix
+  for prefix in parseStringList(cfg, "allow-ring"):
+    allowedRingPrefixes.add prefix
+  if cfg.hasKey("durability"):
+    durability = parseDurabilityValue(cfg["durability"].getStr())
+  if cfg.hasKey("authToken"):
+    authUser = "token"
+    authPassword = cfg["authToken"].getStr()
+  if cfg.hasKey("auth-token"):
+    authUser = "token"
+    authPassword = cfg["auth-token"].getStr()
+  authTokenFile = jsonStringOpt(cfg, "authTokenFile", authTokenFile)
+  authTokenFile = jsonStringOpt(cfg, "auth-token-file", authTokenFile)
+  if cfg.hasKey("roles"):
+    if cfg["roles"].kind != JArray:
+      raise newException(ValueError, "config roles must be an array")
+    for item in cfg["roles"]:
+      let parsed = parseUserRule(item)
+      users[parsed.user] = parsed.rule
+      if authUser.len == 0:
+        authUser = parsed.user
+        authPassword = parsed.rule.password
+  if cfg.hasKey("role"):
+    let parsed = parseUserRule(cfg["role"])
+    users[parsed.user] = parsed.rule
+    if authUser.len == 0:
+      authUser = parsed.user
+      authPassword = parsed.rule.password
 
 proc currentUser(sv: Server, sock: Socket): string =
   sv.authedUsers.getOrDefault(sock.getFd.int, sv.authUser)
@@ -1137,8 +1295,10 @@ proc printUsage() =
   echo ""
   echo "Usage:"
   echo "  koutend --id=N --peers=host:port[,host:port...] [options]"
+  echo "  koutend --config=server.json [options]"
   echo ""
   echo "Options:"
+  echo "  --config=FILE                 Load server defaults from JSON"
   echo "  --data=DIR                    Enable WAL-backed persistence"
   echo "  --slow-tick=SECONDS           Background maintenance interval"
   echo "  --durability=buffered|strong  Buffered WAL or fsync-on-write durability"
@@ -1169,6 +1329,7 @@ proc main() =
       printUsage()
       return
 
+  var configPath = getEnv("KOUTEN_SERVER_CONFIG")
   var id = -1
   var peersStr = ""
   var dataDir = ""
@@ -1191,6 +1352,20 @@ proc main() =
   for kind, key, val in getopt():
     if kind == cmdLongOption:
       case key
+      of "config": configPath = val
+      else: discard
+
+  if configPath.len > 0:
+    loadServerConfig(configPath, id, peersStr, dataDir, slowTickSec,
+                     authUser, authPassword, authPasswordFile, authTokenFile,
+                     authSecretKey, authSecretKeyFile, tlsCertFile, tlsKeyFile,
+                     tlsCaFile, tlsServerName, tlsInsecureSkipVerify, users,
+                     galaxy, allowedRingPrefixes, durability)
+
+  for kind, key, val in getopt():
+    if kind == cmdLongOption:
+      case key
+      of "config": discard
       of "id": id = parseInt(val)
       of "peers": peersStr = val
       of "data": dataDir = val
@@ -1218,12 +1393,7 @@ proc main() =
           if prefix.len > 0:
             allowedRingPrefixes.add prefix
       of "durability":
-        case val
-        of "buffered": durability = durBuffered
-        of "strong": durability = durStrong
-        else:
-          raise newException(ValueError,
-            "--durability must be 'buffered' or 'strong'")
+        durability = parseDurabilityValue(val)
       of "auth-token":
         authUser = "token"
         authPassword = val

@@ -114,7 +114,7 @@ Translations:
 | PostgreSQL comparison | Done | Limited reference comparison |
 | Redis comparison | Done | Smoke test with conditions and limits documented |
 | C ABI bench | Done | `examples/cbench.c` |
-| Docker case study | Partial | memory pressure / PHP / Swift smoke plus `examples/compose/operational-trial.compose.yml` for authenticated persistent startup, live health, offline verify, backup verification, and audit JSONL inspection |
+| Docker case study | Partial | memory pressure / PHP / Swift smoke plus `examples/compose/operational-trial.compose.yml` for server JSON config loading, authenticated persistent startup, live health, offline verify, backup verification, and audit JSONL inspection |
 | Unique data model demo | Done | `examples/stellar_data_model_demo.sh` demonstrates separate rings, stellar attach/detach, narrowed reads, and non-copy visibility changes |
 | Cluster transaction smoke | Partial | `scripts/cluster_tx_smoke.sh` starts 3 local nodes and verifies apply / retrieve |
 | Cluster failure retry smoke | Partial | `scripts/cluster_failure_smoke.sh` kills the owner node, verifies the intent remains pending, restarts the owner, and verifies retry apply |

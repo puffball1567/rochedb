@@ -4,10 +4,7 @@ services:
       context: ../..
       dockerfile: examples/compose/Dockerfile
     command:
-      - --id=0
-      - --peers=0.0.0.0:7301
-      - --data=/data/app-main
-      - --galaxy=app-main
+      - --config=/etc/koutendb/server.json
       - --user=app
       - --password=${KOUTEN_APP_PASSWORD:-change-me}
       - --secret-key=${KOUTEN_APP_SECRET_KEY:-change-me-too}
@@ -15,6 +12,7 @@ services:
       - "7361:7301"
     volumes:
       - kouten_operational_app:/data
+      - ./operational-server.json:/etc/koutendb/server.json:ro
     healthcheck:
       test:
         - CMD-SHELL

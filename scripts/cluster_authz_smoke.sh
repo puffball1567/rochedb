@@ -17,6 +17,7 @@ cleanup() {
 trap cleanup EXIT
 
 cd "$ROOT"
+mkdir -p "$DATA"
 
 echo "[cluster-authz] build koutend"
 nim c -d:release --nimcache:/tmp/nimcache_koutend_authz -o:src/koutend src/koutend.nim
@@ -35,14 +36,38 @@ if src/koutend --id=0 --peers="127.0.0.1:1" --data="$DATA/bad-password" \
   echo "koutend accepted --user without --password" >&2
   exit 1
 fi
+cat >"$DATA/bad-server-config.json" <<JSON
+{
+  "id": 0,
+  "peers": ["127.0.0.1:1"],
+  "data": "$DATA/bad-config-secret",
+  "secretKey": "secret"
+}
+JSON
+if src/koutend --config="$DATA/bad-server-config.json" >/dev/null 2>&1; then
+  echo "koutend accepted server config secretKey without user/password" >&2
+  exit 1
+fi
 
 echo "[cluster-authz] start 3 nodes on $PEERS"
-mkdir -p "$DATA"
 printf 'secret\n' > "$DATA/password"
 for id in 0 1 2; do
-  src/koutend --id="$id" --peers="$PEERS" --data="$DATA/node$id" \
-    --slow-tick=0.05 --user=alice --password-file="$DATA/password" \
-    --allow-ring=allowed &
+  cat >"$DATA/server-$id.json" <<JSON
+{
+  "id": $id,
+  "peers": ["127.0.0.1:${BASE_PORT}", "127.0.0.1:$((BASE_PORT + 1))", "127.0.0.1:$((BASE_PORT + 2))"],
+  "dataDir": "$DATA/node$id",
+  "slowTick": 0.05,
+  "user": "alice",
+  "passwordFile": "$DATA/password",
+  "allowRing": ["allowed"]
+}
+JSON
+  if [[ "$id" == "1" ]]; then
+    KOUTEN_SERVER_CONFIG="$DATA/server-$id.json" src/koutend &
+  else
+    src/koutend --config="$DATA/server-$id.json" &
+  fi
   PIDS+=("$!")
 done
 
