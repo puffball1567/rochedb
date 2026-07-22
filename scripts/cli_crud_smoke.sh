@@ -237,8 +237,17 @@ bin/kouten verify --data="$KOUTEN_DATA" |
   grep -q "verify status: ok"
 bin/kouten verify --data="$KOUTEN_DATA" --metrics |
   grep -q "verifyOk 1"
+bin/kouten verify --data="$KOUTEN_DATA" --json |
+  grep -q '"kind": "data"'
 bin/kouten verify --data="$KOUTEN_DATA" --segments |
   grep -q "ok   segments:"
+bin/kouten backup --data="$KOUTEN_DATA" --backup="$WORK/verify-backup" >/dev/null
+bin/kouten verify --backup="$WORK/verify-backup" |
+  grep -q "verify status: ok"
+bin/kouten verify --backup="$WORK/verify-backup" --metrics |
+  grep -q "verifyBackup 1"
+bin/kouten verify --backup="$WORK/verify-backup" --json |
+  grep -q '"kind": "backup"'
 bin/kouten doctor --data="$KOUTEN_DATA" |
   grep -q "verify status: ok"
 

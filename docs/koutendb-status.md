@@ -44,7 +44,7 @@ Translations:
 |---|---|---|
 | Append-only WAL | Done | Batched flush by default; `durStrong` / `--durability=strong` adds flush + fsync write boundaries. New WAL files use a magic/version header and per-record length + CRC32 wrappers; legacy pre-v1.0 WAL remains readable for migration |
 | Reopen recovery | Done | Items / vectors / ring metadata / descriptions |
-| Operational verify | Foundation | `operationalVerify(dataDir)` and `kouten verify --data=DIR` open/replay a persistent store and report WAL, metadata, segment, and locality health. `kouten doctor --data=DIR` uses the same path |
+| Operational verify | Foundation | `operationalVerify(dataDir)` and `kouten verify --data=DIR` open/replay a persistent store and report WAL, metadata, segment, and locality health. `kouten verify --backup=DIR` verifies backup readability. `kouten doctor --data=DIR` / `--backup=DIR` use the same operational paths |
 | Transaction | Done | Embedded atomic transaction plus all-or-nothing `batchPutAtomic`, `batchUpdateAtomic`, and `batchDeleteAtomic` helpers |
 | Cooperative coordinate locks | Done | Embedded opt-in `ring` and `stellar` locks for high-integrity workflows; normal NoSQL read/write paths do not check locks |
 | Cluster transaction landing | PoC | node0 landing. `scripts/cluster_tx_smoke.sh` covers apply smoke; `scripts/cluster_failure_smoke.sh` covers owner crash/restart retry; redundancy is not implemented yet |

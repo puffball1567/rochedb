@@ -422,7 +422,7 @@ proc runDoctorSetup() =
     quit(1)
 
 proc printOperationalReport(report: KoutenOperationalVerifyReport;
-                            metricsFormat: bool) =
+                            metricsFormat, jsonFormat: bool) =
   if metricsFormat:
     echo &"verifyOk {int(report.ok)}"
     echo &"verifyWalExists {int(report.walExists)}"
@@ -441,6 +441,55 @@ proc printOperationalReport(report: KoutenOperationalVerifyReport;
       echo &"verifyCheck{{name=\"{check.name}\"}} {int(check.ok)}"
     return
 
+  if jsonFormat:
+    var checks = newJArray()
+    for check in report.checks:
+      checks.add %*{
+        "name": check.name,
+        "ok": check.ok,
+        "message": check.message
+      }
+    echo pretty(%*{
+      "ok": report.ok,
+      "kind": "data",
+      "dataDir": report.dataDir,
+      "persistent": report.persistent,
+      "diskBacked": report.diskBacked,
+      "wal": {
+        "path": report.walPath,
+        "exists": report.walExists,
+        "bytes": report.walBytes
+      },
+      "store": {
+        "items": report.items,
+        "rings": report.rings,
+        "ringNames": report.ringNames,
+        "vectors": report.vectors,
+        "galaxy": report.galaxy
+      },
+      "segments": {
+        "path": report.segmentDir,
+        "exists": report.segmentDirExists,
+        "files": report.segmentFiles,
+        "rebuiltRecords": report.segmentPackRecords
+      },
+      "locality": {
+        "persistent": report.locality.persistent,
+        "walBytes": report.locality.walBytes,
+        "totalParticleRecords": report.locality.totalParticleRecords,
+        "liveParticleRecords": report.locality.liveParticleRecords,
+        "deadParticleRecords": report.locality.deadParticleRecords,
+        "ringCount": report.locality.ringCount,
+        "ringRuns": report.locality.ringRuns,
+        "fragmentedRings": report.locality.fragmentedRings,
+        "avgRunRecords": report.locality.avgRunRecords,
+        "maxRunRecords": report.locality.maxRunRecords,
+        "localityScore": report.locality.localityScore
+      },
+      "checks": checks
+    })
+    return
+
   let statusName = if report.ok: "ok" else: "failed"
   let galaxyName = if report.galaxy.len > 0: report.galaxy else: "<none>"
   echo &"verify status: {statusName}"
@@ -453,18 +502,72 @@ proc printOperationalReport(report: KoutenOperationalVerifyReport;
     let prefix = if check.ok: "ok  " else: "fail"
     echo &"{prefix} {check.name}: {check.message}"
 
-proc runOperationalVerify(dataDir: string; verifySegments, metricsFormat: bool) =
+proc printBackupVerifyStats(stats: BackupStats; encrypted: bool;
+                            metricsFormat, jsonFormat: bool) =
+  if metricsFormat:
+    echo "verifyOk 1"
+    echo "verifyBackup 1"
+    echo &"verifyBackupEncrypted {int(encrypted)}"
+    echo &"verifyBackupBytes {stats.bytes}"
+    echo &"verifyBackupItems {stats.items}"
+    echo &"verifyBackupForwarders {stats.forwarders}"
+    echo &"verifyBackupRings {stats.ringMeta}"
+    echo &"verifyBackupRingNames {stats.ringNames}"
+    echo &"verifyBackupClusterTx {stats.clusterTx}"
+    echo &"verifyBackupAppliedClusterTx {stats.appliedClusterTx}"
+    echo &"verifyBackupWarpJobs {stats.warpJobs}"
+    echo &"verifyBackupUniverseSyncEvents {stats.universeSyncEvents}"
+    return
+
+  if jsonFormat:
+    echo pretty(%*{
+      "ok": true,
+      "kind": "backup",
+      "encrypted": encrypted,
+      "bytes": stats.bytes,
+      "items": stats.items,
+      "forwarders": stats.forwarders,
+      "rings": stats.ringMeta,
+      "ringNames": stats.ringNames,
+      "clusterTx": stats.clusterTx,
+      "appliedClusterTx": stats.appliedClusterTx,
+      "warpJobs": stats.warpJobs,
+      "universeSyncEvents": stats.universeSyncEvents,
+      "source": stats.source,
+      "destination": stats.destination
+    })
+    return
+
+  let kind = if encrypted: "encrypted backup" else: "backup"
+  echo &"verify status: ok"
+  echo &"{kind}: bytes={stats.bytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames} source={stats.source} destination={stats.destination}"
+
+proc runOperationalVerify(dataDir, backupDir, passphrase: string;
+                          verifySegments, metricsFormat, jsonFormat: bool) =
+  if backupDir.len > 0:
+    let stats =
+      if passphrase.len > 0: verifyEncryptedBackup(backupDir, passphrase)
+      else: verifyBackup(backupDir)
+    printBackupVerifyStats(stats, passphrase.len > 0, metricsFormat,
+                           jsonFormat)
+    return
+
   if dataDir.len == 0:
-    raise newException(ValueError, "verify requires --data=DIR")
+    raise newException(ValueError, "verify requires --data=DIR or --backup=DIR")
   let report = operationalVerify(dataDir, diskBacked = true,
                                  verifySegments = verifySegments)
-  printOperationalReport(report, metricsFormat)
+  printOperationalReport(report, metricsFormat, jsonFormat)
   if not report.ok:
     quit(1)
 
-proc runDoctor(dataDir: string; verifySegments, metricsFormat: bool) =
+proc runDoctor(dataDir, backupDir, passphrase: string;
+               verifySegments, metricsFormat, jsonFormat: bool) =
   if dataDir.len > 0:
-    runOperationalVerify(dataDir, verifySegments, metricsFormat)
+    runOperationalVerify(dataDir, backupDir, passphrase, verifySegments,
+                         metricsFormat, jsonFormat)
+  elif backupDir.len > 0:
+    runOperationalVerify(dataDir, backupDir, passphrase, verifySegments,
+                         metricsFormat, jsonFormat)
   else:
     runDoctorSetup()
 
@@ -2535,13 +2638,13 @@ proc printHelp() =
   echo "  kouten locality --data=DIR [--metrics]"
   echo "  kouten backup --data=DIR --backup=DIR [--durability=buffered|strong]"
   echo "  kouten restore --backup=DIR --data=DIR [--overwrite] [--durability=buffered|strong]"
-  echo "  kouten verify --data=DIR [--segments] [--metrics]"
+  echo "  kouten verify [--data=DIR | --backup=DIR] [--segments] [--metrics] [--json]"
   echo "  kouten dump --data=DIR [--out=FILE] [--no-vectors]"
   echo "  kouten import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING] [--batch-size=N]"
   echo "  kouten universe-sync --data=SOURCE_DIR [--target-data=TARGET_DIR | --peers=host:port,...] [--prune-acked]"
   echo "  kouten universe-status [--data=DIR | --peers=host:port,...] [--metrics]"
   echo "  kouten recovery-status [--mirror=DIR...] [--universe-config=FILE] [--required-healthy=N] [--metrics]"
-  echo "  kouten doctor [--data=DIR] [--segments] [--metrics]"
+  echo "  kouten doctor [--data=DIR | --backup=DIR] [--segments] [--metrics] [--json]"
   echo ""
   echo "ID formats:"
   echo "  parent:seq"
@@ -2594,6 +2697,7 @@ proc main() =
   var pruneAcked = false
   var includeVectors = true
   var metricsFormat = false
+  var jsonFormat = false
   var readonly = false
   var verifySegments = false
   var username = ""
@@ -2776,6 +2880,7 @@ proc main() =
       of "segments": verifySegments = true
       of "execute": executeDriverInstall = true
       of "metrics": metricsFormat = true
+      of "json": jsonFormat = true
       of "no-vectors": includeVectors = false
       of "user": username = val
       of "password": password = val
@@ -2921,7 +3026,8 @@ proc main() =
   of "working-set-bench": runWorkingSetBench(n, ringCount, queries, budget)
   of "memory-pressure-bench": runMemoryPressureBench(n, ringCount, queries,
                                                      budget, payloadBytes)
-  of "doctor": runDoctor(dataDir, verifySegments, metricsFormat)
+  of "doctor": runDoctor(dataDir, backupDir, backupPassphrase, verifySegments,
+                         metricsFormat, jsonFormat)
   of "driver":
     let driverArgs = if positionals.len > 1: positionals[1 .. ^1] else: @[]
     runDriver(driverArgs, driverManifestPath, driverProjectDir,
@@ -2930,7 +3036,8 @@ proc main() =
   of "locality": runLocality(dataDir, metricsFormat)
   of "backup": runBackup(dataDir, backupDir, durability)
   of "restore": runRestore(backupDir, dataDir, overwrite, durability)
-  of "verify": runOperationalVerify(dataDir, verifySegments, metricsFormat)
+  of "verify": runOperationalVerify(dataDir, backupDir, backupPassphrase,
+                                    verifySegments, metricsFormat, jsonFormat)
   of "backup-encrypted": runBackupEncrypted(dataDir, backupDir, backupPassphrase,
                                             durability)
   of "restore-encrypted": runRestoreEncrypted(backupDir, dataDir,

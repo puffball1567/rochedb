@@ -67,6 +67,7 @@ bin/kouten --help
 | `--tls-server-name=NAME` | Optional hostname override for TLS verification and SNI. |
 | `--tls-insecure-skip-verify` | Skip certificate verification for local smoke tests only. |
 | `--metrics` | Emit key/value metrics where supported. |
+| `--json` | Emit JSON where supported. |
 
 Example:
 
@@ -309,7 +310,7 @@ For scripts and reproducible examples, prefer the single-shot commands above.
 | `restore` | `--backup=DIR --data=DIR` | Restore backup. |
 | `backup-encrypted` | `--data=DIR --backup=DIR --passphrase=TEXT` | Create encrypted backup. |
 | `restore-encrypted` | `--backup=DIR --data=DIR --passphrase=TEXT` | Restore encrypted backup. |
-| `verify` | `--data=DIR`; optional `--segments`, `--metrics` | Open and inspect a persistent data directory for WAL replay, lock, metadata, locality, and rebuildable segment layout. |
+| `verify` | `--data=DIR` or `--backup=DIR`; optional `--segments`, `--metrics`, `--json` | Open and inspect a persistent data directory or backup. Data-dir verification checks WAL replay, lock, metadata, locality, and rebuildable segment layout. Backup verification checks restore readability without writing into the live data directory. |
 | `dump` | `--data=DIR` | Export JSONL. |
 | `import-jsonl` | `--data=DIR --in=FILE`; optional `--batch-size=N` | Import JSONL with chunked commits. |
 | `describe-galaxy` | `--data=DIR --description=TEXT` | Set galaxy map description. |
@@ -357,4 +358,4 @@ Recovery commands accept `--mirror`, `--universe-config`, `--universe`,
 | `rag-bench` | Synthetic RAG-style working-set/token benchmark. |
 | `working-set-bench` | Working-set reduction benchmark. |
 | `memory-pressure-bench` | Candidate memory pressure benchmark. |
-| `doctor` | Without `--data`, check optional native dependencies such as the FAISS bridge. With `--data=DIR`, run operational data-dir verification. |
+| `doctor` | Without `--data` / `--backup`, check optional native dependencies such as the FAISS bridge. With `--data=DIR` or `--backup=DIR`, run operational verification. |
