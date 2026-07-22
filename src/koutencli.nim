@@ -294,6 +294,39 @@ proc jsonPeersOpt(node: JsonNode, default: string): string =
   else:
     raise newException(ValueError, "config peers must be a string or array")
 
+proc jsonStringListOpt(node: JsonNode, key: string): seq[string] =
+  if node.kind != JObject or not node.hasKey(key):
+    return @[]
+  let value = node[key]
+  case value.kind
+  of JString:
+    for part in value.getStr().split(','):
+      let item = part.strip()
+      if item.len > 0:
+        result.add item
+  of JArray:
+    for item in value:
+      if item.kind != JString:
+        raise newException(ValueError, "config " & key & " entries must be strings")
+      let value = item.getStr().strip()
+      if value.len > 0:
+        result.add value
+  else:
+    raise newException(ValueError, "config " & key & " must be a string or array")
+
+proc configSecretValue(cfg: JsonNode, plainKey, fileKey, fileAlias: string): tuple[
+    hasValue: bool, source: string] =
+  let filePath = jsonStringOpt(cfg, fileKey, jsonStringOpt(cfg, fileAlias, ""))
+  if filePath.len > 0:
+    if not fileExists(filePath):
+      return (false, fileAlias & " missing: " & filePath)
+    if readFile(filePath).strip().len == 0:
+      return (false, fileAlias & " empty: " & filePath)
+    return (true, fileAlias)
+  if jsonStringOpt(cfg, plainKey, "").len > 0:
+    return (true, plainKey)
+  (false, "")
+
 proc requireCliTarget(dataDir, peers: string): string =
   resolveDataDir(dataDir, peers)
 
@@ -542,8 +575,164 @@ proc printBackupVerifyStats(stats: BackupStats; encrypted: bool;
   echo &"verify status: ok"
   echo &"{kind}: bytes={stats.bytes} items={stats.items} rings={stats.ringMeta} names={stats.ringNames} source={stats.source} destination={stats.destination}"
 
-proc runOperationalVerify(dataDir, backupDir, passphrase: string;
+proc addConfigCheck(checks: var seq[KoutenOperationalCheck], name: string,
+                    ok: bool, message: string) =
+  checks.add KoutenOperationalCheck(name: name, ok: ok, message: message)
+
+proc verifyServerConfigFile(path: string): tuple[ok: bool,
+    checks: seq[KoutenOperationalCheck]] =
+  result.ok = true
+  try:
+    let cfg = parseFile(path)
+    if cfg.kind != JObject:
+      result.checks.addConfigCheck("server-config", false,
+        "server config must contain a JSON object")
+      result.ok = false
+      return
+
+    result.checks.addConfigCheck("server-config", true, "parsed JSON object")
+
+    let id =
+      if cfg.hasKey("id"): cfg["id"].getInt().int
+      else: -1
+    let peers = jsonPeersOpt(cfg, "")
+    let peerCount =
+      if peers.len == 0: 0
+      else: peers.split(',').len
+    let idOk = id >= 0 and peerCount > 0 and id < peerCount
+    result.checks.addConfigCheck("node-id-peers", idOk,
+      if idOk: &"id={id} peers={peerCount}"
+      else: "server config requires id within peers")
+
+    let dataDir = jsonStringOpt(cfg, "dataDir", jsonStringOpt(cfg, "data", ""))
+    result.checks.addConfigCheck("persistence", dataDir.len > 0,
+      if dataDir.len > 0: "dataDir configured: " & dataDir
+      else: "dataDir is empty; server would run memory-only")
+
+    let user = jsonStringOpt(cfg, "user", jsonStringOpt(cfg, "username", ""))
+    let password = configSecretValue(cfg, "password", "passwordFile",
+                                     "password-file")
+    let token = configSecretValue(cfg, "authToken", "authTokenFile",
+                                  "auth-token-file")
+    let secretKey = configSecretValue(cfg, "secretKey", "secretKeyFile",
+                                      "secret-key-file")
+    let hasUserPassword = user.len > 0 and password.hasValue
+    let hasToken = token.hasValue
+    let secretSourceOk = (password.source.len == 0 or password.hasValue) and
+                         (token.source.len == 0 or token.hasValue) and
+                         (secretKey.source.len == 0 or secretKey.hasValue)
+    let authOk = secretSourceOk and
+                 ((user.len == 0 and not password.hasValue and
+                   not secretKey.hasValue and not token.hasValue) or
+                  hasUserPassword or hasToken)
+    result.checks.addConfigCheck("auth", authOk,
+      if hasToken: "auth token configured via " & token.source
+      elif hasUserPassword: "username/password configured; password source=" & password.source
+      elif user.len == 0 and not password.hasValue and not secretKey.hasValue:
+        "auth disabled"
+      elif user.len == 0: "password or secret-key requires user"
+      else: "user requires password or passwordFile")
+    result.checks.addConfigCheck("secret-key-gate",
+      secretKey.source.len == 0 or hasUserPassword or hasToken,
+      if secretKey.source.len == 0: "secret-key gate disabled"
+      elif secretKey.hasValue: "secret-key gate configured via " & secretKey.source
+      else: secretKey.source)
+
+    var roleOk = true
+    var roleCount = 0
+    if cfg.hasKey("roles"):
+      if cfg["roles"].kind != JArray:
+        roleOk = false
+      else:
+        for item in cfg["roles"]:
+          inc roleCount
+          if item.kind == JString:
+            let parts = item.getStr().split(':', maxsplit = 3)
+            if parts.len < 3 or parts[0].len == 0 or parts[1].len == 0:
+              roleOk = false
+          elif item.kind == JObject:
+            let roleUser = jsonStringOpt(item, "user",
+              jsonStringOpt(item, "username", ""))
+            let rolePassword = configSecretValue(item, "password",
+              "passwordFile", "password-file")
+            if roleUser.len == 0 or not rolePassword.hasValue or
+                jsonStringOpt(item, "role", "").len == 0:
+              roleOk = false
+          else:
+            roleOk = false
+    result.checks.addConfigCheck("roles", roleOk,
+      if roleOk: &"roles={roleCount}"
+      else: "roles must be strings or objects with user/password/role")
+
+    let prefixes = jsonStringListOpt(cfg, "allowRing") &
+                   jsonStringListOpt(cfg, "allow-ring")
+    result.checks.addConfigCheck("ring-prefix-authz", true,
+      if prefixes.len > 0: &"prefixes={prefixes.len}"
+      else: "no ring-prefix boundary configured")
+
+    let tlsCert = jsonStringOpt(cfg, "tlsCertFile", jsonStringOpt(cfg, "tls-cert", ""))
+    let tlsKey = jsonStringOpt(cfg, "tlsKeyFile", jsonStringOpt(cfg, "tls-key", ""))
+    let tlsCa = jsonStringOpt(cfg, "tlsCaFile", jsonStringOpt(cfg, "tls-ca", ""))
+    let tlsInsecure = jsonBoolOpt(cfg, "tlsInsecureSkipVerify",
+      jsonBoolOpt(cfg, "tls-insecure-skip-verify", false))
+    let tlsPairOk = (tlsCert.len == 0 and tlsKey.len == 0) or
+                    (tlsCert.len > 0 and tlsKey.len > 0)
+    result.checks.addConfigCheck("tls-cert-key", tlsPairOk,
+      if tlsPairOk and tlsCert.len > 0: "TLS listener certificate/key configured"
+      elif tlsPairOk: "TLS listener disabled"
+      else: "tlsCertFile and tlsKeyFile must be provided together")
+    if tlsCert.len > 0:
+      result.checks.addConfigCheck("tls-cert-file", fileExists(tlsCert), tlsCert)
+    if tlsKey.len > 0:
+      result.checks.addConfigCheck("tls-key-file", fileExists(tlsKey), tlsKey)
+    if tlsCa.len > 0:
+      result.checks.addConfigCheck("tls-ca-file", fileExists(tlsCa), tlsCa)
+    result.checks.addConfigCheck("tls-verify", not tlsInsecure,
+      if tlsInsecure: "tls-insecure-skip-verify is enabled"
+      else: "certificate verification is not explicitly disabled")
+
+    for check in result.checks:
+      if not check.ok:
+        result.ok = false
+  except CatchableError as e:
+    result.ok = false
+    result.checks.addConfigCheck("server-config", false, e.msg)
+
+proc printServerConfigReport(path: string, metricsFormat, jsonFormat: bool) =
+  let report = verifyServerConfigFile(path)
+  if metricsFormat:
+    echo &"verifyOk {int(report.ok)}"
+    for check in report.checks:
+      echo &"verifyCheck{{name=\"{check.name}\"}} {int(check.ok)}"
+    if not report.ok:
+      quit(1)
+    return
+  if jsonFormat:
+    var checks = newJArray()
+    for check in report.checks:
+      checks.add %*{"name": check.name, "ok": check.ok,
+                    "message": check.message}
+    echo pretty(%*{"ok": report.ok, "kind": "server-config",
+                   "path": path, "checks": checks})
+    if not report.ok:
+      quit(1)
+    return
+  let statusName = if report.ok: "ok" else: "failed"
+  echo &"verify status: {statusName}"
+  echo &"server-config: {path}"
+  for check in report.checks:
+    let prefix = if check.ok: "ok  " else: "fail"
+    echo &"{prefix} {check.name}: {check.message}"
+  if not report.ok:
+    quit(1)
+
+proc runOperationalVerify(dataDir, backupDir, serverConfigPath,
+                          passphrase: string;
                           verifySegments, metricsFormat, jsonFormat: bool) =
+  if serverConfigPath.len > 0:
+    printServerConfigReport(serverConfigPath, metricsFormat, jsonFormat)
+    return
+
   if backupDir.len > 0:
     let stats =
       if passphrase.len > 0: verifyEncryptedBackup(backupDir, passphrase)
@@ -560,14 +749,14 @@ proc runOperationalVerify(dataDir, backupDir, passphrase: string;
   if not report.ok:
     quit(1)
 
-proc runDoctor(dataDir, backupDir, passphrase: string;
+proc runDoctor(dataDir, backupDir, serverConfigPath, passphrase: string;
                verifySegments, metricsFormat, jsonFormat: bool) =
-  if dataDir.len > 0:
-    runOperationalVerify(dataDir, backupDir, passphrase, verifySegments,
-                         metricsFormat, jsonFormat)
+  if dataDir.len > 0 or serverConfigPath.len > 0:
+    runOperationalVerify(dataDir, backupDir, serverConfigPath, passphrase,
+                         verifySegments, metricsFormat, jsonFormat)
   elif backupDir.len > 0:
-    runOperationalVerify(dataDir, backupDir, passphrase, verifySegments,
-                         metricsFormat, jsonFormat)
+    runOperationalVerify(dataDir, backupDir, serverConfigPath, passphrase,
+                         verifySegments, metricsFormat, jsonFormat)
   else:
     runDoctorSetup()
 
@@ -2638,13 +2827,13 @@ proc printHelp() =
   echo "  kouten locality --data=DIR [--metrics]"
   echo "  kouten backup --data=DIR --backup=DIR [--durability=buffered|strong]"
   echo "  kouten restore --backup=DIR --data=DIR [--overwrite] [--durability=buffered|strong]"
-  echo "  kouten verify [--data=DIR | --backup=DIR] [--segments] [--metrics] [--json]"
+  echo "  kouten verify [--data=DIR | --backup=DIR | --server-config=FILE] [--segments] [--metrics] [--json]"
   echo "  kouten dump --data=DIR [--out=FILE] [--no-vectors]"
   echo "  kouten import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING] [--batch-size=N]"
   echo "  kouten universe-sync --data=SOURCE_DIR [--target-data=TARGET_DIR | --peers=host:port,...] [--prune-acked]"
   echo "  kouten universe-status [--data=DIR | --peers=host:port,...] [--metrics]"
   echo "  kouten recovery-status [--mirror=DIR...] [--universe-config=FILE] [--required-healthy=N] [--metrics]"
-  echo "  kouten doctor [--data=DIR | --backup=DIR] [--segments] [--metrics] [--json]"
+  echo "  kouten doctor [--data=DIR | --backup=DIR | --server-config=FILE] [--segments] [--metrics] [--json]"
   echo ""
   echo "ID formats:"
   echo "  parent:seq"
@@ -2719,6 +2908,7 @@ proc main() =
   var authRef = ""
   var redisEndpoint = "127.0.0.1:6379"
   var configPath = getEnv("KOUTEN_CONFIG")
+  var serverConfigPath = ""
   var universeConfig = ""
   var driverManifestPath = ""
   var driverProjectDir = ""
@@ -2804,6 +2994,7 @@ proc main() =
       case key
       of "help": help = true
       of "config": configPath = val
+      of "server-config": serverConfigPath = val
       of "peers": peers = val
       of "data": dataDir = val
       of "target-data": targetDataDir = val
@@ -3026,8 +3217,9 @@ proc main() =
   of "working-set-bench": runWorkingSetBench(n, ringCount, queries, budget)
   of "memory-pressure-bench": runMemoryPressureBench(n, ringCount, queries,
                                                      budget, payloadBytes)
-  of "doctor": runDoctor(dataDir, backupDir, backupPassphrase, verifySegments,
-                         metricsFormat, jsonFormat)
+  of "doctor": runDoctor(dataDir, backupDir, serverConfigPath,
+                         backupPassphrase, verifySegments, metricsFormat,
+                         jsonFormat)
   of "driver":
     let driverArgs = if positionals.len > 1: positionals[1 .. ^1] else: @[]
     runDriver(driverArgs, driverManifestPath, driverProjectDir,
@@ -3036,8 +3228,9 @@ proc main() =
   of "locality": runLocality(dataDir, metricsFormat)
   of "backup": runBackup(dataDir, backupDir, durability)
   of "restore": runRestore(backupDir, dataDir, overwrite, durability)
-  of "verify": runOperationalVerify(dataDir, backupDir, backupPassphrase,
-                                    verifySegments, metricsFormat, jsonFormat)
+  of "verify": runOperationalVerify(dataDir, backupDir, serverConfigPath,
+                                    backupPassphrase, verifySegments,
+                                    metricsFormat, jsonFormat)
   of "backup-encrypted": runBackupEncrypted(dataDir, backupDir, backupPassphrase,
                                             durability)
   of "restore-encrypted": runRestoreEncrypted(backupDir, dataDir,

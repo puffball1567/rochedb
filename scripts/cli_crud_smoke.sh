@@ -250,6 +250,46 @@ bin/kouten verify --backup="$WORK/verify-backup" --json |
   grep -q '"kind": "backup"'
 bin/kouten doctor --data="$KOUTEN_DATA" |
   grep -q "verify status: ok"
+printf 'right\n' > "$WORK/server-password"
+printf 'secret\n' > "$WORK/server-secret"
+cat >"$WORK/server-config.json" <<CONFIG
+{
+  "id": 0,
+  "peers": ["127.0.0.1:${BASE_PORT}"],
+  "dataDir": "$KOUTEN_DATA",
+  "durability": "buffered",
+  "user": "app",
+  "passwordFile": "$WORK/server-password",
+  "secretKeyFile": "$WORK/server-secret",
+  "allowRing": ["docs", "cluster"],
+  "roles": [
+    {
+      "user": "reader",
+      "passwordFile": "$WORK/server-password",
+      "role": "reader",
+      "prefixes": ["docs"]
+    }
+  ]
+}
+CONFIG
+bin/kouten verify --server-config="$WORK/server-config.json" |
+  grep -q "server-config:"
+bin/kouten verify --server-config="$WORK/server-config.json" --metrics |
+  grep -q "verifyOk 1"
+bin/kouten doctor --server-config="$WORK/server-config.json" --json |
+  grep -q '"kind": "server-config"'
+cat >"$WORK/bad-server-config.json" <<CONFIG
+{
+  "id": 4,
+  "peers": ["127.0.0.1:${BASE_PORT}"],
+  "secretKey": "secret",
+  "tlsInsecureSkipVerify": true
+}
+CONFIG
+if bin/kouten verify --server-config="$WORK/bad-server-config.json" >/dev/null 2>&1; then
+  echo "verify accepted bad server config" >&2
+  exit 1
+fi
 
 echo "[cli-crud] shell"
 shell_out="$(bin/kouten shell --data="$WORK/shell" <<'SHELL'

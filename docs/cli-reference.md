@@ -358,4 +358,18 @@ Recovery commands accept `--mirror`, `--universe-config`, `--universe`,
 | `rag-bench` | Synthetic RAG-style working-set/token benchmark. |
 | `working-set-bench` | Working-set reduction benchmark. |
 | `memory-pressure-bench` | Candidate memory pressure benchmark. |
-| `doctor` | Without `--data` / `--backup`, check optional native dependencies such as the FAISS bridge. With `--data=DIR` or `--backup=DIR`, run operational verification. |
+| `doctor` | Without `--data` / `--backup` / `--server-config`, check optional native dependencies such as the FAISS bridge. With `--data=DIR`, `--backup=DIR`, or `--server-config=FILE`, run operational verification. |
+
+## Operational Verification
+
+| Command | Purpose |
+|---|---|
+| `verify --data=DIR [--segments]` | Open/replay a persistent data directory and check WAL, metadata, locality, and optional segment rebuild health. |
+| `verify --backup=DIR` | Verify backup readability before restore. |
+| `verify --server-config=FILE` | Validate a `koutend` server JSON config before startup. |
+| `doctor --server-config=FILE --json` | Emit the same server config checks as JSON. |
+
+Server config verification checks `id` / `peers`, persistence, auth
+combinations, secret file readability, role entries, ring-prefix authorization
+shape, TLS cert/key pairing, TLS file existence, and whether certificate
+verification has been explicitly disabled.

@@ -94,6 +94,13 @@ comma-separated string or an array. `roles` may contain either
 `"user:password:role[:prefix1,prefix2]"` strings or objects with `user`,
 `password`, `role`, and optional `prefixes`.
 
+Validate a server config before startup:
+
+```sh
+kouten verify --server-config=/etc/koutendb/server.json
+kouten doctor --server-config=/etc/koutendb/server.json --json
+```
+
 | Flag | Meaning |
 |---|---|
 | `--config=FILE` | Load server defaults from JSON. `KOUTEN_SERVER_CONFIG` can point to the same file. |
