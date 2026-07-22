@@ -203,6 +203,7 @@ or stellar lens.
 | `backupEncrypted(dstDir, passphrase)` | Create an encrypted backup. |
 | `verifyBackup(backupDir)` | Verify a backup. |
 | `operationalVerify(dataDir, diskBacked = true, verifySegments = false)` | Open and inspect a persistent embedded data directory. |
+| `auditLogPath(dataDir)` / `auditLogPath(db)` | Return the append-only audit JSONL path for persistent embedded stores. |
 | `restoreBackup(backupDir, dataDir, overwrite = false, durability = durBuffered)` | Restore into a data directory. |
 | `restoreEncryptedBackup(backupDir, dataDir, passphrase, overwrite = false, durability = durBuffered)` | Restore an encrypted backup into a data directory. |
 | `dump(path = "", includeVectors = true)` | Export `koutendb.dump.v1` JSONL with ring, payload, vector, and codec metadata. |

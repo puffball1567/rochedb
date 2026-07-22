@@ -136,7 +136,7 @@ Translations:
 | TLS | Done | Standard TCP transport TLS is implemented for `-d:ssl` builds; certificate rotation and managed CA workflows remain operational work |
 | Ring/galaxy authz | PoC | Ring prefix authorization is implemented for named-ring wire operations; richer role policy is pending |
 | Backup encryption | Done | `backupEncrypted` / `restoreEncryptedBackup` and `kouten backup-encrypted` / `restore-encrypted` use nimsodium secretbox |
-| General audit log | Planned | Full append-only access/change audit for enterprise / regulated workloads. Warp jobs already persist attempts / retryAt / ack / dead-letter state, but that is job state, not a database-wide audit log |
+| General audit log | Foundation | Persistent embedded stores append `kouten.audit.jsonl` for direct write/update/delete, backup, restore, compact, and guardrail denial events. Server auth/access audit and full enterprise policy remain planned |
 | Threat model document | Draft | `docs/threat-model.md` covers assets, trust boundaries, current controls, and known gaps |
 
 ## Post-v0.1 Roadmap Candidates

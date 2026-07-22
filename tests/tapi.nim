@@ -1307,6 +1307,48 @@ suite "永続化":
     removeDir(backupDir)
     removeDir(restoredDir)
 
+  test "persistent stores append operational audit JSONL":
+    let root = createTempDir("koutendb", "audit-jsonl")
+    let dir = root / "db"
+    let backupDir = root / "backup"
+    let restoredDir = root / "restored"
+    try:
+      var db = open(dataDir = dir)
+      db.configureGuardrails(KoutenGuardrails(maxPayloadBytes: 16))
+      let id = db.put(%*{"n": 1}, ring = "audit/r")
+      db.update(id, %*{"n": 2})
+      db.remove(id)
+      expect ValueError:
+        discard db.put("this-payload-is-too-large", ring = "audit/r")
+      discard db.backup(backupDir)
+      discard db.compact()
+      let path = db.auditLogPath()
+      check path == auditLogPath(dir)
+      db.close()
+
+      discard restoreBackup(backupDir, restoredDir)
+
+      let lines = readFile(path).strip().splitLines()
+      var events: seq[string] = @[]
+      var sawDenied = false
+      for line in lines:
+        let node = parseJson(line)
+        events.add node["event"].getStr()
+        if node["event"].getStr() == "guardrail-denied":
+          sawDenied = true
+          check not node["ok"].getBool()
+      check "put" in events
+      check "update" in events
+      check "delete" in events
+      check "backup" in events
+      check "compact" in events
+      check sawDenied
+
+      let restoreLines = readFile(auditLogPath(restoredDir)).strip().splitLines()
+      check parseJson(restoreLines[^1])["event"].getStr() == "restore"
+    finally:
+      removeDir(root)
+
   test "transaction-created ring names survive reopen":
     let dir = createTempDir("koutendb", "tx-ring-name")
     var db = open(dataDir = dir)

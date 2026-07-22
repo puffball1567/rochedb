@@ -204,6 +204,7 @@ type
     lastRingKey: uint64
     # embedded
     clock: float
+    dataDir: string
     st: Store
     vectorBackend: VectorBackend
     plannerBackend: PlannerBackend
@@ -505,6 +506,44 @@ proc defaultGuardrails*(): KoutenGuardrails =
   KoutenGuardrails(maxPayloadBytes: 0, maxVectorDim: 0, maxRingCount: 0,
                    maxRecordsPerRing: 0)
 
+proc appendAudit(dataDir, event: string; ok = true; ring = ""; id = "";
+                 message = ""; extra: JsonNode = nil) =
+  if dataDir.len == 0:
+    return
+  var node = %*{
+    "timestamp": epochTime(),
+    "event": event,
+    "ok": ok,
+    "ring": ring,
+    "id": id,
+    "message": message
+  }
+  if not extra.isNil:
+    node["extra"] = extra
+  let path = dataDir / "kouten.audit.jsonl"
+  var f = open(path, fmAppend)
+  try:
+    f.writeLine($node)
+  finally:
+    f.close()
+
+proc auditLogPath*(dataDir: string): string =
+  if dataDir.len == 0:
+    return ""
+  dataDir / "kouten.audit.jsonl"
+
+proc audit(db: KoutenDb, event: string; ok = true; ring = ""; id = "";
+           message = ""; extra: JsonNode = nil) =
+  if db.mode == mEmbedded:
+    appendAudit(db.dataDir, event, ok = ok, ring = ring, id = id,
+                message = message, extra = extra)
+
+proc auditLogPath*(db: KoutenDb): string =
+  if db.mode == mEmbedded:
+    auditLogPath(db.dataDir)
+  else:
+    ""
+
 proc tuningFromSearchProfile*(profile: SearchProfile): RetrievalTuning =
   case profile.amount
   of raFew:
@@ -717,6 +756,7 @@ proc open*(nodes: int = 8, dataDir: string = "",
   let tbl = equalArcTable(1, uint16(nodes))
   result = KoutenDb(mode: mEmbedded,
                    tbl: tbl,
+                   dataDir: dataDir,
                    st: openStore(dataDir, durability = durability,
                                  diskBacked = diskBacked),
                    vectorBackend: newExactVectorBackend(),
@@ -980,7 +1020,14 @@ proc compact*(db: KoutenDb): CompactStats =
   ## cluster 接続では各 koutend 側の管理操作として実行する。
   if db.mode != mEmbedded:
     raise newException(ValueError, "cluster connection cannot compact remote stores")
-  db.st.compact()
+  result = db.st.compact()
+  db.audit("compact", extra = %*{
+    "beforeBytes": result.beforeBytes,
+    "afterBytes": result.afterBytes,
+    "items": result.items,
+    "rings": result.ringMeta,
+    "ringNames": result.ringNames
+  })
 
 proc localityReport*(db: KoutenDb): LocalityReport =
   ## 組み込み Store の WAL 物理配置を調べる。
@@ -993,13 +1040,27 @@ proc backup*(db: KoutenDb, dstDir: string): BackupStats =
   ## 現在の embedded Store 状態を compact 済み WAL として dstDir に退避する。
   if db.mode != mEmbedded:
     raise newException(ValueError, "cluster connection cannot backup remote stores")
-  db.st.backup(dstDir)
+  result = db.st.backup(dstDir)
+  db.audit("backup", extra = %*{
+    "destination": dstDir,
+    "bytes": result.bytes,
+    "items": result.items,
+    "rings": result.ringMeta,
+    "ringNames": result.ringNames
+  })
 
 proc backupEncrypted*(db: KoutenDb, dstDir, passphrase: string): BackupStats =
   ## 現在の embedded Store 状態を encrypted compact snapshot として dstDir に退避する。
   if db.mode != mEmbedded:
     raise newException(ValueError, "cluster connection cannot backup remote stores")
-  db.st.backupEncrypted(dstDir, passphrase)
+  result = db.st.backupEncrypted(dstDir, passphrase)
+  db.audit("backup-encrypted", extra = %*{
+    "destination": dstDir,
+    "bytes": result.bytes,
+    "items": result.items,
+    "rings": result.ringMeta,
+    "ringNames": result.ringNames
+  })
 
 proc verifyBackup*(backupDir: string): BackupStats =
   ## backupDir の WAL snapshot を復元前に strict 検証する。
@@ -1081,16 +1142,30 @@ proc operationalVerify*(dataDir: string; diskBacked = true;
 proc restoreBackup*(backupDir, dataDir: string, overwrite = false,
                     durability: KoutenDurability = durBuffered): BackupStats =
   ## backupDir の WAL を dataDir へ復元する。dataDir が既存の場合は overwrite が必要。
-  store.restoreBackup(backupDir, dataDir, overwrite = overwrite,
-                      durability = durability)
+  result = store.restoreBackup(backupDir, dataDir, overwrite = overwrite,
+                               durability = durability)
+  appendAudit(dataDir, "restore", extra = %*{
+    "source": backupDir,
+    "bytes": result.bytes,
+    "items": result.items,
+    "rings": result.ringMeta,
+    "ringNames": result.ringNames
+  })
 
 proc restoreEncryptedBackup*(backupDir, dataDir, passphrase: string,
                              overwrite = false,
                              durability: KoutenDurability = durBuffered): BackupStats =
   ## backupDir の encrypted backup を dataDir へ復元する。
-  store.restoreEncryptedBackup(backupDir, dataDir, passphrase,
-                               overwrite = overwrite,
-                               durability = durability)
+  result = store.restoreEncryptedBackup(backupDir, dataDir, passphrase,
+                                        overwrite = overwrite,
+                                        durability = durability)
+  appendAudit(dataDir, "restore-encrypted", extra = %*{
+    "source": backupDir,
+    "bytes": result.bytes,
+    "items": result.items,
+    "rings": result.ringMeta,
+    "ringNames": result.ringNames
+  })
 
 proc writeDumpLine(outFile: File, node: JsonNode): BiggestInt =
   let line = $node
@@ -1572,9 +1647,17 @@ proc checkPayloadGuardrails(db: KoutenDb, encoded: EncodedPayload,
                             vecLen: int) =
   let g = db.guardrails
   if g.maxPayloadBytes > 0 and encoded.data.len > g.maxPayloadBytes:
+    db.audit("guardrail-denied", ok = false,
+             message = "payload exceeds maxPayloadBytes",
+             extra = %*{"maxPayloadBytes": g.maxPayloadBytes,
+                        "payloadBytes": encoded.data.len})
     raise newException(ValueError,
       "payload exceeds maxPayloadBytes " & $g.maxPayloadBytes)
   if g.maxVectorDim > 0 and vecLen > g.maxVectorDim:
+    db.audit("guardrail-denied", ok = false,
+             message = "vector dimension exceeds maxVectorDim",
+             extra = %*{"maxVectorDim": g.maxVectorDim,
+                        "vectorDim": vecLen})
     raise newException(ValueError,
       "vector dimension exceeds maxVectorDim " & $g.maxVectorDim)
 
@@ -1584,11 +1667,19 @@ proc checkWriteGuardrails(db: KoutenDb, encoded: EncodedPayload,
   let g = db.guardrails
   if g.maxRingCount > 0 and ring notin db.ringNames and
       db.ringNames.len >= g.maxRingCount:
+    db.audit("guardrail-denied", ok = false, ring = ring,
+             message = "ring count exceeds maxRingCount",
+             extra = %*{"maxRingCount": g.maxRingCount,
+                        "ringCount": db.ringNames.len})
     raise newException(ValueError,
       "ring count exceeds maxRingCount " & $g.maxRingCount)
   if g.maxRecordsPerRing > 0 and db.mode == mEmbedded and ring in db.ringNames:
     let key = db.ringNames[ring]
     if db.liveRecordsInEmbeddedRing(key) >= g.maxRecordsPerRing:
+      db.audit("guardrail-denied", ok = false, ring = ring,
+               message = "ring records exceed maxRecordsPerRing",
+               extra = %*{"maxRecordsPerRing": g.maxRecordsPerRing,
+                          "records": db.liveRecordsInEmbeddedRing(key)})
       raise newException(ValueError,
         "ring records exceed maxRecordsPerRing " & $g.maxRecordsPerRing)
 
@@ -1611,6 +1702,10 @@ proc put*(db: KoutenDb, encoded: EncodedPayload, ring: string = "default",
     db.st.upsert p
     if not db.st.diskBacked:
       db.vectorBackend.upsert p
+    db.audit("put", ring = ring, id = $result,
+             extra = %*{"payloadBytes": encoded.data.len,
+                        "vectorDim": vec.len,
+                        "codec": $encoded.codec})
   of mCluster:
     # 書き込み先 = 環ヘッド角の所有ノード（決定論的 write leader, §7 の最小版）
     let node = int(db.tbl.owner(ri.headAngle))
@@ -1701,6 +1796,12 @@ proc putSynced*(db: KoutenDb, encoded: EncodedPayload,
     for idx in staged.removed:
       db.universeSyncEvents.delete(idx)
     db.universeSyncEvents.add staged.event
+    db.audit("put-synced", ring = ring, id = $result,
+             extra = %*{"payloadBytes": encoded.data.len,
+                        "vectorDim": vec.len,
+                        "codec": $encoded.codec,
+                        "sourceUniverse": sourceUniverse,
+                        "sourceGalaxy": sourceGalaxy})
   except CatchableError:
     if not committed:
       tx.rollback()
@@ -1745,6 +1846,11 @@ proc put*(tx: KoutenTx, encoded: EncodedPayload, ring: string = "default",
     if g.maxRecordsPerRing > 0:
       let staged = tx.stagedRingWrites.getOrDefault(key, 0)
       if tx.db.liveRecordsInEmbeddedRing(key) + staged >= g.maxRecordsPerRing:
+        tx.db.audit("guardrail-denied", ok = false, ring = ring,
+                    message = "ring records exceed maxRecordsPerRing",
+                    extra = %*{"maxRecordsPerRing": g.maxRecordsPerRing,
+                               "records": tx.db.liveRecordsInEmbeddedRing(key),
+                               "stagedRecords": staged})
         raise newException(ValueError,
           "ring records exceed maxRecordsPerRing " & $g.maxRecordsPerRing)
     if tx.db.st.ringNames.getOrDefault(key, "") != ring:
@@ -2085,6 +2191,7 @@ proc remove*(db: KoutenDb, id: KoutenId) =
       raise newException(KeyError, "id が見つからない")
     db.st.remove(id.parent, id.seq)
     db.vectorBackend.remove(id.parent, id.seq)
+    db.audit("delete", id = $id)
   of mCluster:
     let ri = db.rings[id.parent]
     let txid = db.client.txBeginReq(0)
@@ -2120,6 +2227,10 @@ proc update*(db: KoutenDb, id: KoutenId, encoded: EncodedPayload,
     db.st.upsert p
     if not db.st.diskBacked:
       db.vectorBackend.upsert p
+    db.audit("update", id = $id,
+             extra = %*{"payloadBytes": encoded.data.len,
+                        "vectorDim": vec.len,
+                        "codec": $encoded.codec})
   of mCluster:
     let ri = db.rings[id.parent]
     let txid = db.client.txBeginReq(0)
