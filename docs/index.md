@@ -22,6 +22,7 @@ downstream AI/RAG or application logic.
 - [Use Case Recipes](use-case-recipes.md)
 - [Technical FAQ](technical-faq.md)
 - [Feature Status / Roadmap](koutendb-status.md)
+- [v0.10 Roadmap](v0.10-roadmap.md)
 - [Benchmark Notes](koutendb-bench.md)
 - [Benchmark Comparison Tables](benchmark-comparison.md)
 - [Effect Validation](effect-validation.md)

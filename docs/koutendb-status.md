@@ -5,6 +5,8 @@ references and may lag behind this file.
 
 Release checklist: [release-checklist.md](./release-checklist.md)
 
+Current next-release planning: [v0.10-roadmap.md](./v0.10-roadmap.md)
+
 Translations:
 
 - Japanese: [koutendb-status.ja.md](./koutendb-status.ja.md)
