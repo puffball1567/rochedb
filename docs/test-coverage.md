@@ -22,6 +22,7 @@ matrix used before releases.
 | Cluster failure | `tests/tcluster_failure.nim`, `scripts/cluster_failure_smoke.sh` | Smoke-covered: owner restart and retry boundaries |
 | Universe sync | `examples/universe_sync_demo.nim`, `scripts/universe_sync_*_smoke.sh` | Smoke-covered: local export/apply, remote apply, idempotency, retry/dead-letter handling, applied-key retention, malformed JSONL handling |
 | Recovery | `scripts/recovery_smoke.sh` | Smoke-covered: backup/restore and recovery status paths |
+| Compose examples | `scripts/compose_config_smoke.sh` | Smoke-covered: every `examples/compose/*.compose.yml` file parses with Docker Compose, including the optional tools profile |
 | Driver compatibility | `scripts/driver_compat.sh` | Optional smoke: C, C++, and published driver-facing C ABI paths when enabled |
 | Data model demos | `scripts/demo_smoke.sh`, `examples/stellar_data_model_demo.sh`, `examples/locality_layout_demo.sh`, `examples/payload_codecs_demo.sh`, `examples/effect_validation_demo.sh` | Demo-covered: non-copy stellar visibility, narrowed stellar reads, original ring preservation after detach, payload codec persistence, compaction locality reporting, messy locality workloads, compact-before/after logical result invariants, lightweight effect validation, and read micro-samples. `examples/effect_validation_matrix.sh` and `examples/offline_effect_validation.sh` are manual validation tools, not default CI smoke steps. |
 
@@ -40,6 +41,7 @@ scripts/cluster_wire_fuzz_smoke.sh
 scripts/recovery_smoke.sh
 scripts/universe_sync_failure_smoke.sh
 scripts/universe_sync_remote_smoke.sh
+scripts/compose_config_smoke.sh
 ```
 
 `scripts/test_all_smoke.sh` runs the same sequence and skips driver
