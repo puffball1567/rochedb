@@ -67,6 +67,8 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 |---|---|---|
 | `CompactStats` | store-defined | Result of WAL compaction. |
 | `BackupStats` | store-defined | Result of backup / verify / restore operations. |
+| `KoutenOperationalVerifyReport` | object | Data-dir operational verification report. |
+| `KoutenOperationalCheck` | object | One named operational verification check. |
 | `DumpStats` | `bytes`, `records`, `rings`, `documents`, `destination` | JSONL dump summary. |
 | `ImportStats` | `read`, `imported`, `skipped`, `errors`, `rings`, `batches`, `batchSize`, `source`, `defaultRing` | JSONL import summary, including chunked bulk-load commit information. |
 | `KoutenDurability` | `durBuffered`, `durStrong` | WAL durability mode. |
@@ -199,6 +201,7 @@ or stellar lens.
 | `backup(dstDir)` | Create a compact backup. |
 | `backupEncrypted(dstDir, passphrase)` | Create an encrypted backup. |
 | `verifyBackup(backupDir)` | Verify a backup. |
+| `operationalVerify(dataDir, diskBacked = true, verifySegments = false)` | Open and inspect a persistent embedded data directory. |
 | `restoreBackup(backupDir, dataDir, overwrite = false, durability = durBuffered)` | Restore into a data directory. |
 | `restoreEncryptedBackup(backupDir, dataDir, passphrase, overwrite = false, durability = durBuffered)` | Restore an encrypted backup into a data directory. |
 | `dump(path = "", includeVectors = true)` | Export `koutendb.dump.v1` JSONL with ring, payload, vector, and codec metadata. |

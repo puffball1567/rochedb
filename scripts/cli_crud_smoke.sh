@@ -232,6 +232,16 @@ bin/kouten get --data="$WORK/imported" --ring=artifacts/nif --limit=1 |
 bin/kouten get --data="$WORK/imported" --ring=artifacts/bif --limit=1 |
   grep -q '"codec": "bif"'
 
+echo "[cli-crud] operational verify"
+bin/kouten verify --data="$KOUTEN_DATA" |
+  grep -q "verify status: ok"
+bin/kouten verify --data="$KOUTEN_DATA" --metrics |
+  grep -q "verifyOk 1"
+bin/kouten verify --data="$KOUTEN_DATA" --segments |
+  grep -q "ok   segments:"
+bin/kouten doctor --data="$KOUTEN_DATA" |
+  grep -q "verify status: ok"
+
 echo "[cli-crud] shell"
 shell_out="$(bin/kouten shell --data="$WORK/shell" <<'SHELL'
 put docs/japan {"title":"Shell","status":"ok"}

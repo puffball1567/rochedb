@@ -309,6 +309,7 @@ For scripts and reproducible examples, prefer the single-shot commands above.
 | `restore` | `--backup=DIR --data=DIR` | Restore backup. |
 | `backup-encrypted` | `--data=DIR --backup=DIR --passphrase=TEXT` | Create encrypted backup. |
 | `restore-encrypted` | `--backup=DIR --data=DIR --passphrase=TEXT` | Restore encrypted backup. |
+| `verify` | `--data=DIR`; optional `--segments`, `--metrics` | Open and inspect a persistent data directory for WAL replay, lock, metadata, locality, and rebuildable segment layout. |
 | `dump` | `--data=DIR` | Export JSONL. |
 | `import-jsonl` | `--data=DIR --in=FILE`; optional `--batch-size=N` | Import JSONL with chunked commits. |
 | `describe-galaxy` | `--data=DIR --description=TEXT` | Set galaxy map description. |
@@ -356,4 +357,4 @@ Recovery commands accept `--mirror`, `--universe-config`, `--universe`,
 | `rag-bench` | Synthetic RAG-style working-set/token benchmark. |
 | `working-set-bench` | Working-set reduction benchmark. |
 | `memory-pressure-bench` | Candidate memory pressure benchmark. |
-| `doctor` | Check optional native dependencies such as FAISS bridge. |
+| `doctor` | Without `--data`, check optional native dependencies such as the FAISS bridge. With `--data=DIR`, run operational data-dir verification. |

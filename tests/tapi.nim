@@ -1,6 +1,6 @@
 ## 公開 API（src/koutendb.nim）のテスト
 
-import std/[json, os, strutils, tempfiles, tables, times, unittest]
+import std/[json, os, sequtils, strutils, tempfiles, tables, times, unittest]
 import ../src/koutendb
 
 suite "public api":
@@ -1476,6 +1476,30 @@ suite "永続化":
         sortField: "time",
         sortDirection: rsDesc)).items.len == 16
       reopened.close()
+    finally:
+      removeDir(root)
+
+  test "operationalVerify opens WAL and reports segment/locality health":
+    let root = createTempDir("koutendb", "operational-verify")
+    let dir = root / "db"
+    try:
+      var db = open(dataDir = dir, diskBacked = true)
+      discard db.put(%*{"name": "a"}, ring = "ops/a")
+      discard db.put(%*{"name": "b"}, ring = "ops/b")
+      db.close()
+
+      let report = operationalVerify(dir, verifySegments = true)
+      check report.ok
+      check report.dataDir == dir
+      check report.walExists
+      check report.walBytes > 0
+      check report.items == 2
+      check report.rings >= 2
+      check report.locality.persistent
+      check report.segmentDirExists
+      check report.checks.len >= 4
+      check report.checks.anyIt(it.name == "open-replay-lock" and it.ok)
+      check report.checks.anyIt(it.name == "segments" and it.ok)
     finally:
       removeDir(root)
 

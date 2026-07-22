@@ -392,6 +392,31 @@ type
   BackupStats* = StoreBackupStats
   LocalityReport* = StoreLocalityReport
 
+  KoutenOperationalCheck* = object
+    name*: string
+    ok*: bool
+    message*: string
+
+  KoutenOperationalVerifyReport* = object
+    ok*: bool
+    dataDir*: string
+    persistent*: bool
+    diskBacked*: bool
+    walPath*: string
+    walExists*: bool
+    walBytes*: int64
+    items*: int
+    rings*: int
+    ringNames*: int
+    vectors*: int
+    galaxy*: string
+    segmentDir*: string
+    segmentDirExists*: bool
+    segmentFiles*: int
+    segmentPackRecords*: int
+    locality*: LocalityReport
+    checks*: seq[KoutenOperationalCheck]
+
   DumpStats* = object
     bytes*: BiggestInt
     records*: int
@@ -969,6 +994,75 @@ proc verifyBackup*(backupDir: string): BackupStats =
 proc verifyEncryptedBackup*(backupDir, passphrase: string): BackupStats =
   ## backupDir の encrypted backup を復号し、復元前に strict 検証する。
   store.verifyEncryptedBackup(backupDir, passphrase)
+
+proc addOperationalCheck(report: var KoutenOperationalVerifyReport;
+                         name: string; ok: bool; message: string) =
+  report.checks.add KoutenOperationalCheck(name: name, ok: ok,
+                                           message: message)
+  if not ok:
+    report.ok = false
+
+proc operationalVerify*(dataDir: string; diskBacked = true;
+                        verifySegments = false): KoutenOperationalVerifyReport =
+  ## Open and inspect a persistent embedded data directory for operational
+  ## readiness checks. Opening the store exercises WAL replay, recovery gates,
+  ## and the data-directory lock. Segment verification can rebuild the
+  ## rebuildable read layout; the WAL remains the source of truth.
+  if dataDir.len == 0:
+    raise newException(ValueError, "operationalVerify requires dataDir")
+
+  result.ok = true
+  result.dataDir = dataDir
+  result.walPath = dataDir / "kouten.log"
+  result.walExists = fileExists(result.walPath)
+  if result.walExists:
+    result.walBytes = getFileSize(result.walPath)
+  result.addOperationalCheck("data-dir", dirExists(dataDir), dataDir)
+  result.addOperationalCheck("wal-file", result.walExists, result.walPath)
+
+  var db = open(dataDir = dataDir, diskBacked = diskBacked)
+  try:
+    result.persistent = true
+    result.diskBacked = db.st.diskBacked
+    result.items =
+      if db.st.diskBacked: db.st.itemOffsets.len
+      else: db.st.items.len
+    result.rings = db.st.ringMeta.len
+    result.ringNames = db.st.ringNames.len
+    result.vectors = db.st.vectorCount
+    result.galaxy = db.st.galaxy
+    result.segmentDir = dataDir / "segments"
+    result.segmentDirExists = dirExists(result.segmentDir)
+    if result.segmentDirExists:
+      for kind, _ in walkDir(result.segmentDir):
+        if kind == pcFile:
+          inc result.segmentFiles
+    result.locality = db.localityReport()
+    result.addOperationalCheck("open-replay-lock", true, "opened and replayed WAL")
+    result.addOperationalCheck("metadata", true,
+      "items=" & $result.items & " rings=" & $result.rings &
+      " ringNames=" & $result.ringNames)
+    result.addOperationalCheck("locality-report", true,
+      "ringRuns=" & $result.locality.ringRuns &
+      " localityScore=" & $result.locality.localityScore)
+    if verifySegments:
+      let packStats = db.st.rebuildRingSegments()
+      result.segmentPackRecords = packStats.records
+      result.segmentDirExists = dirExists(result.segmentDir)
+      result.segmentFiles = 0
+      if result.segmentDirExists:
+        for kind, _ in walkDir(result.segmentDir):
+          if kind == pcFile:
+            inc result.segmentFiles
+      result.addOperationalCheck("segments", true,
+        "rebuiltRecords=" & $packStats.records &
+        " files=" & $result.segmentFiles)
+    elif result.diskBacked:
+      result.addOperationalCheck("segments", result.segmentDirExists,
+        if result.segmentDirExists: "present files=" & $result.segmentFiles
+        else: "missing; run verify --segments to rebuild")
+  finally:
+    db.close()
 
 proc restoreBackup*(backupDir, dataDir: string, overwrite = false,
                     durability: KoutenDurability = durBuffered): BackupStats =

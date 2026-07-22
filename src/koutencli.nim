@@ -391,7 +391,7 @@ proc checkDir(path, label: string): bool =
   else:
     echo "miss ", label, ": ", path
 
-proc runDoctor() =
+proc runDoctorSetup() =
   echo "KoutenDB setup doctor"
   var ok = true
   ok = checkDir("third_party/faiss", "FAISS source") and ok
@@ -420,6 +420,53 @@ proc runDoctor() =
     echo "  nim c -d:ssl -o:bin/kouten src/kouten.nim"
     echo "  bin/kouten doctor"
     quit(1)
+
+proc printOperationalReport(report: KoutenOperationalVerifyReport;
+                            metricsFormat: bool) =
+  if metricsFormat:
+    echo &"verifyOk {int(report.ok)}"
+    echo &"verifyWalExists {int(report.walExists)}"
+    echo &"verifyWalBytes {report.walBytes}"
+    echo &"verifyItems {report.items}"
+    echo &"verifyRings {report.rings}"
+    echo &"verifyRingNames {report.ringNames}"
+    echo &"verifyVectors {report.vectors}"
+    echo &"verifyDiskBacked {int(report.diskBacked)}"
+    echo &"verifySegmentDirExists {int(report.segmentDirExists)}"
+    echo &"verifySegmentFiles {report.segmentFiles}"
+    echo &"verifySegmentPackRecords {report.segmentPackRecords}"
+    echo &"verifyLocalityRingRuns {report.locality.ringRuns}"
+    echo &"verifyLocalityScore {report.locality.localityScore:.6f}"
+    for check in report.checks:
+      echo &"verifyCheck{{name=\"{check.name}\"}} {int(check.ok)}"
+    return
+
+  let statusName = if report.ok: "ok" else: "failed"
+  let galaxyName = if report.galaxy.len > 0: report.galaxy else: "<none>"
+  echo &"verify status: {statusName}"
+  echo &"data: {report.dataDir}"
+  echo &"wal: exists={report.walExists} bytes={report.walBytes} path={report.walPath}"
+  echo &"store: items={report.items} rings={report.rings} ringNames={report.ringNames} vectors={report.vectors} galaxy={galaxyName}"
+  echo &"segments: diskBacked={report.diskBacked} exists={report.segmentDirExists} files={report.segmentFiles} rebuiltRecords={report.segmentPackRecords}"
+  echo &"locality: ringRuns={report.locality.ringRuns} fragmentedRings={report.locality.fragmentedRings} score={report.locality.localityScore:.6f}"
+  for check in report.checks:
+    let prefix = if check.ok: "ok  " else: "fail"
+    echo &"{prefix} {check.name}: {check.message}"
+
+proc runOperationalVerify(dataDir: string; verifySegments, metricsFormat: bool) =
+  if dataDir.len == 0:
+    raise newException(ValueError, "verify requires --data=DIR")
+  let report = operationalVerify(dataDir, diskBacked = true,
+                                 verifySegments = verifySegments)
+  printOperationalReport(report, metricsFormat)
+  if not report.ok:
+    quit(1)
+
+proc runDoctor(dataDir: string; verifySegments, metricsFormat: bool) =
+  if dataDir.len > 0:
+    runOperationalVerify(dataDir, verifySegments, metricsFormat)
+  else:
+    runDoctorSetup()
 
 proc redisBulk(parts: varargs[string]): string =
   result.add "*" & $parts.len & "\r\n"
@@ -2488,12 +2535,13 @@ proc printHelp() =
   echo "  kouten locality --data=DIR [--metrics]"
   echo "  kouten backup --data=DIR --backup=DIR [--durability=buffered|strong]"
   echo "  kouten restore --backup=DIR --data=DIR [--overwrite] [--durability=buffered|strong]"
+  echo "  kouten verify --data=DIR [--segments] [--metrics]"
   echo "  kouten dump --data=DIR [--out=FILE] [--no-vectors]"
   echo "  kouten import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING] [--batch-size=N]"
   echo "  kouten universe-sync --data=SOURCE_DIR [--target-data=TARGET_DIR | --peers=host:port,...] [--prune-acked]"
   echo "  kouten universe-status [--data=DIR | --peers=host:port,...] [--metrics]"
   echo "  kouten recovery-status [--mirror=DIR...] [--universe-config=FILE] [--required-healthy=N] [--metrics]"
-  echo "  kouten doctor"
+  echo "  kouten doctor [--data=DIR] [--segments] [--metrics]"
   echo ""
   echo "ID formats:"
   echo "  parent:seq"
@@ -2547,6 +2595,7 @@ proc main() =
   var includeVectors = true
   var metricsFormat = false
   var readonly = false
+  var verifySegments = false
   var username = ""
   var password = ""
   var passwordFile = ""
@@ -2724,6 +2773,7 @@ proc main() =
       of "overwrite": overwrite = true
       of "prune-acked": pruneAcked = true
       of "readonly": readonly = true
+      of "segments": verifySegments = true
       of "execute": executeDriverInstall = true
       of "metrics": metricsFormat = true
       of "no-vectors": includeVectors = false
@@ -2871,7 +2921,7 @@ proc main() =
   of "working-set-bench": runWorkingSetBench(n, ringCount, queries, budget)
   of "memory-pressure-bench": runMemoryPressureBench(n, ringCount, queries,
                                                      budget, payloadBytes)
-  of "doctor": runDoctor()
+  of "doctor": runDoctor(dataDir, verifySegments, metricsFormat)
   of "driver":
     let driverArgs = if positionals.len > 1: positionals[1 .. ^1] else: @[]
     runDriver(driverArgs, driverManifestPath, driverProjectDir,
@@ -2880,6 +2930,7 @@ proc main() =
   of "locality": runLocality(dataDir, metricsFormat)
   of "backup": runBackup(dataDir, backupDir, durability)
   of "restore": runRestore(backupDir, dataDir, overwrite, durability)
+  of "verify": runOperationalVerify(dataDir, verifySegments, metricsFormat)
   of "backup-encrypted": runBackupEncrypted(dataDir, backupDir, backupPassphrase,
                                             durability)
   of "restore-encrypted": runRestoreEncrypted(backupDir, dataDir,
