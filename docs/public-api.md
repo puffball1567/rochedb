@@ -48,6 +48,7 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 | `SearchDepth` | `sdShallow`, `sdNormal`, `sdDeep`, `sdVeryDeep` | How far to descend ring hierarchy. |
 | `SearchProfile` | `amount`, `scope`, `depth`, `note` | Named human-facing retrieval profile. |
 | `RetrievalTuning` | `budget`, `focus`, `topRings`, `branchBudget`, `maxDepth`, `includeChildren` | Lower-level retrieval knobs. Use when you need explicit tuning. |
+| `KoutenGuardrails` | `maxPayloadBytes`, `maxVectorDim`, `maxRingCount`, `maxRecordsPerRing` | Opt-in write-path limits for production trials. Zero means disabled. |
 
 ## Sync And Job Types
 
@@ -234,6 +235,7 @@ or stellar lens.
 | `configureWriteAckMode(mode)` | Set default write acknowledgement mode. |
 | `configureRingWriteAckMode(ring, mode)` | Override write acknowledgement per ring. |
 | `configureRingApplyPolicy(ring, policy)` | Configure universe apply behavior for one ring. |
+| `configureGuardrails(guardrails)` / `guardrails()` | Configure or inspect opt-in write-path limits. |
 
 See [Configuration Reference](config-reference.md) for property names and
 recommended defaults.

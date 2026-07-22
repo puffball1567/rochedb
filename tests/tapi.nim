@@ -167,6 +167,57 @@ suite "public api":
     check db.get(id) == "p"
     db.close()
 
+  test "write guardrails reject unsafe payload, vector, ring, and ring-count growth":
+    var db = open()
+    expect ValueError:
+      db.configureGuardrails(KoutenGuardrails(maxPayloadBytes: -1))
+
+    db.configureGuardrails(KoutenGuardrails(maxPayloadBytes: 4,
+                                           maxVectorDim: 2,
+                                           maxRingCount: 2,
+                                           maxRecordsPerRing: 2))
+    check db.guardrails().maxPayloadBytes == 4
+    discard db.put("ok", ring = "a", vec = @[1.0'f32, 0.0'f32])
+    discard db.put("ok", ring = "b")
+
+    expect ValueError:
+      discard db.put("large", ring = "a")
+    expect ValueError:
+      discard db.put("ok", ring = "a", vec = @[1.0'f32, 0.0'f32, 0.0'f32])
+    expect ValueError:
+      discard db.put("ok", ring = "c")
+
+    discard db.put("ok", ring = "a")
+    expect ValueError:
+      discard db.put("ok", ring = "a")
+
+    let ids = db.listByRing("a").items
+    check ids.len == 2
+    expect ValueError:
+      db.update(ids[0].id, "large")
+    db.close()
+
+  test "write guardrails cover transaction and atomic batch staging":
+    var db = open()
+    db.configureGuardrails(KoutenGuardrails(maxPayloadBytes: 8,
+                                           maxRecordsPerRing: 1))
+
+    expect ValueError:
+      discard db.batchPutAtomic(@["one", "two"], ring = "guarded")
+    check db.countByRing("guarded") == 0
+
+    let tx = db.beginTransaction()
+    try:
+      discard tx.put("one", ring = "guarded")
+      expect ValueError:
+        discard tx.put("two", ring = "guarded")
+      tx.rollback()
+    except CatchableError:
+      tx.rollback()
+      raise
+    check db.countByRing("guarded") == 0
+    db.close()
+
   test "halo は予約リングとして使える":
     var db = open(nodes = 8)
     let id = db.put("stray", ring = "halo", vec = @[3.0'f32, 4.0'f32])

@@ -74,6 +74,7 @@ Translations:
 | Authz / RBAC | PoC | `koutend --allow-ring=prefix[,prefix...]` and `--role=user:password:reader|writer|admin[:prefixes]`; `scripts/cluster_authz_smoke.sh` and `scripts/cluster_rbac_smoke.sh` cover prefix and role matrix behavior |
 | Wire fuzz smoke | Done | `scripts/cluster_wire_fuzz_smoke.sh` runs deterministic malformed-frame cases, including oversized headers and deep JSON, and verifies the cluster stays healthy |
 | Server resource guardrails | Partial | Accepted sockets have a body-read timeout and fixed active-connection cap; fuller request-deadline and per-query cost controls remain planned |
+| Embedded write guardrails | Foundation | Opt-in `KoutenGuardrails` can cap payload bytes, vector dimension, ring count, and records per ring for production trials; default zero values preserve existing behavior |
 | Bounded server retrieve | Done | `koutend` keeps only the current top candidates up to request budget while scanning local vectors instead of retaining every matching payload before truncation |
 | Dynamic membership / epoch migration | Foundation | Current peer list is still static at runtime, but v0.6 adds explicit arc tables, weighted arcs, deterministic virtual arcs, topology validation, and `remapFraction` so membership changes can be modeled with less unnecessary remapping than naive `mod nNodes`. Online rebalance workflow is still planned |
 | Cluster transaction coordinator redundancy | Planned | Remove node0 as a single point of failure |

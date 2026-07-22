@@ -114,6 +114,14 @@ type
     historyKeep*: int
     delayMs*: int
 
+  KoutenGuardrails* = object
+    ## Opt-in write-path guardrails for production trials.
+    ## A zero value means "disabled" so existing workloads keep their behavior.
+    maxPayloadBytes*: int
+    maxVectorDim*: int
+    maxRingCount*: int
+    maxRecordsPerRing*: int
+
   SearchProfile* = object
     ## 人間向けの retrieval tuning profile。
     ## RDB の optimizer hint を、KoutenDB では自然な語彙で表す。
@@ -184,6 +192,7 @@ type
     timeOrbitProfiles: Table[uint64, TimeOrbitProfile]
     ringWriteAckModes: Table[uint64, WriteAckMode]
     ringApplyPolicies: Table[uint64, RingApplyPolicy]
+    guardrails: KoutenGuardrails
     ringChildren: Table[uint64, seq[uint64]]
     stellarMembers: Table[string, seq[string]]
     stellarByMember: Table[string, seq[string]]
@@ -218,6 +227,7 @@ type
     ## cluster は node0 landing zone への atomic intent commit。
     db: KoutenDb
     tx: StoreTxn
+    stagedRingWrites: Table[uint64, int]
     clusterTxId: uint64
     clusterOps: seq[TxWireOp]
     closed: bool
@@ -490,6 +500,10 @@ proc defaultSearchProfile*(): SearchProfile =
 
 proc defaultRingApplyPolicy*(): RingApplyPolicy =
   RingApplyPolicy(mode: ramLatestOnly, historyKeep: 1, delayMs: 0)
+
+proc defaultGuardrails*(): KoutenGuardrails =
+  KoutenGuardrails(maxPayloadBytes: 0, maxVectorDim: 0, maxRingCount: 0,
+                   maxRecordsPerRing: 0)
 
 proc tuningFromSearchProfile*(profile: SearchProfile): RetrievalTuning =
   case profile.amount
@@ -1493,6 +1507,21 @@ proc ringApplyPolicy*(db: KoutenDb, ring: string): RingApplyPolicy =
   let key = db.ringKeyForRead(ring)
   db.ringApplyPolicies.getOrDefault(key, defaultRingApplyPolicy())
 
+proc configureGuardrails*(db: KoutenDb, guardrails: KoutenGuardrails) =
+  ## Configure opt-in write-path limits. Zero fields are disabled.
+  if guardrails.maxPayloadBytes < 0:
+    raise newException(ValueError, "maxPayloadBytes must be >= 0")
+  if guardrails.maxVectorDim < 0:
+    raise newException(ValueError, "maxVectorDim must be >= 0")
+  if guardrails.maxRingCount < 0:
+    raise newException(ValueError, "maxRingCount must be >= 0")
+  if guardrails.maxRecordsPerRing < 0:
+    raise newException(ValueError, "maxRecordsPerRing must be >= 0")
+  db.guardrails = guardrails
+
+proc guardrails*(db: KoutenDb): KoutenGuardrails =
+  db.guardrails
+
 proc writeAckModeForRing(db: KoutenDb, ringKey: uint64): WriteAckMode =
   db.ringWriteAckModes.getOrDefault(ringKey, db.defaultWriteAckMode)
 
@@ -1532,10 +1561,42 @@ proc waitClusterTxApplied*(db: KoutenDb, txid: uint64, timeoutMs = 10_000,
     sleep(max(1, pollMs))
   false
 
+proc liveRecordsInEmbeddedRing(db: KoutenDb, ringKey: uint64): int =
+  if db.mode != mEmbedded:
+    return 0
+  for itemKey in db.st.itemsByRing.getOrDefault(ringKey, @[]):
+    if db.st.contains(itemKey[0], itemKey[1]):
+      inc result
+
+proc checkPayloadGuardrails(db: KoutenDb, encoded: EncodedPayload,
+                            vecLen: int) =
+  let g = db.guardrails
+  if g.maxPayloadBytes > 0 and encoded.data.len > g.maxPayloadBytes:
+    raise newException(ValueError,
+      "payload exceeds maxPayloadBytes " & $g.maxPayloadBytes)
+  if g.maxVectorDim > 0 and vecLen > g.maxVectorDim:
+    raise newException(ValueError,
+      "vector dimension exceeds maxVectorDim " & $g.maxVectorDim)
+
+proc checkWriteGuardrails(db: KoutenDb, encoded: EncodedPayload,
+                          ring: string, vecLen: int) =
+  db.checkPayloadGuardrails(encoded, vecLen)
+  let g = db.guardrails
+  if g.maxRingCount > 0 and ring notin db.ringNames and
+      db.ringNames.len >= g.maxRingCount:
+    raise newException(ValueError,
+      "ring count exceeds maxRingCount " & $g.maxRingCount)
+  if g.maxRecordsPerRing > 0 and db.mode == mEmbedded and ring in db.ringNames:
+    let key = db.ringNames[ring]
+    if db.liveRecordsInEmbeddedRing(key) >= g.maxRecordsPerRing:
+      raise newException(ValueError,
+        "ring records exceed maxRecordsPerRing " & $g.maxRecordsPerRing)
+
 proc put*(db: KoutenDb, encoded: EncodedPayload, ring: string = "default",
           vec: seq[float32] = @[]): KoutenId =
   ## 書き込み。環は初回利用時に自動作成。
   ## 返る ID を持っていれば、所在は誰にも問い合わせずいつでも計算できる。
+  db.checkWriteGuardrails(encoded, ring, vec.len)
   let key = db.ringKey(ring)
   let ri = db.rings[key]
   let normVec = vec.normalize()
@@ -1608,6 +1669,7 @@ proc putSynced*(db: KoutenDb, encoded: EncodedPayload,
   ## embedded put と universe outbox 登録を同時に行う。
   ## 既存 put の意味は変えず、Universe 同期したい write path だけで使う。
   doAssert db.mode == mEmbedded, "putSynced は embedded mode 専用"
+  db.checkWriteGuardrails(encoded, ring, vec.len)
   let key = db.ringKey(ring, persist = false)
   let ri = db.rings[key]
   let normVec = vec.normalize()
@@ -1673,11 +1735,18 @@ proc put*(tx: KoutenTx, encoded: EncodedPayload, ring: string = "default",
           vec: seq[float32] = @[]): KoutenId =
   ## transaction 内の書き込み。commit まで DB 本体には見えない。
   doAssert not tx.closed, "transaction is closed"
+  tx.db.checkWriteGuardrails(encoded, ring, vec.len)
   let key = tx.db.ringKey(ring, persist = false)
   let ri = tx.db.rings[key]
   let normVec = vec.normalize()
   case tx.db.mode
   of mEmbedded:
+    let g = tx.db.guardrails
+    if g.maxRecordsPerRing > 0:
+      let staged = tx.stagedRingWrites.getOrDefault(key, 0)
+      if tx.db.liveRecordsInEmbeddedRing(key) + staged >= g.maxRecordsPerRing:
+        raise newException(ValueError,
+          "ring records exceed maxRecordsPerRing " & $g.maxRecordsPerRing)
     if tx.db.st.ringNames.getOrDefault(key, "") != ring:
       tx.tx.putRingName(key, ring)
     if key notin tx.db.st.ringMeta:
@@ -1687,6 +1756,7 @@ proc put*(tx: KoutenTx, encoded: EncodedPayload, ring: string = "default",
     tx.tx.upsert Particle(parent: key, seq: seq, period: ri.period,
                           head: ri.headAngle, tWrite: tx.db.clock,
                           payload: encoded.data, codec: encoded.codec, vec: normVec)
+    tx.stagedRingWrites[key] = tx.stagedRingWrites.getOrDefault(key, 0) + 1
   of mCluster:
     let (seq, tWrite) = tx.db.client.txReserveReq(0, tx.clusterTxId, key,
                                                   ri.period, ri.headAngle)
@@ -1719,6 +1789,7 @@ proc update*(tx: KoutenTx, id: KoutenId, encoded: EncodedPayload,
              vec: seq[float32] = @[]) =
   ## transaction 内の置換更新。commit まで DB 本体には反映されない。
   doAssert not tx.closed, "transaction is closed"
+  tx.db.checkPayloadGuardrails(encoded, vec.len)
   let normVec = vec.normalize()
   case tx.db.mode
   of mEmbedded:
@@ -2035,6 +2106,7 @@ proc deleteById*(db: KoutenDb, id: KoutenId) =
 proc update*(db: KoutenDb, id: KoutenId, encoded: EncodedPayload,
              vec: seq[float32] = @[]) =
   ## payload を置換する。vec を省略した場合は既存 vec を保持する。
+  db.checkPayloadGuardrails(encoded, vec.len)
   case db.mode
   of mEmbedded:
     if not db.st.contains(id.parent, id.seq):
