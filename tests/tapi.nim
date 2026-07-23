@@ -1600,6 +1600,14 @@ suite "永続化":
       check not cappedWal.ok
       check cappedWal.checks.anyIt(it.name == "wal-bytes-limit" and not it.ok)
 
+      let cappedItems = operationalVerify(dir, maxItems = 1)
+      check not cappedItems.ok
+      check cappedItems.checks.anyIt(it.name == "items-limit" and not it.ok)
+
+      let cappedRings = operationalVerify(dir, maxRings = 1)
+      check not cappedRings.ok
+      check cappedRings.checks.anyIt(it.name == "rings-limit" and not it.ok)
+
       let cappedSegments = operationalVerify(dir, verifySegments = true,
                                              maxSegmentFiles = 0)
       check not cappedSegments.ok

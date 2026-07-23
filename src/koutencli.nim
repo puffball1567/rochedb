@@ -730,7 +730,9 @@ proc runOperationalVerify(dataDir, backupDir, serverConfigPath,
                           passphrase: string;
                           verifySegments, metricsFormat, jsonFormat: bool;
                           maxWalBytes: int64 = -1;
-                          maxSegmentFiles = -1) =
+                          maxSegmentFiles = -1;
+                          maxItems = -1;
+                          maxRings = -1) =
   if serverConfigPath.len > 0:
     printServerConfigReport(serverConfigPath, metricsFormat, jsonFormat)
     return
@@ -748,7 +750,9 @@ proc runOperationalVerify(dataDir, backupDir, serverConfigPath,
   let report = operationalVerify(dataDir, diskBacked = true,
                                  verifySegments = verifySegments,
                                  maxWalBytes = maxWalBytes,
-                                 maxSegmentFiles = maxSegmentFiles)
+                                 maxSegmentFiles = maxSegmentFiles,
+                                 maxItems = maxItems,
+                                 maxRings = maxRings)
   printOperationalReport(report, metricsFormat, jsonFormat)
   if not report.ok:
     quit(1)
@@ -756,15 +760,17 @@ proc runOperationalVerify(dataDir, backupDir, serverConfigPath,
 proc runDoctor(dataDir, backupDir, serverConfigPath, passphrase: string;
                verifySegments, metricsFormat, jsonFormat: bool;
                maxWalBytes: int64 = -1;
-               maxSegmentFiles = -1) =
+               maxSegmentFiles = -1;
+               maxItems = -1;
+               maxRings = -1) =
   if dataDir.len > 0 or serverConfigPath.len > 0:
     runOperationalVerify(dataDir, backupDir, serverConfigPath, passphrase,
                          verifySegments, metricsFormat, jsonFormat,
-                         maxWalBytes, maxSegmentFiles)
+                         maxWalBytes, maxSegmentFiles, maxItems, maxRings)
   elif backupDir.len > 0:
     runOperationalVerify(dataDir, backupDir, serverConfigPath, passphrase,
                          verifySegments, metricsFormat, jsonFormat,
-                         maxWalBytes, maxSegmentFiles)
+                         maxWalBytes, maxSegmentFiles, maxItems, maxRings)
   else:
     runDoctorSetup()
 
@@ -2835,13 +2841,13 @@ proc printHelp() =
   echo "  kouten locality --data=DIR [--metrics]"
   echo "  kouten backup --data=DIR --backup=DIR [--durability=buffered|strong]"
   echo "  kouten restore --backup=DIR --data=DIR [--overwrite] [--durability=buffered|strong]"
-  echo "  kouten verify [--data=DIR | --backup=DIR | --server-config=FILE] [--segments] [--max-wal-bytes=N] [--max-segment-files=N] [--metrics] [--json]"
+  echo "  kouten verify [--data=DIR | --backup=DIR | --server-config=FILE] [--segments] [--max-wal-bytes=N] [--max-segment-files=N] [--max-items=N] [--max-rings=N] [--metrics] [--json]"
   echo "  kouten dump --data=DIR [--out=FILE] [--no-vectors]"
   echo "  kouten import-jsonl --data=DIR --in=FILE [--ring-field=FIELD] [--default-ring=RING] [--batch-size=N]"
   echo "  kouten universe-sync --data=SOURCE_DIR [--target-data=TARGET_DIR | --peers=host:port,...] [--prune-acked]"
   echo "  kouten universe-status [--data=DIR | --peers=host:port,...] [--metrics]"
   echo "  kouten recovery-status [--mirror=DIR...] [--universe-config=FILE] [--required-healthy=N] [--metrics]"
-  echo "  kouten doctor [--data=DIR | --backup=DIR | --server-config=FILE] [--segments] [--max-wal-bytes=N] [--max-segment-files=N] [--metrics] [--json]"
+  echo "  kouten doctor [--data=DIR | --backup=DIR | --server-config=FILE] [--segments] [--max-wal-bytes=N] [--max-segment-files=N] [--max-items=N] [--max-rings=N] [--metrics] [--json]"
   echo ""
   echo "ID formats:"
   echo "  parent:seq"
@@ -2899,6 +2905,8 @@ proc main() =
   var verifySegments = false
   var maxWalBytes: int64 = -1
   var maxSegmentFiles = -1
+  var maxItems = -1
+  var maxRings = -1
   var username = ""
   var password = ""
   var passwordFile = ""
@@ -3081,6 +3089,8 @@ proc main() =
       of "segments": verifySegments = true
       of "max-wal-bytes": maxWalBytes = parseBiggestInt(val).int64
       of "max-segment-files": maxSegmentFiles = parseInt(val)
+      of "max-items": maxItems = parseInt(val)
+      of "max-rings": maxRings = parseInt(val)
       of "execute": executeDriverInstall = true
       of "metrics": metricsFormat = true
       of "json": jsonFormat = true
@@ -3231,7 +3241,8 @@ proc main() =
                                                      budget, payloadBytes)
   of "doctor": runDoctor(dataDir, backupDir, serverConfigPath,
                          backupPassphrase, verifySegments, metricsFormat,
-                         jsonFormat, maxWalBytes, maxSegmentFiles)
+                         jsonFormat, maxWalBytes, maxSegmentFiles,
+                         maxItems, maxRings)
   of "driver":
     let driverArgs = if positionals.len > 1: positionals[1 .. ^1] else: @[]
     runDriver(driverArgs, driverManifestPath, driverProjectDir,
@@ -3243,7 +3254,8 @@ proc main() =
   of "verify": runOperationalVerify(dataDir, backupDir, serverConfigPath,
                                     backupPassphrase, verifySegments,
                                     metricsFormat, jsonFormat,
-                                    maxWalBytes, maxSegmentFiles)
+                                    maxWalBytes, maxSegmentFiles,
+                                    maxItems, maxRings)
   of "backup-encrypted": runBackupEncrypted(dataDir, backupDir, backupPassphrase,
                                             durability)
   of "restore-encrypted": runRestoreEncrypted(backupDir, dataDir,

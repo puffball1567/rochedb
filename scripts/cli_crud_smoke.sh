@@ -249,6 +249,14 @@ if bin/kouten verify --data="$KOUTEN_DATA" --max-wal-bytes=1 >/dev/null 2>&1; th
   echo "verify accepted WAL bytes above configured limit" >&2
   exit 1
 fi
+if bin/kouten verify --data="$KOUTEN_DATA" --max-items=1 >/dev/null 2>&1; then
+  echo "verify accepted items above configured limit" >&2
+  exit 1
+fi
+if bin/kouten verify --data="$KOUTEN_DATA" --max-rings=1 >/dev/null 2>&1; then
+  echo "verify accepted rings above configured limit" >&2
+  exit 1
+fi
 if bin/kouten verify --data="$KOUTEN_DATA" --segments --max-segment-files=0 >/dev/null 2>&1; then
   echo "verify accepted segment files above configured limit" >&2
   exit 1

@@ -1080,7 +1080,9 @@ proc addOperationalCheck(report: var KoutenOperationalVerifyReport;
 proc operationalVerify*(dataDir: string; diskBacked = true;
                         verifySegments = false;
                         maxWalBytes: int64 = -1;
-                        maxSegmentFiles = -1): KoutenOperationalVerifyReport =
+                        maxSegmentFiles = -1;
+                        maxItems = -1;
+                        maxRings = -1): KoutenOperationalVerifyReport =
   ## Open and inspect a persistent embedded data directory for operational
   ## readiness checks. Opening the store exercises WAL replay, recovery gates,
   ## and the data-directory lock. Segment verification can rebuild the
@@ -1123,6 +1125,14 @@ proc operationalVerify*(dataDir: string; diskBacked = true;
     result.addOperationalCheck("metadata", true,
       "items=" & $result.items & " rings=" & $result.rings &
       " ringNames=" & $result.ringNames)
+    if maxItems >= 0:
+      result.addOperationalCheck("items-limit",
+        result.items <= maxItems,
+        "items=" & $result.items & " max=" & $maxItems)
+    if maxRings >= 0:
+      result.addOperationalCheck("rings-limit",
+        result.rings <= maxRings,
+        "rings=" & $result.rings & " max=" & $maxRings)
     result.addOperationalCheck("locality-report", true,
       "ringRuns=" & $result.locality.ringRuns &
       " localityScore=" & $result.locality.localityScore)
