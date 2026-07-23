@@ -1911,6 +1911,41 @@ suite "transaction":
 
     db.close()
 
+  test "coordinate lock edge cases are fail-closed and idempotent":
+    var db = open()
+    discard db.put("user", ring = "users/123")
+
+    expect KoutenValidationError:
+      discard db.acquireRingLock("")
+    expect KoutenValidationError:
+      discard db.acquireStellarLock("")
+    expect KoutenValidationError:
+      discard db.acquireRingLock("users/123", ttlSeconds = 0)
+
+    let first = db.acquireRingLock("users/123", ttlSeconds = 0.01)
+    sleep(30)
+    let second = db.acquireRingLock("users/123", ttlSeconds = 5)
+    check second.fence > first.fence
+    check second.token != first.token
+
+    db.releaseLock(first)
+    check db.lockActive(second)
+    db.releaseLock(second)
+    db.releaseLock(second)
+    check not db.lockActive(second)
+
+    let third = db.acquireRingLock("users/123", ttlSeconds = 5)
+    check db.lockActive(third)
+    db.releaseLock(KoutenLockToken(scope: third.scope,
+                                  coordinate: third.coordinate,
+                                  token: third.token & "-stale",
+                                  fence: third.fence,
+                                  expiresAt: third.expiresAt,
+                                  keys: third.keys))
+    check db.lockActive(third)
+    db.releaseLock(third)
+    db.close()
+
 suite "galaxy router":
   test "コードから複数銀河を別 DB として扱える":
     let dirA = createTempDir("koutendb", "galaxy-a")
