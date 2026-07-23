@@ -56,6 +56,18 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 
+echo "[cluster-rbac] cli drain/snapshot/resume"
+src/koutencli drain --peers="$PEERS" --user=admin --password=admin |
+  grep -q "draining"
+src/koutencli snapshot --peers="$PEERS" --user=admin --password=admin |
+  grep -q "pendingTx"
+src/koutencli metrics --peers="$PEERS" --user=admin --password=admin |
+  grep -q "draining 1"
+src/koutencli resume --peers="$PEERS" --user=admin --password=admin |
+  grep -q "resumed"
+src/koutencli metrics --peers="$PEERS" --user=admin --password=admin |
+  grep -q "draining 0"
+
 echo "[cluster-rbac] run tcluster_rbac"
 KOUTEN_TEST_PEERS="$PEERS" nim c --nimcache:/tmp/nimcache_kouten_tcluster_rbac -r tests/tcluster_rbac.nim
 

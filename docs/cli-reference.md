@@ -95,8 +95,26 @@ kouten get --config=/etc/koutendb/client.json --ring=docs/japan
 | `metrics` | Emit server metrics. |
 | `rings` | Show ring summaries. |
 | `atlas` | Emit the galaxy/ring map. Works with `--data` or `--peers`. |
+| `drain` | Put cluster nodes into read-only maintenance mode. Requires admin auth. |
+| `snapshot` | Flush cluster nodes and report a snapshot barrier. Requires admin auth. |
+| `resume` | Leave drain mode and accept writes again. Requires admin auth. |
 | `shutdown` | Stop a server. |
 | `demo` | Run a small cluster demo. |
+
+For maintenance or backup windows, use `drain`, then `snapshot`, then run the
+backup or replacement operation, and finally `resume`:
+
+```sh
+kouten drain --peers=127.0.0.1:7301,127.0.0.1:7302 --user=admin --password-file=/run/secrets/kouten_admin
+kouten snapshot --peers=127.0.0.1:7301,127.0.0.1:7302 --user=admin --password-file=/run/secrets/kouten_admin
+kouten resume --peers=127.0.0.1:7301,127.0.0.1:7302 --user=admin --password-file=/run/secrets/kouten_admin
+```
+
+Drain mode rejects new write commands, including body-carrying frames, after
+consuming their remaining payload bytes. That keeps the TCP protocol boundary
+intact so the same connection can continue to serve reads and admin commands.
+`snapshot` is a flush/report barrier; use it after `drain` when a quiet point is
+required.
 
 ## Driver Commands
 

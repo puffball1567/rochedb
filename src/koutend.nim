@@ -54,6 +54,8 @@ type
     peerLink: ClusterClient
     slowTickSec: float
     running: bool
+    draining: bool
+    drainStartedAt: float
     authUser: string
     authPassword: string
     authSecretKey: string
@@ -76,6 +78,7 @@ type
     errorResponses: uint64
     authFailures: uint64
     authzDenied: uint64
+    drainRejectedWrites: uint64
     connectionsAccepted: uint64
     activeConnections: int
     universeApplyApplied: uint64
@@ -543,6 +546,19 @@ proc denyRingKey(sv: Server, sock: Socket, ringKey: uint64) =
            ringKey = $ringKey, message = "ring key is outside authorization boundary")
   sock.sendFrame("ERR authz-denied ringKey=" & $ringKey)
 
+proc rejectDrainedWrite(sv: Server, sock: Socket, command: string) =
+  inc sv.errorResponses
+  inc sv.drainRejectedWrites
+  sv.audit("write-denied", ok = false, user = sv.currentUser(sock),
+           message = "server is draining; command=" & command)
+  sock.sendFrame("ERR draining")
+
+proc rejectIfDraining(sv: Server, sock: Socket, command: string): bool =
+  if not sv.draining:
+    return false
+  sv.rejectDrainedWrite(sock, command)
+  true
+
 proc drainTxCommitOps(sock: Socket, nOps: int) =
   for _ in 0 ..< nOps:
     let h = sock.readHeader()
@@ -803,11 +819,15 @@ proc handleFrame(sv: Server, sock: Socket): bool =
   of "TXBEGIN":
     if not sv.requireRole(sock, roleWriter):
       return true
+    if sv.rejectIfDraining(sock, "TXBEGIN"):
+      return true
     doAssert sv.myId == 0, "TXBEGIN は node0 の landing zone で処理する"
     let txid = sv.st.reserveTxId()
     sock.sendFrame("OK " & $txid)
   of "TXRESERVE":
     if not sv.requireRole(sock, roleWriter):
+      return true
+    if sv.rejectIfDraining(sock, "TXRESERVE"):
       return true
     doAssert sv.myId == 0, "TXRESERVE は node0 の landing zone で処理する"
     requireParts(parts, "TXRESERVE", 5)
@@ -827,6 +847,10 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     requireParts(parts, "TXCOMMIT", 3)
     let txid = parseBiggestUInt(parts[1]).uint64
     let nOps = parseInt(parts[2])
+    if sv.draining:
+      sock.drainTxCommitOps(nOps)
+      sv.rejectDrainedWrite(sock, "TXCOMMIT")
+      return true
     var ops: seq[ClusterTxOp] = @[]
     for _ in 0 ..< nOps:
       let h = sock.readHeader()
@@ -875,6 +899,10 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       requireParts(parts, "UAPPLY", 2)
       let bodyLen = parseInt(parts[1])
       discard checkedWireLen(bodyLen, "bodyLen")
+      if sv.draining:
+        sock.drainBytes(bodyLen)
+        sv.rejectDrainedWrite(sock, "UAPPLY")
+        return true
       let body = sock.readExact(bodyLen)
       validateJsonDepth(body, MaxWireJsonDepth)
       let event = parseJson(body)
@@ -938,6 +966,10 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     let vecDim = parseInt(parts[data + 6])
     let codec = if parts.len > data + 7: parsePayloadCodec(parts[data + 7]) else: pcRaw
     let bodyBytes = checkedFrameBytes(payloadLen, vecDim)
+    if sv.draining:
+      sock.drainBytes(bodyBytes)
+      sv.rejectDrainedWrite(sock, "APPLYTX")
+      return true
     if not sv.ringKeyAllowed(sock, parent):
       sock.drainBytes(bodyBytes)
       sv.denyRingKey(sock, parent)
@@ -1042,6 +1074,10 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     let codec = if parts.len >= 5: parsePayloadCodec(parts[4]) else: pcRaw
     discard checkedWireLen(ringLen, "ringLen")
     let bodyBytes = checkedFrameBytes(payloadLen, vecDim)
+    if sv.draining:
+      sock.drainBytes(ringLen + bodyBytes)
+      sv.rejectDrainedWrite(sock, "PUTR")
+      return true
     let ringName = sock.readExact(ringLen)
     if not sv.ringNameAllowed(sock, ringName):
       sock.drainBytes(bodyBytes)
@@ -1077,6 +1113,10 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     let vecDim = if parts.len >= 6: parseInt(parts[5]) else: 0
     let codec = if parts.len >= 7: parsePayloadCodec(parts[6]) else: pcRaw
     let bodyBytes = checkedFrameBytes(payloadLen, vecDim)
+    if sv.draining:
+      sock.drainBytes(bodyBytes)
+      sv.rejectDrainedWrite(sock, "PUT")
+      return true
     if not sv.ringKeyAllowed(sock, ringKey):
       sock.drainBytes(bodyBytes)
       sv.denyRingKey(sock, ringKey)
@@ -1266,6 +1306,10 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     let vecDim = if parts.len >= 8: parseInt(parts[7]) else: 0
     p.codec = if parts.len >= 9: parsePayloadCodec(parts[8]) else: pcRaw
     let bodyBytes = checkedFrameBytes(payloadLen, vecDim)
+    if sv.draining:
+      sock.drainBytes(bodyBytes)
+      sv.rejectDrainedWrite(sock, "TRF")
+      return true
     if not sv.ringKeyAllowed(sock, p.parent):
       sock.drainBytes(bodyBytes)
       sv.denyRingKey(sock, p.parent)
@@ -1302,6 +1346,9 @@ proc handleFrame(sv: Server, sock: Socket): bool =
                    "errors " & $sv.errorResponses & " " &
                    "authFailures " & $sv.authFailures & " " &
                    "authzDenied " & $sv.authzDenied & " " &
+                   "draining " & $(if sv.draining: 1 else: 0) & " " &
+                   "drainRejectedWrites " & $sv.drainRejectedWrites & " " &
+                   "drainStartedAt " & $(int(sv.drainStartedAt)) & " " &
                    "connectionsAccepted " & $sv.connectionsAccepted & " " &
                    "activeConnections " & $sv.activeConnections & " " &
                    "items " & $sv.st.count & " " &
@@ -1327,6 +1374,36 @@ proc handleFrame(sv: Server, sock: Socket): bool =
                    "clusterTxApplied " & $sv.st.clusterTxApplied & " " &
                    "clusterTxPending " & $sv.st.clusterTxPending & " " &
                    "clumps " & $sv.fs.clumps.len)
+  of "DRAIN":
+    if not sv.requireRole(sock, roleAdmin):
+      return true
+    sv.draining = true
+    sv.drainStartedAt = epochTime()
+    sv.st.sync()
+    sv.audit("drain", user = sv.currentUser(sock),
+             message = "server entered drain mode")
+    sock.sendFrame("OK draining")
+  of "RESUME":
+    if not sv.requireRole(sock, roleAdmin):
+      return true
+    sv.draining = false
+    sv.drainStartedAt = 0.0
+    sv.audit("resume", user = sv.currentUser(sock),
+             message = "server left drain mode")
+    sock.sendFrame("OK resumed")
+  of "SNAPSHOT":
+    if not sv.requireRole(sock, roleAdmin):
+      return true
+    sv.st.sync()
+    sv.audit("snapshot-barrier", user = sv.currentUser(sock),
+             message = "server flushed snapshot barrier")
+    sock.sendFrame("SNAPSHOT " &
+                   "draining " & $(if sv.draining: 1 else: 0) & " " &
+                   "items " & $sv.st.count & " " &
+                   "rings " & $sv.st.ringMeta.len & " " &
+                   "pendingTx " & $sv.st.clusterTxPending & " " &
+                   "walBytes " & $sv.st.logSize & " " &
+                   "activeConnections " & $sv.activeConnections)
   of "SHUTDOWN":
     if not sv.requireRole(sock, roleAdmin):
       return true

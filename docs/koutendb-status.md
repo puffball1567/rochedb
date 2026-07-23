@@ -51,6 +51,7 @@ Translations:
 | Cluster CRUD/list/count | PoC | `update`, `deleteById`, JSON `patch`, `listByRing`, `countByRing` use landing intents or node fan-out; `scripts/cluster_tx_smoke.sh` covers smoke |
 | Compact | Done | Rebuilds WAL from live records |
 | Backup / restore | Done | Backup as compacted WAL and restore into another data dir |
+| Drain / snapshot barrier | Foundation | `DRAIN`, `SNAPSHOT`, and `RESUME` provide an admin-only maintenance boundary for cluster nodes. Drain rejects new writes while preserving read access and wire framing; snapshot flushes and reports item/ring/pending-tx/WAL state. Coordinator redundancy and managed backup orchestration are still planned |
 | Dump / import-jsonl | Done | NoSQL JSONL import rules. This is the stable human-readable migration boundary while the pre-v1.0 internal WAL format can still evolve |
 | Universe sync outbox | PoC | WAL-backed eventual sync event queue with idempotent apply, ack/prune, transaction-backed `putSynced`, prune-safe monotonic source ids, latest-only pending coalescing, delayed timestamp apply windows, retryAt / maxAttempts / dead-letter state, `kouten universe-export` / `universe-apply` JSONL handoff, one-shot `kouten universe-sync` between local data dirs, remote `--peers` delivery via `UAPPLY`, and `universe-status` operational counters. It is a durable scheduler boundary, not immediate global consistency |
 | Crash recovery tests | Partial | Torn WAL tail repair, versioned-WAL checksum mismatch refusal, mid-file WAL corruption refusal, compact interruption, partial commit cases |
@@ -177,7 +178,7 @@ fully covered by the current concepts or code:
 | TLS and certificate rotation | Username/password/secret-key auth exists, but managed public or VPC deployments need transport TLS and rotation workflows. |
 | Secret rotation | `authProfiles` reference external secrets, but the server and drivers need an explicit rotation story for username/password/secret-key credentials. |
 | Point-in-time recovery / generation checkpoints | Backup/restore exists. Managed services normally require recoverable generations, restore-point selection, and verification before promotion. |
-| Drain / quiesce / snapshot barrier | Rolling maintenance and consistent managed backups need a control-plane hook to stop accepting new writes, flush durable state, and report readiness. |
+| Managed drain / quiesce orchestration | The server has admin-only `DRAIN` / `SNAPSHOT` / `RESUME` primitives. Managed services still need rolling orchestration, promotion policy, and backup scheduling around those primitives. |
 | OpenMetrics / CloudWatch / Datadog adapters | KoutenDB exposes key/value metrics, but managed integrations need standard exporters or collectors. |
 | Quotas and capacity guardrails | Galaxy isolation exists, but managed multi-tenant operation needs limits for WAL bytes, item count, ring count, payload size, and connection pressure. |
 | Protocol / storage compatibility policy | Managed upgrades need clear compatibility rules for wire protocol, WAL records, snapshots, and drivers. |

@@ -4368,6 +4368,26 @@ proc shutdownCluster*(db: KoutenDb): seq[string] =
   for i in countdown(db.client.peers.high, 0):
     result.add db.client.shutdownReq(i)
 
+proc drainCluster*(db: KoutenDb): seq[string] =
+  ## Rolling maintenance / backup 用に全ノードを書き込み拒否状態へ移す。
+  ## 読み取りは継続し、未読 payload はサーバ側で drain して wire 境界を守る。
+  doAssert db.mode == mCluster, "drainCluster はクラスタモード専用"
+  for i in 0 ..< db.client.peers.len:
+    result.add db.client.drainReq(i)
+
+proc resumeCluster*(db: KoutenDb): seq[string] =
+  ## drainCluster 後に全ノードの書き込み受け入れを再開する。
+  doAssert db.mode == mCluster, "resumeCluster はクラスタモード専用"
+  for i in 0 ..< db.client.peers.len:
+    result.add db.client.resumeReq(i)
+
+proc snapshotCluster*(db: KoutenDb): seq[string] =
+  ## 全ノードを flush し、バックアップ前の軽量 barrier 情報を返す。
+  ## 一貫した静止点が必要な場合は drainCluster 後に呼ぶ。
+  doAssert db.mode == mCluster, "snapshotCluster はクラスタモード専用"
+  for i in 0 ..< db.client.peers.len:
+    result.add db.client.snapshotReq(i)
+
 # ---------------------------------------------------------------- C ABI 用の内部変換
 
 proc toRaw*(id: KoutenId): tuple[parent: uint64, epoch: uint32, seq: uint32, tWrite: float] =

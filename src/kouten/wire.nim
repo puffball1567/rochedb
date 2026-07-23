@@ -705,6 +705,21 @@ proc metricsReq*(c: ClusterClient, node: int): string =
   expect(r, "OK", "METRICS")
   r[1 .. ^1].join(" ")
 
+proc drainReq*(c: ClusterClient, node: int): string =
+  let r = c.rpc(node, "DRAIN")
+  expect(r, "OK", "DRAIN")
+  r[1 .. ^1].join(" ")
+
+proc resumeReq*(c: ClusterClient, node: int): string =
+  let r = c.rpc(node, "RESUME")
+  expect(r, "OK", "RESUME")
+  r[1 .. ^1].join(" ")
+
+proc snapshotReq*(c: ClusterClient, node: int): string =
+  let r = c.rpc(node, "SNAPSHOT")
+  expect(r, "SNAPSHOT", "SNAPSHOT")
+  r[1 .. ^1].join(" ")
+
 proc wireVersionReq*(c: ClusterClient, node: int): int =
   let r = c.rpc(node, "WIREVER")
   expect(r, "WIREVER", "WIREVER")

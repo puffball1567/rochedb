@@ -6,8 +6,7 @@
 ##   kouten query [--data=DIR | --peers=host:port,...] --ring=RING [--filter='{"id":"RAW_ID"}' | --id=RAW_ID] --selection=SEL
 ##   kouten list-ring [--data=DIR | --peers=host:port,...] --ring=RING [--limit=N] [--cursor=CURSOR]
 ##   kouten count-ring [--data=DIR | --peers=host:port,...] --ring=RING
-##   kouten health --peers=host:port,...
-##   kouten metrics --peers=host:port,...
+##   kouten health|metrics|drain|snapshot|resume --peers=host:port,...
 ##   kouten atlas [--data=DIR | --peers=host:port,...]
 ##   kouten driver list|info|install [LANG] [--manifest-path=FILE] [--execute]
 ##   kouten doctor
@@ -941,6 +940,42 @@ proc runShutdown(peers, username, password, authToken, secretKey, galaxy: string
                    tlsServerName = tlsServerName,
                    tlsInsecureSkipVerify = tlsInsecureSkipVerify)
   for line in db.shutdownCluster():
+    echo line
+  db.close()
+
+proc runDrain(peers, username, password, authToken, secretKey, galaxy: string,
+              tls: bool, tlsCaFile, tlsServerName: string,
+              tlsInsecureSkipVerify: bool) =
+  var db = connect(peers, username = username, password = password,
+                   authToken = authToken, secretKey = secretKey, galaxy = galaxy,
+                   tls = tls, tlsCaFile = tlsCaFile,
+                   tlsServerName = tlsServerName,
+                   tlsInsecureSkipVerify = tlsInsecureSkipVerify)
+  for line in db.drainCluster():
+    echo line
+  db.close()
+
+proc runResume(peers, username, password, authToken, secretKey, galaxy: string,
+               tls: bool, tlsCaFile, tlsServerName: string,
+               tlsInsecureSkipVerify: bool) =
+  var db = connect(peers, username = username, password = password,
+                   authToken = authToken, secretKey = secretKey, galaxy = galaxy,
+                   tls = tls, tlsCaFile = tlsCaFile,
+                   tlsServerName = tlsServerName,
+                   tlsInsecureSkipVerify = tlsInsecureSkipVerify)
+  for line in db.resumeCluster():
+    echo line
+  db.close()
+
+proc runSnapshot(peers, username, password, authToken, secretKey, galaxy: string,
+                 tls: bool, tlsCaFile, tlsServerName: string,
+                 tlsInsecureSkipVerify: bool) =
+  var db = connect(peers, username = username, password = password,
+                   authToken = authToken, secretKey = secretKey, galaxy = galaxy,
+                   tls = tls, tlsCaFile = tlsCaFile,
+                   tlsServerName = tlsServerName,
+                   tlsInsecureSkipVerify = tlsInsecureSkipVerify)
+  for line in db.snapshotCluster():
     echo line
   db.close()
 
@@ -2835,7 +2870,7 @@ proc printHelp() =
   echo "  kouten ring-profile --data=DIR --ring=RING [--codec=raw|json|nif|bif] [--charset=UTF-8] [--format-version=VERSION]"
   echo "  kouten shell [--data=DIR | --peers=host:port,...]"
   echo "  kouten atlas [--data=DIR | --peers=host:port,...]"
-  echo "  kouten health|metrics|rings --peers=host:port,..."
+  echo "  kouten health|metrics|rings|drain|resume|snapshot --peers=host:port,..."
   echo "  kouten driver list|info|install [LANG] [--manifest-path=FILE] [--execute]"
   echo "  kouten compact --data=DIR"
   echo "  kouten locality --data=DIR [--metrics]"
@@ -3219,6 +3254,15 @@ proc main() =
                tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
   of "shutdown":
     runShutdown(peers, username, password, authToken, secretKey, galaxy, tls,
+                tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
+  of "drain":
+    runDrain(peers, username, password, authToken, secretKey, galaxy, tls,
+             tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
+  of "resume":
+    runResume(peers, username, password, authToken, secretKey, galaxy, tls,
+              tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
+  of "snapshot":
+    runSnapshot(peers, username, password, authToken, secretKey, galaxy, tls,
                 tlsCaFile, tlsServerName, tlsInsecureSkipVerify)
   of "rings":
     runRings(peers, username, password, authToken, secretKey, galaxy, tls,
