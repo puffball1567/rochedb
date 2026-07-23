@@ -80,7 +80,20 @@ for _ in $(seq 1 50); do
 done
 KOUTEN_PASSWORD=secret src/koutencli health --peers="$PEERS" --user=alice
 
+echo "[cluster-authz] generate denied auth audit event"
+KOUTEN_PASSWORD=wrong src/koutencli health --peers="$PEERS" --user=alice >/dev/null 2>&1 || true
+
 echo "[cluster-authz] run tcluster_authz"
 KOUTEN_TEST_PEERS="$PEERS" nim c --nimcache:/tmp/nimcache_kouten_tcluster_authz -r tests/tcluster_authz.nim
+
+echo "[cluster-authz] verify server audit events"
+if ! grep -R '"event":"auth-failure"' "$DATA"/node*/kouten.audit.jsonl >/dev/null 2>&1; then
+  echo "missing auth-failure server audit event" >&2
+  exit 1
+fi
+if ! grep -R '"event":"authz-denied"' "$DATA"/node*/kouten.audit.jsonl >/dev/null 2>&1; then
+  echo "missing authz-denied server audit event" >&2
+  exit 1
+fi
 
 echo "[cluster-authz] OK"

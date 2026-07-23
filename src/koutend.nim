@@ -49,6 +49,7 @@ type
     peers: seq[Peer]
     tbl: ArcTable
     st: Store
+    dataDir: string
     fs: FieldState
     peerLink: ClusterClient
     slowTickSec: float
@@ -107,6 +108,30 @@ proc stableErrorCode(e: ref Exception): string =
 
 proc sendStableError(sock: Socket, e: ref Exception) =
   sock.sendFrame("ERR " & stableErrorCode(e))
+
+proc audit(sv: Server, event: string; ok = true; user = ""; ring = "";
+           ringKey = ""; message = ""; extra: JsonNode = nil) =
+  if sv.dataDir.len == 0:
+    return
+  var node = %*{
+    "timestamp": epochTime(),
+    "event": event,
+    "ok": ok,
+    "user": user,
+    "ring": ring,
+    "ringKey": ringKey,
+    "message": message
+  }
+  if not extra.isNil:
+    node["extra"] = extra
+  try:
+    var f = open(sv.dataDir / "kouten.audit.jsonl", fmAppend)
+    try:
+      f.writeLine($node)
+    finally:
+      f.close()
+  except CatchableError:
+    discard
 
 proc readSecretFile(path, label: string): string =
   if path.len == 0:
@@ -424,6 +449,8 @@ proc requireRole(sv: Server, sock: Socket, need: UserRole): bool =
     return true
   inc sv.authzDenied
   inc sv.errorResponses
+  sv.audit("authz-denied", ok = false, user = user,
+           message = "role " & $rule.role & " cannot perform required operation")
   sock.sendFrame("ERR authz-denied role=" & $rule.role)
   false
 
@@ -432,6 +459,8 @@ proc requireRingKey(sv: Server, sock: Socket, ringKey: uint64): bool =
     return true
   inc sv.authzDenied
   inc sv.errorResponses
+  sv.audit("authz-denied", ok = false, user = sv.currentUser(sock),
+           ringKey = $ringKey, message = "ring key is outside authorization boundary")
   sock.sendFrame("ERR authz-denied ringKey=" & $ringKey)
   false
 
@@ -504,10 +533,14 @@ proc setSocketReadTimeout(sock: Socket, timeoutMs: int) =
     discard posix.setsockopt(sock.getFd, SOL_SOCKET, SO_RCVTIMEO,
                              addr tv, SockLen(sizeof(tv)))
 
-proc denyRingName(sock: Socket, name: string) =
+proc denyRingName(sv: Server, sock: Socket, name: string) =
+  sv.audit("authz-denied", ok = false, user = sv.currentUser(sock),
+           ring = name, message = "ring is outside authorization boundary")
   sock.sendFrame("ERR authz-denied ring=" & name)
 
-proc denyRingKey(sock: Socket, ringKey: uint64) =
+proc denyRingKey(sv: Server, sock: Socket, ringKey: uint64) =
+  sv.audit("authz-denied", ok = false, user = sv.currentUser(sock),
+           ringKey = $ringKey, message = "ring key is outside authorization boundary")
   sock.sendFrame("ERR authz-denied ringKey=" & $ringKey)
 
 proc drainTxCommitOps(sock: Socket, nOps: int) =
@@ -628,6 +661,10 @@ proc handleRetrieve(sv: Server, sock: Socket, parts: seq[string]) =
   let vecDim = parseInt(parts[4])
   let q = sock.readExact(checkedVecBytes(vecDim)).bytesVec(vecDim).normalize()
   if budget < 0 or budget > MaxRetrieveBudget:
+    sv.audit("retrieve-denied", ok = false, user = sv.currentUser(sock),
+             ringKey = (if hasRing: $ringKey else: ""),
+             message = "retrieve budget exceeds configured maximum",
+             extra = %*{"budget": budget, "maxBudget": MaxRetrieveBudget})
     raise newException(ValueError,
       "RETRIEVE budget exceeds max " & $MaxRetrieveBudget)
 
@@ -646,6 +683,11 @@ proc handleRetrieve(sv: Server, sock: Socket, parts: seq[string]) =
         continue
       inc scanned
       if scanned > MaxRetrieveScan:
+        sv.audit("broad-scan-denied", ok = false, user = sv.currentUser(sock),
+                 ringKey = (if hasRing: $ringKey else: ""),
+                 message = "retrieve scan exceeds configured maximum",
+                 extra = %*{"scanned": scanned, "maxScan": MaxRetrieveScan,
+                            "hasRing": hasRing})
         raise newException(ValueError,
           "RETRIEVE scan exceeds max " & $MaxRetrieveScan &
           "; use a ring-scoped query or narrower retrieval plan")
@@ -710,6 +752,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
           secureEqual(sv.users[parts[1]].password, parts[2]):
         sv.authed[fd] = true
         sv.authedUsers[fd] = parts[1]
+        sv.audit("auth-success", user = parts[1])
         sock.sendFrame("OK auth")
         return true
     elif sv.authSecretKey.len > 0:
@@ -725,6 +768,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
           sv.authChallenges.del fd
           sv.authed[fd] = true
           sv.authedUsers[fd] = sv.authUser
+          sv.audit("auth-success", user = sv.authUser)
           sock.sendFrame("OK auth")
           sock.enableSecure(sv.authSecretKey, challenge)
           return true
@@ -734,10 +778,14 @@ proc handleFrame(sv: Server, sock: Socket): bool =
           secureEqual(parts[2], sv.authPassword):
         sv.authed[fd] = true
         sv.authedUsers[fd] = sv.authUser
+        sv.audit("auth-success", user = sv.authUser)
         sock.sendFrame("OK auth")
         return true
     inc sv.authFailures
     inc sv.errorResponses
+    sv.audit("auth-failure", ok = false,
+             user = (if parts.len >= 2: parts[1] else: ""),
+             message = "authentication failed or required")
     sock.sendFrame("ERR auth-required")
     return false
   case parts[0]
@@ -798,7 +846,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       if not sv.ringKeyAllowed(sock, op.parent):
         sock.drainBytes(bodyBytes)
         sock.drainTxCommitOps(nOps - ops.len - 1)
-        sock.denyRingKey(op.parent)
+        sv.denyRingKey(sock, op.parent)
         return true
       op.payload = sock.readExact(payloadLen)
       op.vec =
@@ -832,7 +880,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       let event = parseJson(body)
       let ringName = event{"ring"}.getStr()
       if not sv.ringNameAllowed(sock, ringName):
-        sock.denyRingName(ringName)
+        sv.denyRingName(sock, ringName)
         return true
       let ri = sv.ringInfo(ringName)
       let owner = int(sv.tbl.owner(ri.head))
@@ -892,7 +940,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     let bodyBytes = checkedFrameBytes(payloadLen, vecDim)
     if not sv.ringKeyAllowed(sock, parent):
       sock.drainBytes(bodyBytes)
-      sock.denyRingKey(parent)
+      sv.denyRingKey(sock, parent)
       return true
     if sv.st.appliedClusterTx.getOrDefault(txid, false):
       sock.drainBytes(bodyBytes)
@@ -934,7 +982,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       discard checkedWireLen(selectionLen, "selectionLen")
       if not sv.ringKeyAllowed(sock, parent):
         sock.drainBytes(selectionLen)
-        sock.denyRingKey(parent)
+        sv.denyRingKey(sock, parent)
         return true
       selection = sock.readExact(selectionLen)
     elif not sv.requireRingKey(sock, parent):
@@ -970,7 +1018,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       let ringKey = parseBiggestUInt(parts[2]).uint64
       if not sv.ringKeyAllowed(sock, ringKey):
         sock.drainBytes(checkedVecBytes(parseInt(parts[4])))
-        sock.denyRingKey(ringKey)
+        sv.denyRingKey(sock, ringKey)
         return true
     sv.handleRetrieve(sock, parts)
   of "RINGS":
@@ -997,7 +1045,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     let ringName = sock.readExact(ringLen)
     if not sv.ringNameAllowed(sock, ringName):
       sock.drainBytes(bodyBytes)
-      sock.denyRingName(ringName)
+      sv.denyRingName(sock, ringName)
       return true
     let payload = sock.readExact(payloadLen)
     let vec =
@@ -1031,7 +1079,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     let bodyBytes = checkedFrameBytes(payloadLen, vecDim)
     if not sv.ringKeyAllowed(sock, ringKey):
       sock.drainBytes(bodyBytes)
-      sock.denyRingKey(ringKey)
+      sv.denyRingKey(sock, ringKey)
       return true
     let payload = sock.readExact(payloadLen)
     let vec =
@@ -1064,7 +1112,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     discard checkedWireLen(cursorLen, "cursorLen")
     if not sv.ringKeyAllowed(sock, ringKey):
       sock.drainBytes(cursorLen)
-      sock.denyRingKey(ringKey)
+      sv.denyRingKey(sock, ringKey)
       return true
     let cursor = sock.readExact(cursorLen)
     let afterSeq = if cursor.len == 0: -1'i64 else: int64(parseBiggestInt(cursor))
@@ -1096,7 +1144,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       discard checkedWireLen(selectionLen, "selectionLen")
       if not sv.ringKeyAllowed(sock, parent):
         sock.drainBytes(selectionLen)
-        sock.denyRingKey(parent)
+        sv.denyRingKey(sock, parent)
         return true
       selection = sock.readExact(selectionLen)
     elif not sv.requireRingKey(sock, parent):
@@ -1148,7 +1196,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       discard checkedWireLen(selectionLen, "selectionLen")
       if not sv.ringKeyAllowed(sock, parent):
         sock.drainBytes(selectionLen)
-        sock.denyRingKey(parent)
+        sv.denyRingKey(sock, parent)
         return true
       selection = sock.readExact(selectionLen)
     elif not sv.requireRingKey(sock, parent):
@@ -1220,7 +1268,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     let bodyBytes = checkedFrameBytes(payloadLen, vecDim)
     if not sv.ringKeyAllowed(sock, p.parent):
       sock.drainBytes(bodyBytes)
-      sock.denyRingKey(p.parent)
+      sv.denyRingKey(sock, p.parent)
       return true
     p.payload = sock.readExact(payloadLen)
     p.vec =
@@ -1433,6 +1481,7 @@ proc main() =
   let sv = Server(myId: id, peers: peers,
                   tbl: ArcTable(epoch: 1, nNodes: uint16(peers.len)),
                   st: openStore(dataDir, durability = durability),
+                  dataDir: dataDir,
                   fs: newFieldState(),
                   peerLink: newClusterClient(peers, username = authUser,
                                              password = authPassword,

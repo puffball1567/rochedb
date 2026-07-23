@@ -93,7 +93,9 @@ This trial proves the local operational loop:
 - direct data-dir verification exercises WAL replay and the data-dir lock;
 - segment layout can be rebuilt from the WAL source of truth;
 - backups can be created and verified before restore;
-- audit events are written to append-only JSONL for operational inspection.
+- audit events are written to append-only JSONL for operational inspection,
+  including server-side auth, authz, and broad retrieve guard events on
+  persistent `koutend` nodes.
 
 It does not prove:
 
