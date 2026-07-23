@@ -23,6 +23,7 @@ matrix used before releases.
 | Universe sync | `examples/universe_sync_demo.nim`, `scripts/universe_sync_*_smoke.sh` | Smoke-covered: local export/apply, remote apply, idempotency, retry/dead-letter handling, applied-key retention, malformed JSONL handling |
 | Recovery | `scripts/recovery_smoke.sh` | Smoke-covered: backup/restore and recovery status paths |
 | Compose examples | `scripts/compose_config_smoke.sh` | Smoke-covered: every `examples/compose/*.compose.yml` file parses with Docker Compose, including the optional tools profile |
+| Soak testing | `examples/soak_72h.sh`, `examples/soak_runner.nim` | Optional local runner: long-running three-node cluster validation with mixed writes, point reads, query projection, ring reads, retrieval, metrics, snapshot, and offline verify. Not part of CI. |
 | Driver compatibility | `scripts/driver_compat.sh` | Optional smoke: C, C++, and published driver-facing C ABI paths when enabled |
 | Data model demos | `scripts/demo_smoke.sh`, `examples/stellar_data_model_demo.sh`, `examples/locality_layout_demo.sh`, `examples/payload_codecs_demo.sh`, `examples/effect_validation_demo.sh` | Demo-covered: non-copy stellar visibility, narrowed stellar reads, original ring preservation after detach, payload codec persistence, compaction locality reporting, messy locality workloads, compact-before/after logical result invariants, lightweight effect validation, and read micro-samples. `examples/effect_validation_matrix.sh` and `examples/offline_effect_validation.sh` are manual validation tools, not default CI smoke steps. |
 
@@ -53,7 +54,7 @@ toolchains are available.
 The following areas are intentionally tracked as deeper follow-up work rather
 than hidden assumptions:
 
-- long-running cluster soak tests with node restarts during active traffic;
+- long-running node-restart soak tests during active traffic;
 - mixed-version wire protocol compatibility tests;
 - TLS certificate lifecycle, rotation, expiry, and deployment policy tests beyond the local CA smoke;
 - larger universe sync replay and backlog-pressure tests;
