@@ -29,6 +29,25 @@ technical preview. The canonical Nim definitions live in `src/koutendb.nim`.
 C ABI / driver boundaries and CLI reproducibility, not as the preferred
 application model.
 
+## Error Types
+
+KoutenDB still raises standard Nim exception families for compatibility.
+Specialized exceptions inherit from those families so existing `ValueError`,
+`IOError`, and `KeyError` handlers continue to work.
+
+| Type | Inherits | Meaning |
+|---|---|---|
+| `KoutenValidationError` | `ValueError` | Invalid caller input that can be fixed before retrying. |
+| `KoutenGuardrailError` | `ValueError` | An opt-in production guardrail rejected an operation. |
+| `KoutenConflictError` | `IOError` | Retryable workflow conflict, such as a busy coordinate lock. |
+| `KoutenOperationError` | `IOError` | Operational failure from remote cluster, durability, backup, or sync paths. |
+| `KoutenNotFoundError` | `KeyError` | Requested record or maintenance job does not exist. |
+
+The current release applies the taxonomy to the highest-value public API
+boundaries first: guardrails, coordinate locks, and atomic batch validation.
+Lower-level storage and network errors may still surface as their standard Nim
+exception types.
+
 ## Retrieval Types
 
 | Type | Important fields | Meaning |

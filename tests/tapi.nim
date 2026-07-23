@@ -169,6 +169,8 @@ suite "public api":
 
   test "write guardrails reject unsafe payload, vector, ring, and ring-count growth":
     var db = open()
+    expect KoutenValidationError:
+      db.configureGuardrails(KoutenGuardrails(maxPayloadBytes: -1))
     expect ValueError:
       db.configureGuardrails(KoutenGuardrails(maxPayloadBytes: -1))
 
@@ -180,6 +182,8 @@ suite "public api":
     discard db.put("ok", ring = "a", vec = @[1.0'f32, 0.0'f32])
     discard db.put("ok", ring = "b")
 
+    expect KoutenGuardrailError:
+      discard db.put("large", ring = "a")
     expect ValueError:
       discard db.put("large", ring = "a")
     expect ValueError:
@@ -1762,6 +1766,8 @@ suite "transaction":
     db.attachStellar("commerce/order/A-001", "orders/A-001")
 
     let stellarLock = db.acquireStellarLock("commerce/order/A-001", ttlSeconds = 5)
+    expect KoutenConflictError:
+      discard db.acquireRingLock("users/123", ttlSeconds = 5)
     expect IOError:
       discard db.acquireRingLock("users/123", ttlSeconds = 5)
     db.releaseLock(stellarLock)
@@ -1794,6 +1800,8 @@ suite "transaction":
 
     block updateLengthMismatch:
       let id = db.put("unchanged", ring = "matrix")
+      expect KoutenValidationError:
+        db.batchUpdateAtomic(@[id], @["x", "extra"])
       expect ValueError:
         db.batchUpdateAtomic(@[id], @["x", "extra"])
       check db.get(id) == "unchanged"

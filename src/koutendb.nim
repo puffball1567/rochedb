@@ -34,6 +34,21 @@ export select
 type
   KoutenDurability* = StoreDurability
 
+  KoutenValidationError* = object of ValueError
+    ## Invalid user input that can be fixed before retrying.
+
+  KoutenGuardrailError* = object of ValueError
+    ## An opt-in production guardrail rejected an otherwise valid operation.
+
+  KoutenConflictError* = object of IOError
+    ## A retryable conflict, such as a busy cooperative coordinate lock.
+
+  KoutenOperationError* = object of IOError
+    ## Operational failure from remote cluster, durability, backup, or sync paths.
+
+  KoutenNotFoundError* = object of KeyError
+    ## Requested record or maintenance job does not exist.
+
   KoutenId* = object
     ## 不透明ID。put が返し、get/query/locate に渡す。中身に触る必要はない。
     ## （内部的には自己記述の軌道要素 = 設計書 §2.2。この ID だけで所在計算が閉じる）
@@ -655,14 +670,14 @@ proc acquireLockKeys(db: KoutenDb, scope: KoutenLockScope, coordinate: string,
                      waitMs = 0): KoutenLockToken =
   doAssert db.mode == mEmbedded, "coordinate locks are embedded mode only in this release"
   if ttlSeconds <= 0:
-    raise newException(ValueError, "ttlSeconds must be positive")
+    raise newException(KoutenValidationError, "ttlSeconds must be positive")
   let deadline = epochTime() + float(max(waitMs, 0)) / 1000.0
   var uniqueKeys: seq[string] = @[]
   for key in keys:
     if key.len > 0 and key notin uniqueKeys:
       uniqueKeys.add key
   if uniqueKeys.len == 0:
-    raise newException(ValueError, "lock key set is empty")
+    raise newException(KoutenValidationError, "lock key set is empty")
 
   while true:
     let now = epochTime()
@@ -685,7 +700,7 @@ proc acquireLockKeys(db: KoutenDb, scope: KoutenLockScope, coordinate: string,
                             expiresAt: expiresAt,
                             keys: uniqueKeys)
     if waitMs <= 0 or epochTime() >= deadline:
-      raise newException(IOError, "coordinate lock is busy: " & busy)
+      raise newException(KoutenConflictError, "coordinate lock is busy: " & busy)
     sleep(10)
 
 proc acquireRingLock*(db: KoutenDb, ring: string, ttlSeconds = 30.0,
@@ -693,7 +708,7 @@ proc acquireRingLock*(db: KoutenDb, ring: string, ttlSeconds = 30.0,
   ## Acquire an opt-in cooperative lock for one ring coordinate.
   let coord = normalizedCoordinate(ring)
   if coord.len == 0:
-    raise newException(ValueError, "ring is required")
+    raise newException(KoutenValidationError, "ring is required")
   db.acquireLockKeys(rlsRing, coord, @[lockKey(rlsRing, coord)],
                      ttlSeconds, waitMs)
 
@@ -703,7 +718,7 @@ proc acquireStellarLock*(db: KoutenDb, stellar: string, ttlSeconds = 30.0,
   ## The member set is captured at acquisition time.
   let coord = normalizedCoordinate(stellar)
   if coord.len == 0:
-    raise newException(ValueError, "stellar is required")
+    raise newException(KoutenValidationError, "stellar is required")
   var keys = @[lockKey(rlsStellar, coord), lockKey(rlsRing, coord)]
   for member in db.stellarMembers.getOrDefault(coord, @[]):
     keys.add lockKey(rlsRing, member)
@@ -1592,9 +1607,9 @@ proc configureRingApplyPolicy*(db: KoutenDb, ring: string,
   ## universe sync / delayed apply の ring-local policy を設定する。
   ## データ構造は縛らず、同期・履歴・適用順の扱いだけを ring ごとに変える。
   if policy.historyKeep < 0:
-    raise newException(ValueError, "historyKeep must be >= 0")
+    raise newException(KoutenValidationError, "historyKeep must be >= 0")
   if policy.delayMs < 0:
-    raise newException(ValueError, "delayMs must be >= 0")
+    raise newException(KoutenValidationError, "delayMs must be >= 0")
   let key = db.ringKey(ring)
   db.ringApplyPolicies[key] = policy
 
@@ -1605,13 +1620,13 @@ proc ringApplyPolicy*(db: KoutenDb, ring: string): RingApplyPolicy =
 proc configureGuardrails*(db: KoutenDb, guardrails: KoutenGuardrails) =
   ## Configure opt-in write-path limits. Zero fields are disabled.
   if guardrails.maxPayloadBytes < 0:
-    raise newException(ValueError, "maxPayloadBytes must be >= 0")
+    raise newException(KoutenValidationError, "maxPayloadBytes must be >= 0")
   if guardrails.maxVectorDim < 0:
-    raise newException(ValueError, "maxVectorDim must be >= 0")
+    raise newException(KoutenValidationError, "maxVectorDim must be >= 0")
   if guardrails.maxRingCount < 0:
-    raise newException(ValueError, "maxRingCount must be >= 0")
+    raise newException(KoutenValidationError, "maxRingCount must be >= 0")
   if guardrails.maxRecordsPerRing < 0:
-    raise newException(ValueError, "maxRecordsPerRing must be >= 0")
+    raise newException(KoutenValidationError, "maxRecordsPerRing must be >= 0")
   db.guardrails = guardrails
 
 proc guardrails*(db: KoutenDb): KoutenGuardrails =
@@ -1671,14 +1686,14 @@ proc checkPayloadGuardrails(db: KoutenDb, encoded: EncodedPayload,
              message = "payload exceeds maxPayloadBytes",
              extra = %*{"maxPayloadBytes": g.maxPayloadBytes,
                         "payloadBytes": encoded.data.len})
-    raise newException(ValueError,
+    raise newException(KoutenGuardrailError,
       "payload exceeds maxPayloadBytes " & $g.maxPayloadBytes)
   if g.maxVectorDim > 0 and vecLen > g.maxVectorDim:
     db.audit("guardrail-denied", ok = false,
              message = "vector dimension exceeds maxVectorDim",
              extra = %*{"maxVectorDim": g.maxVectorDim,
                         "vectorDim": vecLen})
-    raise newException(ValueError,
+    raise newException(KoutenGuardrailError,
       "vector dimension exceeds maxVectorDim " & $g.maxVectorDim)
 
 proc checkWriteGuardrails(db: KoutenDb, encoded: EncodedPayload,
@@ -1691,7 +1706,7 @@ proc checkWriteGuardrails(db: KoutenDb, encoded: EncodedPayload,
              message = "ring count exceeds maxRingCount",
              extra = %*{"maxRingCount": g.maxRingCount,
                         "ringCount": db.ringNames.len})
-    raise newException(ValueError,
+    raise newException(KoutenGuardrailError,
       "ring count exceeds maxRingCount " & $g.maxRingCount)
   if g.maxRecordsPerRing > 0 and db.mode == mEmbedded and ring in db.ringNames:
     let key = db.ringNames[ring]
@@ -1700,7 +1715,7 @@ proc checkWriteGuardrails(db: KoutenDb, encoded: EncodedPayload,
                message = "ring records exceed maxRecordsPerRing",
                extra = %*{"maxRecordsPerRing": g.maxRecordsPerRing,
                           "records": db.liveRecordsInEmbeddedRing(key)})
-      raise newException(ValueError,
+      raise newException(KoutenGuardrailError,
         "ring records exceed maxRecordsPerRing " & $g.maxRecordsPerRing)
 
 proc put*(db: KoutenDb, encoded: EncodedPayload, ring: string = "default",
@@ -2033,7 +2048,7 @@ proc batchUpdateAtomic*(db: KoutenDb, ids: seq[KoutenId],
   ## Embedded all-or-nothing bulk replace. Every ID must exist before commit.
   doAssert db.mode == mEmbedded, "batchUpdateAtomic is embedded mode only"
   if ids.len != payloads.len:
-    raise newException(ValueError, "ids and payloads length mismatch")
+    raise newException(KoutenValidationError, "ids and payloads length mismatch")
   let tx = db.beginTransaction()
   try:
     for i, id in ids:
@@ -2050,7 +2065,7 @@ proc batchUpdateAtomic*(db: KoutenDb, ids: seq[KoutenId],
   ## Embedded all-or-nothing bulk JSON replace.
   doAssert db.mode == mEmbedded, "batchUpdateAtomic is embedded mode only"
   if ids.len != docs.len:
-    raise newException(ValueError, "ids and docs length mismatch")
+    raise newException(KoutenValidationError, "ids and docs length mismatch")
   let tx = db.beginTransaction()
   try:
     for i, id in ids:
@@ -2068,7 +2083,7 @@ proc batchDeleteAtomic*(db: KoutenDb, ids: seq[KoutenId]) =
   try:
     for id in ids:
       if not db.st.contains(id.parent, id.seq):
-        raise newException(KeyError, "id not found")
+        raise newException(KoutenNotFoundError, "id not found")
       tx.remove(id)
     tx.commit()
   except CatchableError:
