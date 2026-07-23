@@ -310,7 +310,7 @@ For scripts and reproducible examples, prefer the single-shot commands above.
 | `restore` | `--backup=DIR --data=DIR` | Restore backup. |
 | `backup-encrypted` | `--data=DIR --backup=DIR --passphrase=TEXT` | Create encrypted backup. |
 | `restore-encrypted` | `--backup=DIR --data=DIR --passphrase=TEXT` | Restore encrypted backup. |
-| `verify` | `--data=DIR` or `--backup=DIR`; optional `--segments`, `--metrics`, `--json` | Open and inspect a persistent data directory or backup. Data-dir verification checks WAL replay, lock, metadata, locality, and rebuildable segment layout. Backup verification checks restore readability without writing into the live data directory. |
+| `verify` | `--data=DIR` or `--backup=DIR`; optional `--segments`, `--max-wal-bytes=N`, `--max-segment-files=N`, `--metrics`, `--json` | Open and inspect a persistent data directory or backup. Data-dir verification checks WAL replay, lock, metadata, locality, capacity thresholds, and rebuildable segment layout. Backup verification checks restore readability without writing into the live data directory. |
 | `dump` | `--data=DIR` | Export JSONL. |
 | `import-jsonl` | `--data=DIR --in=FILE`; optional `--batch-size=N` | Import JSONL with chunked commits. |
 | `describe-galaxy` | `--data=DIR --description=TEXT` | Set galaxy map description. |
@@ -364,7 +364,7 @@ Recovery commands accept `--mirror`, `--universe-config`, `--universe`,
 
 | Command | Purpose |
 |---|---|
-| `verify --data=DIR [--segments]` | Open/replay a persistent data directory and check WAL, metadata, locality, and optional segment rebuild health. |
+| `verify --data=DIR [--segments] [--max-wal-bytes=N] [--max-segment-files=N]` | Open/replay a persistent data directory and check WAL, metadata, locality, optional capacity thresholds, and optional segment rebuild health. |
 | `verify --backup=DIR` | Verify backup readability before restore. |
 | `verify --server-config=FILE` | Validate a `koutend` server JSON config before startup. |
 | `doctor --server-config=FILE --json` | Emit the same server config checks as JSON. |

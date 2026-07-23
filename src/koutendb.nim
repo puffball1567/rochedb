@@ -1078,7 +1078,9 @@ proc addOperationalCheck(report: var KoutenOperationalVerifyReport;
     report.ok = false
 
 proc operationalVerify*(dataDir: string; diskBacked = true;
-                        verifySegments = false): KoutenOperationalVerifyReport =
+                        verifySegments = false;
+                        maxWalBytes: int64 = -1;
+                        maxSegmentFiles = -1): KoutenOperationalVerifyReport =
   ## Open and inspect a persistent embedded data directory for operational
   ## readiness checks. Opening the store exercises WAL replay, recovery gates,
   ## and the data-directory lock. Segment verification can rebuild the
@@ -1094,6 +1096,10 @@ proc operationalVerify*(dataDir: string; diskBacked = true;
     result.walBytes = getFileSize(result.walPath)
   result.addOperationalCheck("data-dir", dirExists(dataDir), dataDir)
   result.addOperationalCheck("wal-file", result.walExists, result.walPath)
+  if maxWalBytes >= 0:
+    result.addOperationalCheck("wal-bytes-limit",
+      result.walBytes <= maxWalBytes,
+      "bytes=" & $result.walBytes & " max=" & $maxWalBytes)
 
   var db = open(dataDir = dataDir, diskBacked = diskBacked)
   try:
@@ -1136,6 +1142,10 @@ proc operationalVerify*(dataDir: string; diskBacked = true;
       result.addOperationalCheck("segments", result.segmentDirExists,
         if result.segmentDirExists: "present files=" & $result.segmentFiles
         else: "missing; run verify --segments to rebuild")
+    if maxSegmentFiles >= 0:
+      result.addOperationalCheck("segment-files-limit",
+        result.segmentFiles <= maxSegmentFiles,
+        "files=" & $result.segmentFiles & " max=" & $maxSegmentFiles)
   finally:
     db.close()
 

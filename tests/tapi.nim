@@ -1579,6 +1579,8 @@ suite "永続化":
       var db = open(dataDir = dir, diskBacked = true)
       discard db.put(%*{"name": "a"}, ring = "ops/a")
       discard db.put(%*{"name": "b"}, ring = "ops/b")
+      for i in 0 ..< 16:
+        discard db.put(%*{"i": i}, ring = "ops/packed")
       db.close()
 
       let report = operationalVerify(dir, verifySegments = true)
@@ -1586,13 +1588,22 @@ suite "永続化":
       check report.dataDir == dir
       check report.walExists
       check report.walBytes > 0
-      check report.items == 2
+      check report.items == 18
       check report.rings >= 2
       check report.locality.persistent
       check report.segmentDirExists
       check report.checks.len >= 4
       check report.checks.anyIt(it.name == "open-replay-lock" and it.ok)
       check report.checks.anyIt(it.name == "segments" and it.ok)
+
+      let cappedWal = operationalVerify(dir, maxWalBytes = 1)
+      check not cappedWal.ok
+      check cappedWal.checks.anyIt(it.name == "wal-bytes-limit" and not it.ok)
+
+      let cappedSegments = operationalVerify(dir, verifySegments = true,
+                                             maxSegmentFiles = 0)
+      check not cappedSegments.ok
+      check cappedSegments.checks.anyIt(it.name == "segment-files-limit" and not it.ok)
     finally:
       removeDir(root)
 

@@ -202,7 +202,7 @@ or stellar lens.
 | `backup(dstDir)` | Create a compact backup. |
 | `backupEncrypted(dstDir, passphrase)` | Create an encrypted backup. |
 | `verifyBackup(backupDir)` | Verify a backup. |
-| `operationalVerify(dataDir, diskBacked = true, verifySegments = false)` | Open and inspect a persistent embedded data directory. |
+| `operationalVerify(dataDir, diskBacked = true, verifySegments = false, maxWalBytes = -1, maxSegmentFiles = -1)` | Open and inspect a persistent embedded data directory, optionally failing when WAL bytes or segment-file count exceed configured trial thresholds. |
 | `auditLogPath(dataDir)` / `auditLogPath(db)` | Return the append-only audit JSONL path for persistent embedded stores. |
 | `restoreBackup(backupDir, dataDir, overwrite = false, durability = durBuffered)` | Restore into a data directory. |
 | `restoreEncryptedBackup(backupDir, dataDir, passphrase, overwrite = false, durability = durBuffered)` | Restore an encrypted backup into a data directory. |

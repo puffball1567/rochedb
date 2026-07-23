@@ -233,6 +233,10 @@ bin/kouten get --data="$WORK/imported" --ring=artifacts/bif --limit=1 |
   grep -q '"codec": "bif"'
 
 echo "[cli-crud] operational verify"
+for i in $(seq 1 16); do
+  bin/kouten put --ring=ops/packed \
+    --payload="{\"i\":$i}" --codec=json >/dev/null
+done
 bin/kouten verify --data="$KOUTEN_DATA" |
   grep -q "verify status: ok"
 bin/kouten verify --data="$KOUTEN_DATA" --metrics |
@@ -241,6 +245,14 @@ bin/kouten verify --data="$KOUTEN_DATA" --json |
   grep -q '"kind": "data"'
 bin/kouten verify --data="$KOUTEN_DATA" --segments |
   grep -q "ok   segments:"
+if bin/kouten verify --data="$KOUTEN_DATA" --max-wal-bytes=1 >/dev/null 2>&1; then
+  echo "verify accepted WAL bytes above configured limit" >&2
+  exit 1
+fi
+if bin/kouten verify --data="$KOUTEN_DATA" --segments --max-segment-files=0 >/dev/null 2>&1; then
+  echo "verify accepted segment files above configured limit" >&2
+  exit 1
+fi
 bin/kouten backup --data="$KOUTEN_DATA" --backup="$WORK/verify-backup" >/dev/null
 bin/kouten verify --backup="$WORK/verify-backup" |
   grep -q "verify status: ok"
