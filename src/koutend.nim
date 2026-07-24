@@ -4,21 +4,24 @@
 ##   - peers リスト内の自分の位置が弧の担当を決める（等分割, epoch 1）
 ##   - 時計は wall clock（NTP 有界スキュー前提 = 設計書 §6.3 の guard band 側で吸収）
 ##   - ハンドオフ: 粒子が弧境界を越える前に後続ノードへ先送り（lookahead）し、
-##     越えたあとも猶予期間（grace）は手元に残す = §6.1 の「先読み＋尾流」の最小版
+##     転送先の適用応答後も猶予期間（grace）は手元に残す。
 ##   - --data を与えると追記ログに永続化（§16）。再起動後は再生 → 自分の弧に
 ##     ないものはハンドオフが自然に掃き出す（自己修復）
 
-import std/[algorithm, selectors, net, os, strutils, times, monotimes, json, tables, parseopt, hashes]
+import std/[algorithm, selectors, net, os, strutils, times, monotimes, json,
+            tables, parseopt, hashes, atomics]
 when not defined(windows):
   import std/posix
 import kouten/[core, store, select, wire, field, auth]
 
 const
   Lookahead = 0.5   # [s] 境界のこれだけ前に後続へ複製を送る
-  Grace = 1.0       # [s] 所有を失ってから削除するまでの猶予（= 尾流 w の時間版）
+  Grace = 1.0       # [s] 転送 ACK 後も尾流コピーを残す猶予
   TickMs = 100      # ハンドオフ判定の周期
   DefaultSlowTickSec = 10.0
-  MaxTransfersPerTick = 256   # 一括移動時も select ループを塞がない上限
+  MaxTransfersPerTick = 256   # cheap queue submissions; worker provides backpressure
+  HandoffQueueCapacity = 1024
+  HandoffTimeoutMs = 500      # worker-only timeout; never blocks foreground reads
   MaxPreparedSelections = 1024
   MaxPreparedSelectionSourceBytes = 64 * 1024
   MaxPreparedSelectionCacheBytes = 1024 * 1024
@@ -36,6 +39,49 @@ const
     else: 1_000_000
 
 type
+  HandoffTaskKind = enum
+    htkTransfer, htkStop
+
+  HandoffTask = object
+    kind: HandoffTaskKind
+    attempt: uint64
+    target: int
+    parent: uint64
+    seq: uint32
+    period: float
+    head: float
+    tWrite: float
+    payload: string
+    codec: PayloadCodec
+    vec: seq[float32]
+
+  HandoffResult = object
+    attempt: uint64
+    target: int
+    parent: uint64
+    seq: uint32
+    applied: bool
+
+  HandoffWorkerConfig = object
+    peers: seq[Peer]
+    username: string
+    password: string
+    secretKey: string
+    tls: bool
+    tlsCaFile: string
+    tlsServerName: string
+    tlsInsecureSkipVerify: bool
+
+  PendingHandoff = object
+    attempt: uint64
+    target: int
+    period: float
+    head: float
+    tWrite: float
+    payload: string
+    codec: PayloadCodec
+    vec: seq[float32]
+
   UserRole = enum
     roleReader, roleWriter, roleAdmin
 
@@ -49,10 +95,20 @@ type
     peers: seq[Peer]
     tbl: ArcTable
     st: Store
+    dataDir: string
     fs: FieldState
     peerLink: ClusterClient
+    pendingHandoffs: Table[(uint64, uint32), PendingHandoff]
+    nextHandoffAttempt: uint64
+    handoffQueued: uint64
+    handoffApplied: uint64
+    handoffFailed: uint64
+    handoffStaleAck: uint64
+    handoffQueueFull: uint64
     slowTickSec: float
     running: bool
+    draining: bool
+    drainStartedAt: float
     authUser: string
     authPassword: string
     authSecretKey: string
@@ -75,6 +131,7 @@ type
     errorResponses: uint64
     authFailures: uint64
     authzDenied: uint64
+    drainRejectedWrites: uint64
     connectionsAccepted: uint64
     activeConnections: int
     universeApplyApplied: uint64
@@ -87,6 +144,43 @@ type
     preparedSelectionLru: seq[string]
     preparedSelectionBytes: int
     codecMetadata: Table[int, bool]
+
+var
+  handoffTasks: Channel[HandoffTask]
+  handoffResults: Channel[HandoffResult]
+  handoffStopping: Atomic[bool]
+
+proc handoffWorker(config: HandoffWorkerConfig) {.thread.} =
+  let client = newClusterClient(config.peers,
+                                username = config.username,
+                                password = config.password,
+                                secretKey = config.secretKey,
+                                tls = config.tls,
+                                tlsCaFile = config.tlsCaFile,
+                                tlsServerName = config.tlsServerName,
+                                tlsInsecureSkipVerify =
+                                  config.tlsInsecureSkipVerify)
+  try:
+    while true:
+      let task = handoffTasks.recv()
+      if task.kind == htkStop or handoffStopping.load():
+        break
+      var applied = false
+      try:
+        client.transferReq(task.target, task.parent, task.seq, task.period,
+                           task.head, task.tWrite, task.payload, task.vec,
+                           task.codec, timeoutMs = HandoffTimeoutMs)
+        applied = true
+      except CatchableError:
+        discard
+      handoffResults.send HandoffResult(
+        attempt: task.attempt,
+        target: task.target,
+        parent: task.parent,
+        seq: task.seq,
+        applied: applied)
+  finally:
+    client.close()
 
 type LocalHit = object
   parent: uint64
@@ -107,6 +201,30 @@ proc stableErrorCode(e: ref Exception): string =
 
 proc sendStableError(sock: Socket, e: ref Exception) =
   sock.sendFrame("ERR " & stableErrorCode(e))
+
+proc audit(sv: Server, event: string; ok = true; user = ""; ring = "";
+           ringKey = ""; message = ""; extra: JsonNode = nil) =
+  if sv.dataDir.len == 0:
+    return
+  var node = %*{
+    "timestamp": epochTime(),
+    "event": event,
+    "ok": ok,
+    "user": user,
+    "ring": ring,
+    "ringKey": ringKey,
+    "message": message
+  }
+  if not extra.isNil:
+    node["extra"] = extra
+  try:
+    var f = open(sv.dataDir / "kouten.audit.jsonl", fmAppend)
+    try:
+      f.writeLine($node)
+    finally:
+      f.close()
+  except CatchableError:
+    discard
 
 proc readSecretFile(path, label: string): string =
   if path.len == 0:
@@ -208,6 +326,74 @@ proc parsePrefixes(s: string): seq[string] =
     if prefix.len > 0:
       result.add prefix
 
+proc parseStringList(node: JsonNode, key: string): seq[string] =
+  if node.kind != JObject or not node.hasKey(key):
+    return @[]
+  let value = node[key]
+  case value.kind
+  of JString:
+    result = parsePrefixes(value.getStr())
+  of JArray:
+    for item in value:
+      if item.kind != JString:
+        raise newException(ValueError, "config " & key & " entries must be strings")
+      let part = item.getStr().strip()
+      if part.len > 0:
+        result.add part
+  else:
+    raise newException(ValueError, "config " & key & " must be a string or array")
+
+proc jsonStringOpt(node: JsonNode, key, default: string): string =
+  if node.kind == JObject and node.hasKey(key):
+    if node[key].kind != JString:
+      raise newException(ValueError, "config " & key & " must be a string")
+    node[key].getStr()
+  else:
+    default
+
+proc jsonIntOpt(node: JsonNode, key: string, default: int): int =
+  if node.kind == JObject and node.hasKey(key):
+    node[key].getInt().int
+  else:
+    default
+
+proc jsonFloatOpt(node: JsonNode, key: string, default: float): float =
+  if node.kind == JObject and node.hasKey(key):
+    node[key].getFloat()
+  else:
+    default
+
+proc jsonBoolOpt(node: JsonNode, key: string, default: bool): bool =
+  if node.kind == JObject and node.hasKey(key):
+    node[key].getBool()
+  else:
+    default
+
+proc jsonPeersOpt(node: JsonNode, default: string): string =
+  if node.kind != JObject or not node.hasKey("peers"):
+    return default
+  let peersNode = node["peers"]
+  case peersNode.kind
+  of JString:
+    peersNode.getStr()
+  of JArray:
+    var parts: seq[string] = @[]
+    for item in peersNode:
+      if item.kind != JString:
+        raise newException(ValueError, "config peers entries must be strings")
+      parts.add item.getStr()
+    parts.join(",")
+  else:
+    raise newException(ValueError, "config peers must be a string or array")
+
+proc parseDurabilityValue(value: string): StoreDurability =
+  case value
+  of "buffered": durBuffered
+  of "strong": durStrong
+  else:
+    raise newException(ValueError,
+      "--durability must be 'buffered' or 'strong'")
+
 proc parseUserRule(spec: string): tuple[user: string, rule: UserRule] =
   let parts = spec.split(':', maxsplit = 3)
   if parts.len < 3:
@@ -219,6 +405,96 @@ proc parseUserRule(spec: string): tuple[user: string, rule: UserRule] =
                          prefixes: if parts.len >= 4: parsePrefixes(parts[3]) else: @[])
   if result.user.len == 0:
     raise newException(ValueError, "--role user must not be empty")
+
+proc parseUserRule(node: JsonNode): tuple[user: string, rule: UserRule] =
+  if node.kind == JString:
+    return parseUserRule(node.getStr())
+  if node.kind != JObject:
+    raise newException(ValueError, "config roles entries must be strings or objects")
+  result.user = jsonStringOpt(node, "user", jsonStringOpt(node, "username", ""))
+  let passwordFile = jsonStringOpt(node, "passwordFile",
+                                   jsonStringOpt(node, "password-file", ""))
+  let password =
+    if passwordFile.len > 0: readSecretFile(passwordFile, "role password")
+    else: jsonStringOpt(node, "password", "")
+  result.rule = UserRule(
+    password: password,
+    role: parseRole(jsonStringOpt(node, "role", "")),
+    prefixes: parseStringList(node, "prefixes"))
+  if result.user.len == 0:
+    raise newException(ValueError, "config role user must not be empty")
+  if result.rule.password.len == 0:
+    raise newException(ValueError, "config role password must not be empty")
+
+proc loadServerConfig(path: string, id: var int, peersStr, dataDir: var string,
+                      slowTickSec: var float, authUser, authPassword,
+                      authPasswordFile, authTokenFile, authSecretKey,
+                      authSecretKeyFile, tlsCertFile, tlsKeyFile, tlsCaFile,
+                      tlsServerName: var string,
+                      tlsInsecureSkipVerify: var bool,
+                      users: var Table[string, UserRule], galaxy: var string,
+                      allowedRingPrefixes: var seq[string],
+                      durability: var StoreDurability) =
+  let cfg = parseFile(path)
+  if cfg.kind != JObject:
+    raise newException(ValueError, "server config file must contain a JSON object")
+  id = jsonIntOpt(cfg, "id", id)
+  peersStr = jsonPeersOpt(cfg, peersStr)
+  dataDir = jsonStringOpt(cfg, "data", dataDir)
+  dataDir = jsonStringOpt(cfg, "dataDir", dataDir)
+  slowTickSec = jsonFloatOpt(cfg, "slowTick", slowTickSec)
+  slowTickSec = jsonFloatOpt(cfg, "slow-tick", slowTickSec)
+  authUser = jsonStringOpt(cfg, "user", authUser)
+  authUser = jsonStringOpt(cfg, "username", authUser)
+  authPassword = jsonStringOpt(cfg, "password", authPassword)
+  authPasswordFile = jsonStringOpt(cfg, "passwordFile", authPasswordFile)
+  authPasswordFile = jsonStringOpt(cfg, "password-file", authPasswordFile)
+  authSecretKey = jsonStringOpt(cfg, "secretKey", authSecretKey)
+  authSecretKey = jsonStringOpt(cfg, "secret-key", authSecretKey)
+  authSecretKeyFile = jsonStringOpt(cfg, "secretKeyFile", authSecretKeyFile)
+  authSecretKeyFile = jsonStringOpt(cfg, "secret-key-file", authSecretKeyFile)
+  tlsCertFile = jsonStringOpt(cfg, "tlsCertFile", tlsCertFile)
+  tlsCertFile = jsonStringOpt(cfg, "tls-cert", tlsCertFile)
+  tlsKeyFile = jsonStringOpt(cfg, "tlsKeyFile", tlsKeyFile)
+  tlsKeyFile = jsonStringOpt(cfg, "tls-key", tlsKeyFile)
+  tlsCaFile = jsonStringOpt(cfg, "tlsCaFile", tlsCaFile)
+  tlsCaFile = jsonStringOpt(cfg, "tls-ca", tlsCaFile)
+  tlsServerName = jsonStringOpt(cfg, "tlsServerName", tlsServerName)
+  tlsServerName = jsonStringOpt(cfg, "tls-server-name", tlsServerName)
+  tlsInsecureSkipVerify = jsonBoolOpt(cfg, "tlsInsecureSkipVerify",
+                                      tlsInsecureSkipVerify)
+  tlsInsecureSkipVerify = jsonBoolOpt(cfg, "tls-insecure-skip-verify",
+                                      tlsInsecureSkipVerify)
+  galaxy = jsonStringOpt(cfg, "galaxy", galaxy)
+  for prefix in parseStringList(cfg, "allowRing"):
+    allowedRingPrefixes.add prefix
+  for prefix in parseStringList(cfg, "allow-ring"):
+    allowedRingPrefixes.add prefix
+  if cfg.hasKey("durability"):
+    durability = parseDurabilityValue(cfg["durability"].getStr())
+  if cfg.hasKey("authToken"):
+    authUser = "token"
+    authPassword = cfg["authToken"].getStr()
+  if cfg.hasKey("auth-token"):
+    authUser = "token"
+    authPassword = cfg["auth-token"].getStr()
+  authTokenFile = jsonStringOpt(cfg, "authTokenFile", authTokenFile)
+  authTokenFile = jsonStringOpt(cfg, "auth-token-file", authTokenFile)
+  if cfg.hasKey("roles"):
+    if cfg["roles"].kind != JArray:
+      raise newException(ValueError, "config roles must be an array")
+    for item in cfg["roles"]:
+      let parsed = parseUserRule(item)
+      users[parsed.user] = parsed.rule
+      if authUser.len == 0:
+        authUser = parsed.user
+        authPassword = parsed.rule.password
+  if cfg.hasKey("role"):
+    let parsed = parseUserRule(cfg["role"])
+    users[parsed.user] = parsed.rule
+    if authUser.len == 0:
+      authUser = parsed.user
+      authPassword = parsed.rule.password
 
 proc currentUser(sv: Server, sock: Socket): string =
   sv.authedUsers.getOrDefault(sock.getFd.int, sv.authUser)
@@ -266,6 +542,8 @@ proc requireRole(sv: Server, sock: Socket, need: UserRole): bool =
     return true
   inc sv.authzDenied
   inc sv.errorResponses
+  sv.audit("authz-denied", ok = false, user = user,
+           message = "role " & $rule.role & " cannot perform required operation")
   sock.sendFrame("ERR authz-denied role=" & $rule.role)
   false
 
@@ -274,6 +552,8 @@ proc requireRingKey(sv: Server, sock: Socket, ringKey: uint64): bool =
     return true
   inc sv.authzDenied
   inc sv.errorResponses
+  sv.audit("authz-denied", ok = false, user = sv.currentUser(sock),
+           ringKey = $ringKey, message = "ring key is outside authorization boundary")
   sock.sendFrame("ERR authz-denied ringKey=" & $ringKey)
   false
 
@@ -346,11 +626,28 @@ proc setSocketReadTimeout(sock: Socket, timeoutMs: int) =
     discard posix.setsockopt(sock.getFd, SOL_SOCKET, SO_RCVTIMEO,
                              addr tv, SockLen(sizeof(tv)))
 
-proc denyRingName(sock: Socket, name: string) =
+proc denyRingName(sv: Server, sock: Socket, name: string) =
+  sv.audit("authz-denied", ok = false, user = sv.currentUser(sock),
+           ring = name, message = "ring is outside authorization boundary")
   sock.sendFrame("ERR authz-denied ring=" & name)
 
-proc denyRingKey(sock: Socket, ringKey: uint64) =
+proc denyRingKey(sv: Server, sock: Socket, ringKey: uint64) =
+  sv.audit("authz-denied", ok = false, user = sv.currentUser(sock),
+           ringKey = $ringKey, message = "ring key is outside authorization boundary")
   sock.sendFrame("ERR authz-denied ringKey=" & $ringKey)
+
+proc rejectDrainedWrite(sv: Server, sock: Socket, command: string) =
+  inc sv.errorResponses
+  inc sv.drainRejectedWrites
+  sv.audit("write-denied", ok = false, user = sv.currentUser(sock),
+           message = "server is draining; command=" & command)
+  sock.sendFrame("ERR draining")
+
+proc rejectIfDraining(sv: Server, sock: Socket, command: string): bool =
+  if not sv.draining:
+    return false
+  sv.rejectDrainedWrite(sock, command)
+  true
 
 proc drainTxCommitOps(sock: Socket, nOps: int) =
   for _ in 0 ..< nOps:
@@ -414,8 +711,82 @@ proc handoffTick(sv: Server) =
   let n = sv.peers.len
   if n <= 1:
     return
+
+  while true:
+    let completed = handoffResults.tryRecv()
+    if not completed.dataAvailable:
+      break
+    let r = completed.msg
+    let k = (r.parent, r.seq)
+    if k notin sv.pendingHandoffs:
+      continue
+    let pending = sv.pendingHandoffs[k]
+    if pending.attempt != r.attempt:
+      continue
+    sv.pendingHandoffs.del k
+    if not r.applied:
+      inc sv.handoffFailed
+      continue
+    if k notin sv.st.items:
+      inc sv.handoffStaleAck
+      continue
+    template current: untyped = sv.st.items[k]
+    let unchanged =
+      current.period == pending.period and
+      current.head == pending.head and
+      current.tWrite == pending.tWrite and
+      current.payload == pending.payload and
+      current.codec == pending.codec and
+      current.vec == pending.vec
+    if not unchanged:
+      inc sv.handoffStaleAck
+      continue
+    let owner = int(sv.tbl.node(orbitOf(current), now))
+    let validTarget =
+      r.target == owner or
+      (owner == sv.myId and r.target == (sv.myId + 1) mod n)
+    if validTarget:
+      current.sentAhead = true
+      inc sv.handoffApplied
+    else:
+      inc sv.handoffStaleAck
+
   var doomed: seq[(uint64, uint32)] = @[]
   var budget = MaxTransfersPerTick
+
+  proc enqueue(k: (uint64, uint32), target: int, p: Particle): bool =
+    if k in sv.pendingHandoffs:
+      return false
+    inc sv.nextHandoffAttempt
+    let attempt = sv.nextHandoffAttempt
+    let pending = PendingHandoff(
+      attempt: attempt,
+      target: target,
+      period: p.period,
+      head: p.head,
+      tWrite: p.tWrite,
+      payload: p.payload,
+      codec: p.codec,
+      vec: p.vec)
+    let task = HandoffTask(
+      kind: htkTransfer,
+      attempt: attempt,
+      target: target,
+      parent: p.parent,
+      seq: p.seq,
+      period: p.period,
+      head: p.head,
+      tWrite: p.tWrite,
+      payload: p.payload,
+      codec: p.codec,
+      vec: p.vec)
+    if not handoffTasks.trySend(task):
+      inc sv.handoffQueueFull
+      return false
+    sv.pendingHandoffs[k] = pending
+    inc sv.handoffQueued
+    true
+
   for k in sv.st.items.keys:
     if budget <= 0:
       break   # 残りは次の tick（サービス応答性を優先）
@@ -429,24 +800,17 @@ proc handoffTick(sv: Server) =
       let tCross = o.nextArrival(sv.tbl.arcStart(NodeId(nextNode)), now)
       if tCross - now < Lookahead:
         if not p.sentAhead:
-          try:
-            sv.peerLink.transferReq(nextNode, p.parent, p.seq, p.period, p.head,
-                                    p.tWrite, p.payload, p.vec, p.codec, timeoutMs = 500)
-            p.sentAhead = true
+          if enqueue(k, nextNode, p):
             dec budget
-          except CatchableError:
-            discard   # 次の tick で再試行
       else:
         p.sentAhead = false   # 新しい周回に入った
     else:
       if not p.sentAhead:
-        try:
-          sv.peerLink.transferReq(ownNow, p.parent, p.seq, p.period, p.head,
-                                  p.tWrite, p.payload, p.vec, p.codec, timeoutMs = 500)
-          p.sentAhead = true
+        if enqueue(k, ownNow, p):
           dec budget
-        except CatchableError:
-          discard   # 次の tick で再試行
+      # transferReq returns only after the destination has applied TRF. Keep a
+      # short tail copy for boundary races, then remove it. Failed/unknown
+      # transfers never set sentAhead and are retried without deleting source.
       if p.sentAhead and now - p.lastHere > Grace:
         doomed.add k
   for k in doomed:
@@ -470,6 +834,10 @@ proc handleRetrieve(sv: Server, sock: Socket, parts: seq[string]) =
   let vecDim = parseInt(parts[4])
   let q = sock.readExact(checkedVecBytes(vecDim)).bytesVec(vecDim).normalize()
   if budget < 0 or budget > MaxRetrieveBudget:
+    sv.audit("retrieve-denied", ok = false, user = sv.currentUser(sock),
+             ringKey = (if hasRing: $ringKey else: ""),
+             message = "retrieve budget exceeds configured maximum",
+             extra = %*{"budget": budget, "maxBudget": MaxRetrieveBudget})
     raise newException(ValueError,
       "RETRIEVE budget exceeds max " & $MaxRetrieveBudget)
 
@@ -488,6 +856,11 @@ proc handleRetrieve(sv: Server, sock: Socket, parts: seq[string]) =
         continue
       inc scanned
       if scanned > MaxRetrieveScan:
+        sv.audit("broad-scan-denied", ok = false, user = sv.currentUser(sock),
+                 ringKey = (if hasRing: $ringKey else: ""),
+                 message = "retrieve scan exceeds configured maximum",
+                 extra = %*{"scanned": scanned, "maxScan": MaxRetrieveScan,
+                            "hasRing": hasRing})
         raise newException(ValueError,
           "RETRIEVE scan exceeds max " & $MaxRetrieveScan &
           "; use a ring-scoped query or narrower retrieval plan")
@@ -552,6 +925,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
           secureEqual(sv.users[parts[1]].password, parts[2]):
         sv.authed[fd] = true
         sv.authedUsers[fd] = parts[1]
+        sv.audit("auth-success", user = parts[1])
         sock.sendFrame("OK auth")
         return true
     elif sv.authSecretKey.len > 0:
@@ -567,6 +941,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
           sv.authChallenges.del fd
           sv.authed[fd] = true
           sv.authedUsers[fd] = sv.authUser
+          sv.audit("auth-success", user = sv.authUser)
           sock.sendFrame("OK auth")
           sock.enableSecure(sv.authSecretKey, challenge)
           return true
@@ -576,10 +951,14 @@ proc handleFrame(sv: Server, sock: Socket): bool =
           secureEqual(parts[2], sv.authPassword):
         sv.authed[fd] = true
         sv.authedUsers[fd] = sv.authUser
+        sv.audit("auth-success", user = sv.authUser)
         sock.sendFrame("OK auth")
         return true
     inc sv.authFailures
     inc sv.errorResponses
+    sv.audit("auth-failure", ok = false,
+             user = (if parts.len >= 2: parts[1] else: ""),
+             message = "authentication failed or required")
     sock.sendFrame("ERR auth-required")
     return false
   case parts[0]
@@ -597,11 +976,15 @@ proc handleFrame(sv: Server, sock: Socket): bool =
   of "TXBEGIN":
     if not sv.requireRole(sock, roleWriter):
       return true
+    if sv.rejectIfDraining(sock, "TXBEGIN"):
+      return true
     doAssert sv.myId == 0, "TXBEGIN は node0 の landing zone で処理する"
     let txid = sv.st.reserveTxId()
     sock.sendFrame("OK " & $txid)
   of "TXRESERVE":
     if not sv.requireRole(sock, roleWriter):
+      return true
+    if sv.rejectIfDraining(sock, "TXRESERVE"):
       return true
     doAssert sv.myId == 0, "TXRESERVE は node0 の landing zone で処理する"
     requireParts(parts, "TXRESERVE", 5)
@@ -621,6 +1004,10 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     requireParts(parts, "TXCOMMIT", 3)
     let txid = parseBiggestUInt(parts[1]).uint64
     let nOps = parseInt(parts[2])
+    if sv.draining:
+      sock.drainTxCommitOps(nOps)
+      sv.rejectDrainedWrite(sock, "TXCOMMIT")
+      return true
     var ops: seq[ClusterTxOp] = @[]
     for _ in 0 ..< nOps:
       let h = sock.readHeader()
@@ -640,7 +1027,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       if not sv.ringKeyAllowed(sock, op.parent):
         sock.drainBytes(bodyBytes)
         sock.drainTxCommitOps(nOps - ops.len - 1)
-        sock.denyRingKey(op.parent)
+        sv.denyRingKey(sock, op.parent)
         return true
       op.payload = sock.readExact(payloadLen)
       op.vec =
@@ -669,12 +1056,16 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       requireParts(parts, "UAPPLY", 2)
       let bodyLen = parseInt(parts[1])
       discard checkedWireLen(bodyLen, "bodyLen")
+      if sv.draining:
+        sock.drainBytes(bodyLen)
+        sv.rejectDrainedWrite(sock, "UAPPLY")
+        return true
       let body = sock.readExact(bodyLen)
       validateJsonDepth(body, MaxWireJsonDepth)
       let event = parseJson(body)
       let ringName = event{"ring"}.getStr()
       if not sv.ringNameAllowed(sock, ringName):
-        sock.denyRingName(ringName)
+        sv.denyRingName(sock, ringName)
         return true
       let ri = sv.ringInfo(ringName)
       let owner = int(sv.tbl.owner(ri.head))
@@ -732,9 +1123,13 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     let vecDim = parseInt(parts[data + 6])
     let codec = if parts.len > data + 7: parsePayloadCodec(parts[data + 7]) else: pcRaw
     let bodyBytes = checkedFrameBytes(payloadLen, vecDim)
+    if sv.draining:
+      sock.drainBytes(bodyBytes)
+      sv.rejectDrainedWrite(sock, "APPLYTX")
+      return true
     if not sv.ringKeyAllowed(sock, parent):
       sock.drainBytes(bodyBytes)
-      sock.denyRingKey(parent)
+      sv.denyRingKey(sock, parent)
       return true
     if sv.st.appliedClusterTx.getOrDefault(txid, false):
       sock.drainBytes(bodyBytes)
@@ -776,7 +1171,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       discard checkedWireLen(selectionLen, "selectionLen")
       if not sv.ringKeyAllowed(sock, parent):
         sock.drainBytes(selectionLen)
-        sock.denyRingKey(parent)
+        sv.denyRingKey(sock, parent)
         return true
       selection = sock.readExact(selectionLen)
     elif not sv.requireRingKey(sock, parent):
@@ -812,7 +1207,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       let ringKey = parseBiggestUInt(parts[2]).uint64
       if not sv.ringKeyAllowed(sock, ringKey):
         sock.drainBytes(checkedVecBytes(parseInt(parts[4])))
-        sock.denyRingKey(ringKey)
+        sv.denyRingKey(sock, ringKey)
         return true
     sv.handleRetrieve(sock, parts)
   of "RINGS":
@@ -836,10 +1231,14 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     let codec = if parts.len >= 5: parsePayloadCodec(parts[4]) else: pcRaw
     discard checkedWireLen(ringLen, "ringLen")
     let bodyBytes = checkedFrameBytes(payloadLen, vecDim)
+    if sv.draining:
+      sock.drainBytes(ringLen + bodyBytes)
+      sv.rejectDrainedWrite(sock, "PUTR")
+      return true
     let ringName = sock.readExact(ringLen)
     if not sv.ringNameAllowed(sock, ringName):
       sock.drainBytes(bodyBytes)
-      sock.denyRingName(ringName)
+      sv.denyRingName(sock, ringName)
       return true
     let payload = sock.readExact(payloadLen)
     let vec =
@@ -871,9 +1270,13 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     let vecDim = if parts.len >= 6: parseInt(parts[5]) else: 0
     let codec = if parts.len >= 7: parsePayloadCodec(parts[6]) else: pcRaw
     let bodyBytes = checkedFrameBytes(payloadLen, vecDim)
+    if sv.draining:
+      sock.drainBytes(bodyBytes)
+      sv.rejectDrainedWrite(sock, "PUT")
+      return true
     if not sv.ringKeyAllowed(sock, ringKey):
       sock.drainBytes(bodyBytes)
-      sock.denyRingKey(ringKey)
+      sv.denyRingKey(sock, ringKey)
       return true
     let payload = sock.readExact(payloadLen)
     let vec =
@@ -906,7 +1309,7 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     discard checkedWireLen(cursorLen, "cursorLen")
     if not sv.ringKeyAllowed(sock, ringKey):
       sock.drainBytes(cursorLen)
-      sock.denyRingKey(ringKey)
+      sv.denyRingKey(sock, ringKey)
       return true
     let cursor = sock.readExact(cursorLen)
     let afterSeq = if cursor.len == 0: -1'i64 else: int64(parseBiggestInt(cursor))
@@ -938,31 +1341,23 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       discard checkedWireLen(selectionLen, "selectionLen")
       if not sv.ringKeyAllowed(sock, parent):
         sock.drainBytes(selectionLen)
-        sock.denyRingKey(parent)
+        sv.denyRingKey(sock, parent)
         return true
       selection = sock.readExact(selectionLen)
     elif not sv.requireRingKey(sock, parent):
       return true
     let owner = sv.ownerOf(parent, seq, period, head, tWrite)
     if owner != sv.myId:
-      let r =
-        if parts[0] == "QRYID":
-          sv.peerLink.queryReq(owner, parent, seq, period, head, tWrite, selection)
-        else:
-          sv.peerLink.getReq(owner, parent, seq, period, head, tWrite)
-      if r.forwarded:
-        sock.sendFrame("FWD " & $r.newParent & " " & $epoch & " " & $r.newSeq & " " &
-                       $r.newTWrite & " " & $period & " " & $head)
-      elif r.found:
-        sock.sendFrame("VAL " & $r.node & " " & $r.value.len &
-                       sv.codecSuffix(sock, r.codec), r.value)
-      else:
-        sock.sendFrame("MISS")
+      # Keep read routing non-blocking at the server layer. Synchronous
+      # server-to-server read forwarding can deadlock two single-loop nodes
+      # that ask each other for ownership resolution at the same time.
+      sock.sendFrame("FWD " & $parent & " " & $epoch & " " & $seq & " " &
+                     $tWrite & " " & $period & " " & $head & " " & $owner)
       return true
     if not sv.st.contains(parent, seq):
-      let k = (parent, seq)
-      if k in sv.st.forwarders and sv.st.forwarders[k].expiresAt >= now:
-        let f = sv.st.forwarders[k]
+      let localKey = (parent, seq)
+      if localKey in sv.st.forwarders and sv.st.forwarders[localKey].expiresAt >= now:
+        let f = sv.st.forwarders[localKey]
         sock.sendFrame("FWD " & $f.newParent & " " & $epoch & " " & $f.newSeq & " " &
                        $f.newTWrite & " " & $period & " " & $head)
       else:
@@ -982,23 +1377,32 @@ proc handleFrame(sv: Server, sock: Socket): bool =
                      sv.codecSuffix(sock, codec), value)
   of "GET", "QRY":
     requireParts(parts, parts[0], if parts[0] == "QRY": 7 else: 6)
+    if parts.len != (if parts[0] == "QRY": 7 else: 6):
+      raise newException(ValueError, parts[0] & " has unexpected trailing fields")
     let parent = parseBiggestUInt(parts[1]).uint64
     let seq = parseUInt(parts[2]).uint32
+    let period = parseFloat(parts[3])
+    let head = parseFloat(parts[4])
+    let tWrite = parseFloat(parts[5])
     var selection = ""
     if parts[0] == "QRY":
       let selectionLen = parseInt(parts[6])
       discard checkedWireLen(selectionLen, "selectionLen")
       if not sv.ringKeyAllowed(sock, parent):
         sock.drainBytes(selectionLen)
-        sock.denyRingKey(parent)
+        sv.denyRingKey(sock, parent)
         return true
       selection = sock.readExact(selectionLen)
     elif not sv.requireRingKey(sock, parent):
       return true
+    let owner = sv.ownerOf(parent, seq, period, head, tWrite)
+    if owner != sv.myId:
+      sock.sendFrame("FWD " & $parent & " " & $seq & " " & $tWrite & " " & $owner)
+      return true
     if not sv.st.contains(parent, seq):
-      let k = (parent, seq)
-      if k in sv.st.forwarders and sv.st.forwarders[k].expiresAt >= now:
-        let f = sv.st.forwarders[k]
+      let localKey = (parent, seq)
+      if localKey in sv.st.forwarders and sv.st.forwarders[localKey].expiresAt >= now:
+        let f = sv.st.forwarders[localKey]
         sock.sendFrame("FWD " & $f.newParent & " " & $f.newSeq & " " &
                        $f.newTWrite)
       else:
@@ -1060,14 +1464,24 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     let vecDim = if parts.len >= 8: parseInt(parts[7]) else: 0
     p.codec = if parts.len >= 9: parsePayloadCodec(parts[8]) else: pcRaw
     let bodyBytes = checkedFrameBytes(payloadLen, vecDim)
+    if sv.draining:
+      sock.drainBytes(bodyBytes)
+      sv.rejectDrainedWrite(sock, "TRF")
+      return true
     if not sv.ringKeyAllowed(sock, p.parent):
       sock.drainBytes(bodyBytes)
-      sock.denyRingKey(p.parent)
+      sv.denyRingKey(sock, p.parent)
       return true
     p.payload = sock.readExact(payloadLen)
     p.vec =
       if vecDim == 0: @[]
       else: sock.readExact(checkedVecBytes(vecDim)).bytesVec(vecDim).normalize()
+    # A lookahead copy can arrive before this node owns the orbit. Mark that
+    # state so the receiver does not immediately send the copy back to the
+    # current owner. Once ownership arrives, handoffTick clears sentAhead well
+    # before the following boundary and normal forwarding resumes.
+    p.sentAhead =
+      sv.ownerOf(p.parent, p.seq, p.period, p.head, p.tWrite) != sv.myId
     if p.parent notin sv.st.ringMeta:
       sv.st.putRingMeta(p.parent, p.period, p.head)
     # 追い越し対策: 相手起点の seq 採番と衝突しないよう max を取る
@@ -1096,11 +1510,21 @@ proc handleFrame(sv: Server, sock: Socket): bool =
                    "errors " & $sv.errorResponses & " " &
                    "authFailures " & $sv.authFailures & " " &
                    "authzDenied " & $sv.authzDenied & " " &
+                   "draining " & $(if sv.draining: 1 else: 0) & " " &
+                   "drainRejectedWrites " & $sv.drainRejectedWrites & " " &
+                   "drainStartedAt " & $(int(sv.drainStartedAt)) & " " &
                    "connectionsAccepted " & $sv.connectionsAccepted & " " &
                    "activeConnections " & $sv.activeConnections & " " &
                    "items " & $sv.st.count & " " &
                    "rings " & $sv.st.ringMeta.len & " " &
                    "forwarders " & $sv.st.forwarders.len & " " &
+                   "handoffPending " & $sv.pendingHandoffs.len & " " &
+                   "handoffQueueDepth " & $handoffTasks.peek & " " &
+                   "handoffQueued " & $sv.handoffQueued & " " &
+                   "handoffApplied " & $sv.handoffApplied & " " &
+                   "handoffFailed " & $sv.handoffFailed & " " &
+                   "handoffStaleAck " & $sv.handoffStaleAck & " " &
+                   "handoffQueueFull " & $sv.handoffQueueFull & " " &
                    "walBytes " & $sv.st.logSize & " " &
                    "warpJobs " & $sv.st.warpJobs.len & " " &
                    "universeSyncEvents " & $sv.st.universeSyncEvents.len & " " &
@@ -1121,6 +1545,36 @@ proc handleFrame(sv: Server, sock: Socket): bool =
                    "clusterTxApplied " & $sv.st.clusterTxApplied & " " &
                    "clusterTxPending " & $sv.st.clusterTxPending & " " &
                    "clumps " & $sv.fs.clumps.len)
+  of "DRAIN":
+    if not sv.requireRole(sock, roleAdmin):
+      return true
+    sv.draining = true
+    sv.drainStartedAt = epochTime()
+    sv.st.sync()
+    sv.audit("drain", user = sv.currentUser(sock),
+             message = "server entered drain mode")
+    sock.sendFrame("OK draining")
+  of "RESUME":
+    if not sv.requireRole(sock, roleAdmin):
+      return true
+    sv.draining = false
+    sv.drainStartedAt = 0.0
+    sv.audit("resume", user = sv.currentUser(sock),
+             message = "server left drain mode")
+    sock.sendFrame("OK resumed")
+  of "SNAPSHOT":
+    if not sv.requireRole(sock, roleAdmin):
+      return true
+    sv.st.sync()
+    sv.audit("snapshot-barrier", user = sv.currentUser(sock),
+             message = "server flushed snapshot barrier")
+    sock.sendFrame("SNAPSHOT " &
+                   "draining " & $(if sv.draining: 1 else: 0) & " " &
+                   "items " & $sv.st.count & " " &
+                   "rings " & $sv.st.ringMeta.len & " " &
+                   "pendingTx " & $sv.st.clusterTxPending & " " &
+                   "walBytes " & $sv.st.logSize & " " &
+                   "activeConnections " & $sv.activeConnections)
   of "SHUTDOWN":
     if not sv.requireRole(sock, roleAdmin):
       return true
@@ -1137,8 +1591,10 @@ proc printUsage() =
   echo ""
   echo "Usage:"
   echo "  koutend --id=N --peers=host:port[,host:port...] [options]"
+  echo "  koutend --config=server.json [options]"
   echo ""
   echo "Options:"
+  echo "  --config=FILE                 Load server defaults from JSON"
   echo "  --data=DIR                    Enable WAL-backed persistence"
   echo "  --slow-tick=SECONDS           Background maintenance interval"
   echo "  --durability=buffered|strong  Buffered WAL or fsync-on-write durability"
@@ -1169,6 +1625,7 @@ proc main() =
       printUsage()
       return
 
+  var configPath = getEnv("KOUTEN_SERVER_CONFIG")
   var id = -1
   var peersStr = ""
   var dataDir = ""
@@ -1191,6 +1648,20 @@ proc main() =
   for kind, key, val in getopt():
     if kind == cmdLongOption:
       case key
+      of "config": configPath = val
+      else: discard
+
+  if configPath.len > 0:
+    loadServerConfig(configPath, id, peersStr, dataDir, slowTickSec,
+                     authUser, authPassword, authPasswordFile, authTokenFile,
+                     authSecretKey, authSecretKeyFile, tlsCertFile, tlsKeyFile,
+                     tlsCaFile, tlsServerName, tlsInsecureSkipVerify, users,
+                     galaxy, allowedRingPrefixes, durability)
+
+  for kind, key, val in getopt():
+    if kind == cmdLongOption:
+      case key
+      of "config": discard
       of "id": id = parseInt(val)
       of "peers": peersStr = val
       of "data": dataDir = val
@@ -1218,12 +1689,7 @@ proc main() =
           if prefix.len > 0:
             allowedRingPrefixes.add prefix
       of "durability":
-        case val
-        of "buffered": durability = durBuffered
-        of "strong": durability = durStrong
-        else:
-          raise newException(ValueError,
-            "--durability must be 'buffered' or 'strong'")
+        durability = parseDurabilityValue(val)
       of "auth-token":
         authUser = "token"
         authPassword = val
@@ -1263,6 +1729,7 @@ proc main() =
   let sv = Server(myId: id, peers: peers,
                   tbl: ArcTable(epoch: 1, nNodes: uint16(peers.len)),
                   st: openStore(dataDir, durability = durability),
+                  dataDir: dataDir,
                   fs: newFieldState(),
                   peerLink: newClusterClient(peers, username = authUser,
                                              password = authPassword,
@@ -1285,6 +1752,8 @@ proc main() =
                   users: users,
                   galaxy: galaxy,
                   allowedRingPrefixes: allowedRingPrefixes,
+                  pendingHandoffs:
+                    initTable[(uint64, uint32), PendingHandoff](),
                   preparedSelections: initTable[string, Selection](),
                   preparedSelectionLru: @[],
                   preparedSelectionBytes: 0,
@@ -1297,6 +1766,20 @@ proc main() =
                                  keyFile = sv.tlsKeyFile)
   sv.st.setGalaxy(galaxy)
   sv.rebuildFieldState()
+
+  handoffTasks.open(HandoffQueueCapacity)
+  handoffResults.open()
+  handoffStopping.store(false)
+  var handoffThread: Thread[HandoffWorkerConfig]
+  createThread(handoffThread, handoffWorker, HandoffWorkerConfig(
+    peers: peers,
+    username: authUser,
+    password: authPassword,
+    secretKey: authSecretKey,
+    tls: tlsCertFile.len > 0,
+    tlsCaFile: tlsCaFile,
+    tlsServerName: tlsServerName,
+    tlsInsecureSkipVerify: tlsInsecureSkipVerify))
 
   let listener = newSocket()
   listener.setSockOpt(OptReuseAddr, true)
@@ -1388,6 +1871,11 @@ proc main() =
       sv.st.sync()
       lastSlowTick = nowM
   sv.st.sync()
+  handoffStopping.store(true)
+  handoffTasks.send HandoffTask(kind: htkStop)
+  handoffThread.joinThread()
+  handoffTasks.close()
+  handoffResults.close()
   sv.st.close()
   sv.peerLink.close()
 

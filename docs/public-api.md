@@ -29,6 +29,25 @@ technical preview. The canonical Nim definitions live in `src/koutendb.nim`.
 C ABI / driver boundaries and CLI reproducibility, not as the preferred
 application model.
 
+## Error Types
+
+KoutenDB still raises standard Nim exception families for compatibility.
+Specialized exceptions inherit from those families so existing `ValueError`,
+`IOError`, and `KeyError` handlers continue to work.
+
+| Type | Inherits | Meaning |
+|---|---|---|
+| `KoutenValidationError` | `ValueError` | Invalid caller input that can be fixed before retrying. |
+| `KoutenGuardrailError` | `ValueError` | An opt-in production guardrail rejected an operation. |
+| `KoutenConflictError` | `IOError` | Retryable workflow conflict, such as a busy coordinate lock. |
+| `KoutenOperationError` | `IOError` | Operational failure from remote cluster, durability, backup, or sync paths. |
+| `KoutenNotFoundError` | `KeyError` | Requested record or maintenance job does not exist. |
+
+The current release applies the taxonomy to the highest-value public API
+boundaries first: guardrails, coordinate locks, and atomic batch validation.
+Lower-level storage and network errors may still surface as their standard Nim
+exception types.
+
 ## Retrieval Types
 
 | Type | Important fields | Meaning |
@@ -48,6 +67,7 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 | `SearchDepth` | `sdShallow`, `sdNormal`, `sdDeep`, `sdVeryDeep` | How far to descend ring hierarchy. |
 | `SearchProfile` | `amount`, `scope`, `depth`, `note` | Named human-facing retrieval profile. |
 | `RetrievalTuning` | `budget`, `focus`, `topRings`, `branchBudget`, `maxDepth`, `includeChildren` | Lower-level retrieval knobs. Use when you need explicit tuning. |
+| `KoutenGuardrails` | `maxPayloadBytes`, `maxVectorDim`, `maxRingCount`, `maxRecordsPerRing` | Opt-in write-path limits for production trials. Zero means disabled. |
 
 ## Sync And Job Types
 
@@ -67,6 +87,8 @@ For application-facing tuning, prefer `SearchProfile` over raw numeric knobs:
 |---|---|---|
 | `CompactStats` | store-defined | Result of WAL compaction. |
 | `BackupStats` | store-defined | Result of backup / verify / restore operations. |
+| `KoutenOperationalVerifyReport` | object | Data-dir operational verification report. |
+| `KoutenOperationalCheck` | object | One named operational verification check. |
 | `DumpStats` | `bytes`, `records`, `rings`, `documents`, `destination` | JSONL dump summary. |
 | `ImportStats` | `read`, `imported`, `skipped`, `errors`, `rings`, `batches`, `batchSize`, `source`, `defaultRing` | JSONL import summary, including chunked bulk-load commit information. |
 | `KoutenDurability` | `durBuffered`, `durStrong` | WAL durability mode. |
@@ -199,6 +221,8 @@ or stellar lens.
 | `backup(dstDir)` | Create a compact backup. |
 | `backupEncrypted(dstDir, passphrase)` | Create an encrypted backup. |
 | `verifyBackup(backupDir)` | Verify a backup. |
+| `operationalVerify(dataDir, diskBacked = true, verifySegments = false, maxWalBytes = -1, maxSegmentFiles = -1, maxItems = -1, maxRings = -1)` | Open and inspect a persistent embedded data directory, optionally failing when WAL bytes, segment-file count, item count, or ring count exceed configured trial thresholds. |
+| `auditLogPath(dataDir)` / `auditLogPath(db)` | Return the append-only audit JSONL path for persistent embedded stores. |
 | `restoreBackup(backupDir, dataDir, overwrite = false, durability = durBuffered)` | Restore into a data directory. |
 | `restoreEncryptedBackup(backupDir, dataDir, passphrase, overwrite = false, durability = durBuffered)` | Restore an encrypted backup into a data directory. |
 | `dump(path = "", includeVectors = true)` | Export `koutendb.dump.v1` JSONL with ring, payload, vector, and codec metadata. |
@@ -231,6 +255,7 @@ or stellar lens.
 | `configureWriteAckMode(mode)` | Set default write acknowledgement mode. |
 | `configureRingWriteAckMode(ring, mode)` | Override write acknowledgement per ring. |
 | `configureRingApplyPolicy(ring, policy)` | Configure universe apply behavior for one ring. |
+| `configureGuardrails(guardrails)` / `guardrails()` | Configure or inspect opt-in write-path limits. |
 
 See [Configuration Reference](config-reference.md) for property names and
 recommended defaults.

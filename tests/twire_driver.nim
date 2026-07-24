@@ -3,7 +3,7 @@
 ## Starts a small local koutend cluster and verifies that drivers can use
 ## ring names without knowing ringKey/period/head derivation rules.
 
-import std/[net, os, osproc, strutils, unittest]
+import std/[net, os, osproc, strutils, times, unittest]
 import ../src/kouten/[core, wire]
 
 proc startNode(id: int, peers: string): Process =
@@ -56,6 +56,17 @@ suite "driver wire protocol":
       check got.found
       check got.value == """{"title":"Shinjuku","country":"JP"}"""
       check got.codec == pcJson
+
+      # A non-owner may hold a handoff copy, but reads must still follow current
+      # ownership instead of returning a potentially stale local value.
+      let orbit = OrbitalId(parent: id.parent, epoch: id.epoch,
+                            tWrite: id.tWrite, seq: id.seq)
+        .ringOrbit(id.period, id.head)
+      let currentOwner = int(tbl.node(orbit, epochTime()))
+      let calculatedNonOwner = (currentOwner + 1) mod ps.len
+      let routed = c.getIdReq(calculatedNonOwner, id)
+      check routed.found
+      check routed.value == """{"title":"Shinjuku","country":"JP"}"""
 
       var legacy = newSocket()
       legacy.connect(ps[owner].host, Port(ps[owner].port))

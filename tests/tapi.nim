@@ -1,6 +1,6 @@
 ## 公開 API（src/koutendb.nim）のテスト
 
-import std/[json, os, strutils, tempfiles, tables, times, unittest]
+import std/[json, os, sequtils, strutils, tempfiles, tables, times, unittest]
 import ../src/koutendb
 
 suite "public api":
@@ -165,6 +165,61 @@ suite "public api":
     db.configureRingWriteAckMode("profile", wamApplied)
     let id = db.put("p", ring = "profile")
     check db.get(id) == "p"
+    db.close()
+
+  test "write guardrails reject unsafe payload, vector, ring, and ring-count growth":
+    var db = open()
+    expect KoutenValidationError:
+      db.configureGuardrails(KoutenGuardrails(maxPayloadBytes: -1))
+    expect ValueError:
+      db.configureGuardrails(KoutenGuardrails(maxPayloadBytes: -1))
+
+    db.configureGuardrails(KoutenGuardrails(maxPayloadBytes: 4,
+                                           maxVectorDim: 2,
+                                           maxRingCount: 2,
+                                           maxRecordsPerRing: 2))
+    check db.guardrails().maxPayloadBytes == 4
+    discard db.put("ok", ring = "a", vec = @[1.0'f32, 0.0'f32])
+    discard db.put("ok", ring = "b")
+
+    expect KoutenGuardrailError:
+      discard db.put("large", ring = "a")
+    expect ValueError:
+      discard db.put("large", ring = "a")
+    expect ValueError:
+      discard db.put("ok", ring = "a", vec = @[1.0'f32, 0.0'f32, 0.0'f32])
+    expect ValueError:
+      discard db.put("ok", ring = "c")
+
+    discard db.put("ok", ring = "a")
+    expect ValueError:
+      discard db.put("ok", ring = "a")
+
+    let ids = db.listByRing("a").items
+    check ids.len == 2
+    expect ValueError:
+      db.update(ids[0].id, "large")
+    db.close()
+
+  test "write guardrails cover transaction and atomic batch staging":
+    var db = open()
+    db.configureGuardrails(KoutenGuardrails(maxPayloadBytes: 8,
+                                           maxRecordsPerRing: 1))
+
+    expect ValueError:
+      discard db.batchPutAtomic(@["one", "two"], ring = "guarded")
+    check db.countByRing("guarded") == 0
+
+    let tx = db.beginTransaction()
+    try:
+      discard tx.put("one", ring = "guarded")
+      expect ValueError:
+        discard tx.put("two", ring = "guarded")
+      tx.rollback()
+    except CatchableError:
+      tx.rollback()
+      raise
+    check db.countByRing("guarded") == 0
     db.close()
 
   test "halo は予約リングとして使える":
@@ -1256,6 +1311,48 @@ suite "永続化":
     removeDir(backupDir)
     removeDir(restoredDir)
 
+  test "persistent stores append operational audit JSONL":
+    let root = createTempDir("koutendb", "audit-jsonl")
+    let dir = root / "db"
+    let backupDir = root / "backup"
+    let restoredDir = root / "restored"
+    try:
+      var db = open(dataDir = dir)
+      db.configureGuardrails(KoutenGuardrails(maxPayloadBytes: 16))
+      let id = db.put(%*{"n": 1}, ring = "audit/r")
+      db.update(id, %*{"n": 2})
+      db.remove(id)
+      expect ValueError:
+        discard db.put("this-payload-is-too-large", ring = "audit/r")
+      discard db.backup(backupDir)
+      discard db.compact()
+      let path = db.auditLogPath()
+      check path == auditLogPath(dir)
+      db.close()
+
+      discard restoreBackup(backupDir, restoredDir)
+
+      let lines = readFile(path).strip().splitLines()
+      var events: seq[string] = @[]
+      var sawDenied = false
+      for line in lines:
+        let node = parseJson(line)
+        events.add node["event"].getStr()
+        if node["event"].getStr() == "guardrail-denied":
+          sawDenied = true
+          check not node["ok"].getBool()
+      check "put" in events
+      check "update" in events
+      check "delete" in events
+      check "backup" in events
+      check "compact" in events
+      check sawDenied
+
+      let restoreLines = readFile(auditLogPath(restoredDir)).strip().splitLines()
+      check parseJson(restoreLines[^1])["event"].getStr() == "restore"
+    finally:
+      removeDir(root)
+
   test "transaction-created ring names survive reopen":
     let dir = createTempDir("koutendb", "tx-ring-name")
     var db = open(dataDir = dir)
@@ -1479,6 +1576,49 @@ suite "永続化":
     finally:
       removeDir(root)
 
+  test "operationalVerify opens WAL and reports segment/locality health":
+    let root = createTempDir("koutendb", "operational-verify")
+    let dir = root / "db"
+    try:
+      var db = open(dataDir = dir, diskBacked = true)
+      discard db.put(%*{"name": "a"}, ring = "ops/a")
+      discard db.put(%*{"name": "b"}, ring = "ops/b")
+      for i in 0 ..< 16:
+        discard db.put(%*{"i": i}, ring = "ops/packed")
+      db.close()
+
+      let report = operationalVerify(dir, verifySegments = true)
+      check report.ok
+      check report.dataDir == dir
+      check report.walExists
+      check report.walBytes > 0
+      check report.items == 18
+      check report.rings >= 2
+      check report.locality.persistent
+      check report.segmentDirExists
+      check report.checks.len >= 4
+      check report.checks.anyIt(it.name == "open-replay-lock" and it.ok)
+      check report.checks.anyIt(it.name == "segments" and it.ok)
+
+      let cappedWal = operationalVerify(dir, maxWalBytes = 1)
+      check not cappedWal.ok
+      check cappedWal.checks.anyIt(it.name == "wal-bytes-limit" and not it.ok)
+
+      let cappedItems = operationalVerify(dir, maxItems = 1)
+      check not cappedItems.ok
+      check cappedItems.checks.anyIt(it.name == "items-limit" and not it.ok)
+
+      let cappedRings = operationalVerify(dir, maxRings = 1)
+      check not cappedRings.ok
+      check cappedRings.checks.anyIt(it.name == "rings-limit" and not it.ok)
+
+      let cappedSegments = operationalVerify(dir, verifySegments = true,
+                                             maxSegmentFiles = 0)
+      check not cappedSegments.ok
+      check cappedSegments.checks.anyIt(it.name == "segment-files-limit" and not it.ok)
+    finally:
+      removeDir(root)
+
   test "importJsonl は外部 NoSQL JSONL を ring に割り振って保存できる":
     let dir = createTempDir("koutendb", "import-jsonl")
     let input = dir / "mongo-export.jsonl"
@@ -1626,6 +1766,8 @@ suite "transaction":
     db.attachStellar("commerce/order/A-001", "orders/A-001")
 
     let stellarLock = db.acquireStellarLock("commerce/order/A-001", ttlSeconds = 5)
+    expect KoutenConflictError:
+      discard db.acquireRingLock("users/123", ttlSeconds = 5)
     expect IOError:
       discard db.acquireRingLock("users/123", ttlSeconds = 5)
     db.releaseLock(stellarLock)
@@ -1658,6 +1800,8 @@ suite "transaction":
 
     block updateLengthMismatch:
       let id = db.put("unchanged", ring = "matrix")
+      expect KoutenValidationError:
+        db.batchUpdateAtomic(@[id], @["x", "extra"])
       expect ValueError:
         db.batchUpdateAtomic(@[id], @["x", "extra"])
       check db.get(id) == "unchanged"
@@ -1765,6 +1909,41 @@ suite "transaction":
       check db.lockActive(after)
       db.releaseLock(after)
 
+    db.close()
+
+  test "coordinate lock edge cases are fail-closed and idempotent":
+    var db = open()
+    discard db.put("user", ring = "users/123")
+
+    expect KoutenValidationError:
+      discard db.acquireRingLock("")
+    expect KoutenValidationError:
+      discard db.acquireStellarLock("")
+    expect KoutenValidationError:
+      discard db.acquireRingLock("users/123", ttlSeconds = 0)
+
+    let first = db.acquireRingLock("users/123", ttlSeconds = 0.01)
+    sleep(30)
+    let second = db.acquireRingLock("users/123", ttlSeconds = 5)
+    check second.fence > first.fence
+    check second.token != first.token
+
+    db.releaseLock(first)
+    check db.lockActive(second)
+    db.releaseLock(second)
+    db.releaseLock(second)
+    check not db.lockActive(second)
+
+    let third = db.acquireRingLock("users/123", ttlSeconds = 5)
+    check db.lockActive(third)
+    db.releaseLock(KoutenLockToken(scope: third.scope,
+                                  coordinate: third.coordinate,
+                                  token: third.token & "-stale",
+                                  fence: third.fence,
+                                  expiresAt: third.expiresAt,
+                                  keys: third.keys))
+    check db.lockActive(third)
+    db.releaseLock(third)
     db.close()
 
 suite "galaxy router":

@@ -17,6 +17,7 @@ scripts/recovery_smoke.sh
 scripts/universe_sync_failure_smoke.sh
 scripts/universe_sync_remote_smoke.sh
 scripts/demo_smoke.sh
+scripts/compose_config_smoke.sh
 
 if [[ "${KOUTEN_TEST_DRIVERS:-0}" == "1" ]]; then
   scripts/driver_compat.sh
