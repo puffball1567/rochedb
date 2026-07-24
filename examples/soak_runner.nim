@@ -162,8 +162,12 @@ when isMainModule:
       }
       let payload = $doc
       var id: KoutenId
+      var currentOp = "put"
+      var currentPickSeq = 0
+      var currentPickRing = ""
 
       try:
+        currentOp = "put"
         timed(c.putUs, c.maxPutUs):
           id = db.put(doc, ring = ring, vec = vecFor(seqNo, rings))
         inc c.puts
@@ -173,7 +177,10 @@ when isMainModule:
 
         if recent.len > 0:
           let pick = recent[int(nextRand(rng) mod uint64(recent.len))]
+          currentPickSeq = pick.seq
+          currentPickRing = pick.ring
           var got = ""
+          currentOp = "get"
           timed(c.getUs, c.maxGetUs):
             got = db.get(pick.id)
           inc c.gets
@@ -181,6 +188,7 @@ when isMainModule:
             raise newException(AssertionDefect,
               &"payload mismatch seq={pick.seq} expected={pick.payload} got={got}")
 
+          currentOp = "query"
           timed(c.queryUs, c.maxQueryUs):
             let q = db.query(pick.id, "{ seq ring }")
             if q.kind != JObject or not q.hasKey("seq") or
@@ -189,6 +197,7 @@ when isMainModule:
                 &"query projection mismatch seq={pick.seq} got={q}")
           inc c.queries
 
+        currentOp = "readRing"
         timed(c.ringReadUs, c.maxRingReadUs):
           let page = db.readRing(ring, KoutenReadOptions(
             filter: newJObject(),
@@ -201,6 +210,7 @@ when isMainModule:
         inc c.ringReads
 
         if seqNo mod retrieveEvery == 0:
+          currentOp = "retrieve"
           timed(c.retrieveUs, c.maxRetrieveUs):
             let rr = db.retrieveWithStats(vecFor(seqNo, rings), ring = ring, budget = 4)
             if rr.stats.returned != rr.hits.len:
@@ -209,6 +219,7 @@ when isMainModule:
           inc c.retrieves
 
         if seqNo mod metricsEvery == 0:
+          currentOp = "metrics"
           timed(c.metricsUs, c.maxMetricsUs):
             lastMetrics = db.metrics()
           inc c.metricsReads
@@ -233,6 +244,10 @@ when isMainModule:
           "type": "error",
           "elapsedSec": int(epochTime() - started),
           "seq": seqNo,
+          "op": currentOp,
+          "ring": ring,
+          "pickSeq": currentPickSeq,
+          "pickRing": currentPickRing,
           "error": e.msg,
           "counters": countersJson(c)
         })

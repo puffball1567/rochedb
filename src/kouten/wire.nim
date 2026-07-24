@@ -7,16 +7,22 @@
 ##   PUTR <ringLen> <payloadLen> <vecDim>\n<ring><payload><vec>
 ##       → ID <parent> <epoch> <seq> <tWrite> <period> <head>\n
 ##   GETID <parent> <epoch> <seq> <tWrite> <period> <head>\n
-##       → VAL <node> <len>\n<payload> | MISS\n
+##       → VAL <node> <len>\n<payload> | MISS
+##         | FWD <parent> <epoch> <seq> <tWrite> <period> <head> [owner]\n
 ##   QRYID <parent> <epoch> <seq> <tWrite> <period> <head> <selLen>\n<sel>
-##       → VAL <node> <len>\n<json> | MISS | ERR <msg>\n
+##       → VAL <node> <len>\n<json> | MISS | ERR <msg>
+##         | FWD <parent> <epoch> <seq> <tWrite> <period> <head> [owner]\n
 ##   TXGETID <parent> <epoch> <seq> <tWrite> <period> <head>\n
 ##       → VAL <node> <len>\n<payload> | MISS\n
 ##   TXQRYID <parent> <epoch> <seq> <tWrite> <period> <head> <selLen>\n<sel>
 ##       → VAL <node> <len>\n<json> | MISS | ERR <msg>\n
 ##   PUT <ringKey> <period> <head> <len> <vecDim>\n<payload><vec> → OK <seq> <tWrite>\n
-##   GET <parent> <seq> <period> <head> <tWrite>\n             → VAL <node> <len>\n<payload> | MISS\n
-##   QRY <parent> <seq> <period> <head> <tWrite> <len>\n<sel>  → VAL <node> <len>\n<json>  | MISS\n | ERR <msg>\n
+##   GET <parent> <seq> <period> <head> <tWrite>\n
+##       → VAL <node> <len>\n<payload> | MISS
+##         | FWD <parent> <seq> <tWrite> [owner]\n
+##   QRY <parent> <seq> <period> <head> <tWrite> <len>\n<sel>
+##       → VAL <node> <len>\n<json> | MISS | ERR <msg>
+##         | FWD <parent> <seq> <tWrite> [owner]\n
 ##   BGET <n> <bodyLen>\n repeated: <parent> <seq> <period> <head> <tWrite>\n
 ##       → BVAL <n> <payloadLen>\n repeated: <len>\n<payload>
 ##   TRF <parent> <seq> <period> <head> <tWrite> <len> <vecDim>\n<payload><vec> → OK\n
@@ -82,6 +88,7 @@ type
   WireGetResult* = object
     found*: bool
     node*: int
+    targetNode*: int
     value*: string
     codec*: PayloadCodec
     deleted*: bool
@@ -139,7 +146,7 @@ type
     challengeHex: string
     buffer: string
 
-var secureConns = initTable[int, SecureState]()
+var secureConns {.threadvar.}: Table[int, SecureState]
 
 proc parsePeers*(s: string): seq[Peer] =
   ## "host:port,host:port,..." を解析。リスト内の位置 = ノードID。
@@ -399,7 +406,8 @@ proc putRingReq*(c: ClusterClient, node: int, ring: string, payload: string,
          period: parseFloat(r[5]),
          head: parseFloat(r[6]))
 
-proc getIdReq*(c: ClusterClient, node: int, id: WireId): WireGetResult =
+proc getIdReq*(c: ClusterClient, node: int, id: WireId,
+               redirectsLeft = 2): WireGetResult =
   c.ensureCodecMetadata(node)
   let r = c.rpc(node, "GETID " & $id.parent & " " & $id.epoch & " " &
                 $id.seq & " " & $id.tWrite & " " & $id.period & " " &
@@ -409,33 +417,43 @@ proc getIdReq*(c: ClusterClient, node: int, id: WireId): WireGetResult =
   if r[0] == "GONE":
     return WireGetResult(found: false, node: node, deleted: true)
   if r[0] == "FWD":
+    let forwardedId = WireId(parent: parseBiggestUInt(r[1]).uint64,
+                             epoch: parseUInt(r[2]).uint32,
+                             seq: parseUInt(r[3]).uint32,
+                             tWrite: parseFloat(r[4]),
+                             period: parseFloat(r[5]),
+                             head: parseFloat(r[6]))
+    let targetNode = if r.len >= 8: parseInt(r[7]) else: -1
+    if targetNode >= 0 and redirectsLeft > 0:
+      return c.getIdReq(targetNode, forwardedId, redirectsLeft - 1)
     return WireGetResult(found: false, node: node, forwarded: true,
-                         id: WireId(parent: parseBiggestUInt(r[1]).uint64,
-                                    epoch: parseUInt(r[2]).uint32,
-                                    seq: parseUInt(r[3]).uint32,
-                                    tWrite: parseFloat(r[4]),
-                                    period: parseFloat(r[5]),
-                                    head: parseFloat(r[6])))
+                         id: forwardedId, targetNode: targetNode)
   expect(r, "VAL", "GETID")
   WireGetResult(found: true, node: parseInt(r[1]),
                 value: c.socks[node].readExact(parseInt(r[2])),
                 codec: if r.len >= 4: parsePayloadCodec(r[3]) else: pcRaw)
 
 proc queryIdReq*(c: ClusterClient, node: int, id: WireId,
-                 selection: string): WireGetResult =
+                 selection: string, redirectsLeft = 2): WireGetResult =
+  c.ensureCodecMetadata(node)
   let r = c.rpc(node, "QRYID " & $id.parent & " " & $id.epoch & " " &
                 $id.seq & " " & $id.tWrite & " " & $id.period & " " &
                 $id.head & " " & $selection.len, selection)
   if r[0] == "MISS":
     return WireGetResult(found: false, node: node)
   if r[0] == "FWD":
+    let forwardedId = WireId(parent: parseBiggestUInt(r[1]).uint64,
+                             epoch: parseUInt(r[2]).uint32,
+                             seq: parseUInt(r[3]).uint32,
+                             tWrite: parseFloat(r[4]),
+                             period: parseFloat(r[5]),
+                             head: parseFloat(r[6]))
+    let targetNode = if r.len >= 8: parseInt(r[7]) else: -1
+    if targetNode >= 0 and redirectsLeft > 0:
+      return c.queryIdReq(targetNode, forwardedId, selection,
+                          redirectsLeft - 1)
     return WireGetResult(found: false, node: node, forwarded: true,
-                         id: WireId(parent: parseBiggestUInt(r[1]).uint64,
-                                    epoch: parseUInt(r[2]).uint32,
-                                    seq: parseUInt(r[3]).uint32,
-                                    tWrite: parseFloat(r[4]),
-                                    period: parseFloat(r[5]),
-                                    head: parseFloat(r[6])))
+                         id: forwardedId, targetNode: targetNode)
   if r[0] == "ERR":
     raise newException(ValueError, "query: " & r[1 .. ^1].join(" "))
   expect(r, "VAL", "QRYID")
@@ -470,18 +488,20 @@ proc getReq*(c: ClusterClient, node: int, parent: uint64, seq: uint32,
              period, head, tWrite: float): tuple[found: bool, node: int, value: string,
                                                   codec: PayloadCodec,
                                                   forwarded: bool, newParent: uint64,
-                                                  newSeq: uint32, newTWrite: float] =
+                                                  newSeq: uint32, newTWrite: float,
+                                                  targetNode: int] =
   c.ensureCodecMetadata(node)
   let r = c.rpc(node, "GET " & $parent & " " & $seq & " " & $period & " " &
                 $head & " " & $tWrite)
-  if r[0] == "MISS": return (false, node, "", pcRaw, false, 0'u64, 0'u32, 0.0)
+  if r[0] == "MISS": return (false, node, "", pcRaw, false, 0'u64, 0'u32, 0.0, -1)
   if r[0] == "FWD":
     return (false, node, "", pcRaw, true, parseBiggestUInt(r[1]).uint64,
-            parseUInt(r[2]).uint32, parseFloat(r[3]))
+            parseUInt(r[2]).uint32, parseFloat(r[3]),
+            if r.len >= 5: parseInt(r[4]) else: -1)
   expect(r, "VAL", "GET")
   (true, parseInt(r[1]), c.socks[node].readExact(parseInt(r[2])),
    (if r.len >= 4: parsePayloadCodec(r[3]) else: pcRaw),
-   false, 0'u64, 0'u32, 0.0)
+   false, 0'u64, 0'u32, 0.0, -1)
 
 proc getValueReq*(c: ClusterClient, node: int, parent: uint64, seq: uint32,
                   period, head, tWrite: float): tuple[found: bool, node: int,
@@ -489,19 +509,21 @@ proc getValueReq*(c: ClusterClient, node: int, parent: uint64, seq: uint32,
                                                        forwarded: bool,
                                                        newParent: uint64,
                                                        newSeq: uint32,
-                                                       newTWrite: float] =
+                                                       newTWrite: float,
+                                                       targetNode: int] =
   ## Hot path for ordinary get(). It intentionally ignores optional codec
   ## metadata because callers only need the payload bytes.
   let r = c.rpc(node, "GET " & $parent & " " & $seq & " " & $period & " " &
                 $head & " " & $tWrite)
   if r[0] == "MISS":
-    return (false, node, "", false, 0'u64, 0'u32, 0.0)
+    return (false, node, "", false, 0'u64, 0'u32, 0.0, -1)
   if r[0] == "FWD":
     return (false, node, "", true, parseBiggestUInt(r[1]).uint64,
-            parseUInt(r[2]).uint32, parseFloat(r[3]))
+            parseUInt(r[2]).uint32, parseFloat(r[3]),
+            if r.len >= 5: parseInt(r[4]) else: -1)
   expect(r, "VAL", "GET")
   (true, parseInt(r[1]), c.socks[node].readExact(parseInt(r[2])),
-   false, 0'u64, 0'u32, 0.0)
+   false, 0'u64, 0'u32, 0.0, -1)
 
 proc batchGetReq*(c: ClusterClient, node: int,
                   ids: seq[tuple[parent: uint64, seq: uint32, period: float,
@@ -552,18 +574,20 @@ proc queryReq*(c: ClusterClient, node: int, parent: uint64, seq: uint32,
                selection: string): tuple[found: bool, node: int, value: string,
                                           codec: PayloadCodec,
                                           forwarded: bool, newParent: uint64,
-                                          newSeq: uint32, newTWrite: float] =
+                                          newSeq: uint32, newTWrite: float,
+                                          targetNode: int] =
   let r = c.rpc(node, "QRY " & $parent & " " & $seq & " " & $period & " " &
                 $head & " " & $tWrite & " " & $selection.len, selection)
-  if r[0] == "MISS": return (false, node, "", pcJson, false, 0'u64, 0'u32, 0.0)
+  if r[0] == "MISS": return (false, node, "", pcJson, false, 0'u64, 0'u32, 0.0, -1)
   if r[0] == "FWD":
     return (false, node, "", pcJson, true, parseBiggestUInt(r[1]).uint64,
-            parseUInt(r[2]).uint32, parseFloat(r[3]))
+            parseUInt(r[2]).uint32, parseFloat(r[3]),
+            if r.len >= 5: parseInt(r[4]) else: -1)
   if r[0] == "ERR":
     raise newException(ValueError, "query: " & r[1 .. ^1].join(" "))
   expect(r, "VAL", "QRY")
   (true, parseInt(r[1]), c.socks[node].readExact(parseInt(r[2])), pcJson,
-   false, 0'u64, 0'u32, 0.0)
+   false, 0'u64, 0'u32, 0.0, -1)
 
 proc transferReq*(c: ClusterClient, node: int, parent: uint64, seq: uint32,
                   period, head, tWrite: float, payload: string,

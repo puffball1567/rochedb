@@ -147,6 +147,12 @@ similar platforms.
 | `items` | Stored live particles/documents on the node | Capacity and skew monitoring |
 | `rings` | Known ring metadata count | Routing/domain growth |
 | `forwarders` | Active handoff forwarders | Orbital handoff pressure |
+| `handoffPending` | Records currently awaiting a transfer result | In-flight orbital handoff pressure |
+| `handoffQueueDepth` | Transfers waiting for the background worker | Sustained worker backlog |
+| `handoffQueued` / `handoffApplied` | Cumulative accepted and acknowledged transfers | Handoff throughput and completion |
+| `handoffFailed` | Transfer attempts that failed or timed out | Peer reachability or TLS/auth failures |
+| `handoffStaleAck` | Acknowledgements rejected because the record or target changed | Concurrent mutation or ownership churn |
+| `handoffQueueFull` | Queue submissions rejected by backpressure | Worker saturation; source copies remain retained |
 | `walBytes` | Current WAL file size in bytes | Disk capacity and compaction trigger |
 | `warpJobs` | Persisted warp jobs | Delayed update backlog |
 | `universeSyncEvents` | Persisted universe sync outbox events | Eventual-convergence backlog / remote delivery pressure |

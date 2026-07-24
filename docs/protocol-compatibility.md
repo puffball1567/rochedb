@@ -35,6 +35,15 @@ Rules:
   (`ERR bad-request`). The response shape of successful `RHIT` frames is not
   changed by the query-cost guard.
 
+Ownership redirects may append the calculated owner node to `FWD` responses.
+The field is additive: older clients may ignore it, while current clients use
+it to redirect directly instead of probing every node.
+
+Point reads are served only by the calculated current owner. A previous owner
+may retain a short handoff copy, but it is not exposed as a read fallback
+because it cannot prove that a newer update or delete does not exist. Clients
+follow at most two explicit owner redirects and never perform all-node fan-out.
+
 ## Payload Codec Metadata
 
 `PUT`, `PUTR`, transaction apply, and handoff frames may append one codec name:

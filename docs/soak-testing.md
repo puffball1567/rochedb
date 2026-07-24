@@ -17,6 +17,12 @@ The runner starts a three-node local cluster and repeatedly exercises:
 The workload writes progress as JSON Lines so failures can be inspected even if
 the run stops before the target duration.
 
+During a run, inspect the `lastMetrics` entries in `soak-progress.jsonl`.
+`handoffPending` and `handoffQueueDepth` should remain bounded instead of
+growing continuously. `handoffFailed`, `handoffStaleAck`, and
+`handoffQueueFull` are cumulative counters and must be investigated when they
+increase persistently.
+
 ## Quick Smoke
 
 Use a short duration when checking the script itself:

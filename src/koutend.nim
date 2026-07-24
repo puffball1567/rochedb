@@ -4,21 +4,24 @@
 ##   - peers リスト内の自分の位置が弧の担当を決める（等分割, epoch 1）
 ##   - 時計は wall clock（NTP 有界スキュー前提 = 設計書 §6.3 の guard band 側で吸収）
 ##   - ハンドオフ: 粒子が弧境界を越える前に後続ノードへ先送り（lookahead）し、
-##     越えたあとも猶予期間（grace）は手元に残す = §6.1 の「先読み＋尾流」の最小版
+##     転送先の適用応答後も猶予期間（grace）は手元に残す。
 ##   - --data を与えると追記ログに永続化（§16）。再起動後は再生 → 自分の弧に
 ##     ないものはハンドオフが自然に掃き出す（自己修復）
 
-import std/[algorithm, selectors, net, os, strutils, times, monotimes, json, tables, parseopt, hashes]
+import std/[algorithm, selectors, net, os, strutils, times, monotimes, json,
+            tables, parseopt, hashes, atomics]
 when not defined(windows):
   import std/posix
 import kouten/[core, store, select, wire, field, auth]
 
 const
   Lookahead = 0.5   # [s] 境界のこれだけ前に後続へ複製を送る
-  Grace = 1.0       # [s] 所有を失ってから削除するまでの猶予（= 尾流 w の時間版）
+  Grace = 1.0       # [s] 転送 ACK 後も尾流コピーを残す猶予
   TickMs = 100      # ハンドオフ判定の周期
   DefaultSlowTickSec = 10.0
-  MaxTransfersPerTick = 256   # 一括移動時も select ループを塞がない上限
+  MaxTransfersPerTick = 256   # cheap queue submissions; worker provides backpressure
+  HandoffQueueCapacity = 1024
+  HandoffTimeoutMs = 500      # worker-only timeout; never blocks foreground reads
   MaxPreparedSelections = 1024
   MaxPreparedSelectionSourceBytes = 64 * 1024
   MaxPreparedSelectionCacheBytes = 1024 * 1024
@@ -36,6 +39,49 @@ const
     else: 1_000_000
 
 type
+  HandoffTaskKind = enum
+    htkTransfer, htkStop
+
+  HandoffTask = object
+    kind: HandoffTaskKind
+    attempt: uint64
+    target: int
+    parent: uint64
+    seq: uint32
+    period: float
+    head: float
+    tWrite: float
+    payload: string
+    codec: PayloadCodec
+    vec: seq[float32]
+
+  HandoffResult = object
+    attempt: uint64
+    target: int
+    parent: uint64
+    seq: uint32
+    applied: bool
+
+  HandoffWorkerConfig = object
+    peers: seq[Peer]
+    username: string
+    password: string
+    secretKey: string
+    tls: bool
+    tlsCaFile: string
+    tlsServerName: string
+    tlsInsecureSkipVerify: bool
+
+  PendingHandoff = object
+    attempt: uint64
+    target: int
+    period: float
+    head: float
+    tWrite: float
+    payload: string
+    codec: PayloadCodec
+    vec: seq[float32]
+
   UserRole = enum
     roleReader, roleWriter, roleAdmin
 
@@ -52,6 +98,13 @@ type
     dataDir: string
     fs: FieldState
     peerLink: ClusterClient
+    pendingHandoffs: Table[(uint64, uint32), PendingHandoff]
+    nextHandoffAttempt: uint64
+    handoffQueued: uint64
+    handoffApplied: uint64
+    handoffFailed: uint64
+    handoffStaleAck: uint64
+    handoffQueueFull: uint64
     slowTickSec: float
     running: bool
     draining: bool
@@ -91,6 +144,43 @@ type
     preparedSelectionLru: seq[string]
     preparedSelectionBytes: int
     codecMetadata: Table[int, bool]
+
+var
+  handoffTasks: Channel[HandoffTask]
+  handoffResults: Channel[HandoffResult]
+  handoffStopping: Atomic[bool]
+
+proc handoffWorker(config: HandoffWorkerConfig) {.thread.} =
+  let client = newClusterClient(config.peers,
+                                username = config.username,
+                                password = config.password,
+                                secretKey = config.secretKey,
+                                tls = config.tls,
+                                tlsCaFile = config.tlsCaFile,
+                                tlsServerName = config.tlsServerName,
+                                tlsInsecureSkipVerify =
+                                  config.tlsInsecureSkipVerify)
+  try:
+    while true:
+      let task = handoffTasks.recv()
+      if task.kind == htkStop or handoffStopping.load():
+        break
+      var applied = false
+      try:
+        client.transferReq(task.target, task.parent, task.seq, task.period,
+                           task.head, task.tWrite, task.payload, task.vec,
+                           task.codec, timeoutMs = HandoffTimeoutMs)
+        applied = true
+      except CatchableError:
+        discard
+      handoffResults.send HandoffResult(
+        attempt: task.attempt,
+        target: task.target,
+        parent: task.parent,
+        seq: task.seq,
+        applied: applied)
+  finally:
+    client.close()
 
 type LocalHit = object
   parent: uint64
@@ -621,8 +711,82 @@ proc handoffTick(sv: Server) =
   let n = sv.peers.len
   if n <= 1:
     return
+
+  while true:
+    let completed = handoffResults.tryRecv()
+    if not completed.dataAvailable:
+      break
+    let r = completed.msg
+    let k = (r.parent, r.seq)
+    if k notin sv.pendingHandoffs:
+      continue
+    let pending = sv.pendingHandoffs[k]
+    if pending.attempt != r.attempt:
+      continue
+    sv.pendingHandoffs.del k
+    if not r.applied:
+      inc sv.handoffFailed
+      continue
+    if k notin sv.st.items:
+      inc sv.handoffStaleAck
+      continue
+    template current: untyped = sv.st.items[k]
+    let unchanged =
+      current.period == pending.period and
+      current.head == pending.head and
+      current.tWrite == pending.tWrite and
+      current.payload == pending.payload and
+      current.codec == pending.codec and
+      current.vec == pending.vec
+    if not unchanged:
+      inc sv.handoffStaleAck
+      continue
+    let owner = int(sv.tbl.node(orbitOf(current), now))
+    let validTarget =
+      r.target == owner or
+      (owner == sv.myId and r.target == (sv.myId + 1) mod n)
+    if validTarget:
+      current.sentAhead = true
+      inc sv.handoffApplied
+    else:
+      inc sv.handoffStaleAck
+
   var doomed: seq[(uint64, uint32)] = @[]
   var budget = MaxTransfersPerTick
+
+  proc enqueue(k: (uint64, uint32), target: int, p: Particle): bool =
+    if k in sv.pendingHandoffs:
+      return false
+    inc sv.nextHandoffAttempt
+    let attempt = sv.nextHandoffAttempt
+    let pending = PendingHandoff(
+      attempt: attempt,
+      target: target,
+      period: p.period,
+      head: p.head,
+      tWrite: p.tWrite,
+      payload: p.payload,
+      codec: p.codec,
+      vec: p.vec)
+    let task = HandoffTask(
+      kind: htkTransfer,
+      attempt: attempt,
+      target: target,
+      parent: p.parent,
+      seq: p.seq,
+      period: p.period,
+      head: p.head,
+      tWrite: p.tWrite,
+      payload: p.payload,
+      codec: p.codec,
+      vec: p.vec)
+    if not handoffTasks.trySend(task):
+      inc sv.handoffQueueFull
+      return false
+    sv.pendingHandoffs[k] = pending
+    inc sv.handoffQueued
+    true
+
   for k in sv.st.items.keys:
     if budget <= 0:
       break   # 残りは次の tick（サービス応答性を優先）
@@ -636,24 +800,17 @@ proc handoffTick(sv: Server) =
       let tCross = o.nextArrival(sv.tbl.arcStart(NodeId(nextNode)), now)
       if tCross - now < Lookahead:
         if not p.sentAhead:
-          try:
-            sv.peerLink.transferReq(nextNode, p.parent, p.seq, p.period, p.head,
-                                    p.tWrite, p.payload, p.vec, p.codec, timeoutMs = 500)
-            p.sentAhead = true
+          if enqueue(k, nextNode, p):
             dec budget
-          except CatchableError:
-            discard   # 次の tick で再試行
       else:
         p.sentAhead = false   # 新しい周回に入った
     else:
       if not p.sentAhead:
-        try:
-          sv.peerLink.transferReq(ownNow, p.parent, p.seq, p.period, p.head,
-                                  p.tWrite, p.payload, p.vec, p.codec, timeoutMs = 500)
-          p.sentAhead = true
+        if enqueue(k, ownNow, p):
           dec budget
-        except CatchableError:
-          discard   # 次の tick で再試行
+      # transferReq returns only after the destination has applied TRF. Keep a
+      # short tail copy for boundary races, then remove it. Failed/unknown
+      # transfers never set sentAhead and are retried without deleting source.
       if p.sentAhead and now - p.lastHere > Grace:
         doomed.add k
   for k in doomed:
@@ -1191,24 +1348,16 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       return true
     let owner = sv.ownerOf(parent, seq, period, head, tWrite)
     if owner != sv.myId:
-      let r =
-        if parts[0] == "QRYID":
-          sv.peerLink.queryReq(owner, parent, seq, period, head, tWrite, selection)
-        else:
-          sv.peerLink.getReq(owner, parent, seq, period, head, tWrite)
-      if r.forwarded:
-        sock.sendFrame("FWD " & $r.newParent & " " & $epoch & " " & $r.newSeq & " " &
-                       $r.newTWrite & " " & $period & " " & $head)
-      elif r.found:
-        sock.sendFrame("VAL " & $r.node & " " & $r.value.len &
-                       sv.codecSuffix(sock, r.codec), r.value)
-      else:
-        sock.sendFrame("MISS")
+      # Keep read routing non-blocking at the server layer. Synchronous
+      # server-to-server read forwarding can deadlock two single-loop nodes
+      # that ask each other for ownership resolution at the same time.
+      sock.sendFrame("FWD " & $parent & " " & $epoch & " " & $seq & " " &
+                     $tWrite & " " & $period & " " & $head & " " & $owner)
       return true
     if not sv.st.contains(parent, seq):
-      let k = (parent, seq)
-      if k in sv.st.forwarders and sv.st.forwarders[k].expiresAt >= now:
-        let f = sv.st.forwarders[k]
+      let localKey = (parent, seq)
+      if localKey in sv.st.forwarders and sv.st.forwarders[localKey].expiresAt >= now:
+        let f = sv.st.forwarders[localKey]
         sock.sendFrame("FWD " & $f.newParent & " " & $epoch & " " & $f.newSeq & " " &
                        $f.newTWrite & " " & $period & " " & $head)
       else:
@@ -1228,8 +1377,13 @@ proc handleFrame(sv: Server, sock: Socket): bool =
                      sv.codecSuffix(sock, codec), value)
   of "GET", "QRY":
     requireParts(parts, parts[0], if parts[0] == "QRY": 7 else: 6)
+    if parts.len != (if parts[0] == "QRY": 7 else: 6):
+      raise newException(ValueError, parts[0] & " has unexpected trailing fields")
     let parent = parseBiggestUInt(parts[1]).uint64
     let seq = parseUInt(parts[2]).uint32
+    let period = parseFloat(parts[3])
+    let head = parseFloat(parts[4])
+    let tWrite = parseFloat(parts[5])
     var selection = ""
     if parts[0] == "QRY":
       let selectionLen = parseInt(parts[6])
@@ -1241,10 +1395,14 @@ proc handleFrame(sv: Server, sock: Socket): bool =
       selection = sock.readExact(selectionLen)
     elif not sv.requireRingKey(sock, parent):
       return true
+    let owner = sv.ownerOf(parent, seq, period, head, tWrite)
+    if owner != sv.myId:
+      sock.sendFrame("FWD " & $parent & " " & $seq & " " & $tWrite & " " & $owner)
+      return true
     if not sv.st.contains(parent, seq):
-      let k = (parent, seq)
-      if k in sv.st.forwarders and sv.st.forwarders[k].expiresAt >= now:
-        let f = sv.st.forwarders[k]
+      let localKey = (parent, seq)
+      if localKey in sv.st.forwarders and sv.st.forwarders[localKey].expiresAt >= now:
+        let f = sv.st.forwarders[localKey]
         sock.sendFrame("FWD " & $f.newParent & " " & $f.newSeq & " " &
                        $f.newTWrite)
       else:
@@ -1318,6 +1476,12 @@ proc handleFrame(sv: Server, sock: Socket): bool =
     p.vec =
       if vecDim == 0: @[]
       else: sock.readExact(checkedVecBytes(vecDim)).bytesVec(vecDim).normalize()
+    # A lookahead copy can arrive before this node owns the orbit. Mark that
+    # state so the receiver does not immediately send the copy back to the
+    # current owner. Once ownership arrives, handoffTick clears sentAhead well
+    # before the following boundary and normal forwarding resumes.
+    p.sentAhead =
+      sv.ownerOf(p.parent, p.seq, p.period, p.head, p.tWrite) != sv.myId
     if p.parent notin sv.st.ringMeta:
       sv.st.putRingMeta(p.parent, p.period, p.head)
     # 追い越し対策: 相手起点の seq 採番と衝突しないよう max を取る
@@ -1354,6 +1518,13 @@ proc handleFrame(sv: Server, sock: Socket): bool =
                    "items " & $sv.st.count & " " &
                    "rings " & $sv.st.ringMeta.len & " " &
                    "forwarders " & $sv.st.forwarders.len & " " &
+                   "handoffPending " & $sv.pendingHandoffs.len & " " &
+                   "handoffQueueDepth " & $handoffTasks.peek & " " &
+                   "handoffQueued " & $sv.handoffQueued & " " &
+                   "handoffApplied " & $sv.handoffApplied & " " &
+                   "handoffFailed " & $sv.handoffFailed & " " &
+                   "handoffStaleAck " & $sv.handoffStaleAck & " " &
+                   "handoffQueueFull " & $sv.handoffQueueFull & " " &
                    "walBytes " & $sv.st.logSize & " " &
                    "warpJobs " & $sv.st.warpJobs.len & " " &
                    "universeSyncEvents " & $sv.st.universeSyncEvents.len & " " &
@@ -1581,6 +1752,8 @@ proc main() =
                   users: users,
                   galaxy: galaxy,
                   allowedRingPrefixes: allowedRingPrefixes,
+                  pendingHandoffs:
+                    initTable[(uint64, uint32), PendingHandoff](),
                   preparedSelections: initTable[string, Selection](),
                   preparedSelectionLru: @[],
                   preparedSelectionBytes: 0,
@@ -1593,6 +1766,20 @@ proc main() =
                                  keyFile = sv.tlsKeyFile)
   sv.st.setGalaxy(galaxy)
   sv.rebuildFieldState()
+
+  handoffTasks.open(HandoffQueueCapacity)
+  handoffResults.open()
+  handoffStopping.store(false)
+  var handoffThread: Thread[HandoffWorkerConfig]
+  createThread(handoffThread, handoffWorker, HandoffWorkerConfig(
+    peers: peers,
+    username: authUser,
+    password: authPassword,
+    secretKey: authSecretKey,
+    tls: tlsCertFile.len > 0,
+    tlsCaFile: tlsCaFile,
+    tlsServerName: tlsServerName,
+    tlsInsecureSkipVerify: tlsInsecureSkipVerify))
 
   let listener = newSocket()
   listener.setSockOpt(OptReuseAddr, true)
@@ -1684,6 +1871,11 @@ proc main() =
       sv.st.sync()
       lastSlowTick = nowM
   sv.st.sync()
+  handoffStopping.store(true)
+  handoffTasks.send HandoffTask(kind: htkStop)
+  handoffThread.joinThread()
+  handoffTasks.close()
+  handoffResults.close()
   sv.st.close()
   sv.peerLink.close()
 

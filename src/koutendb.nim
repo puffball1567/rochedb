@@ -21,7 +21,7 @@
 ## 永続化は open/サーバ起動時にディレクトリを渡すだけ:
 ## `koutendb.open(dataDir = "/var/lib/kouten")` / `koutend --data=DIR`
 
-import std/[algorithm, tables, hashes, json, times, strutils, os]
+import std/[algorithm, tables, hashes, json, times, strutils, os, net]
 import kouten/[core, store, select, wire, field, vector_backend, faiss_backend,
               planner_backend, payload]
 
@@ -2100,7 +2100,16 @@ proc fetchClusterPayload(db: KoutenDb, id: KoutenId, selection: string,
   ## レースを閉じる（移動は常に前方向なので、primary 再訪で必ず追いつく）。
   let ri = db.rings[id.parent]
   let n = int(db.tbl.nNodes)
-  let primary = int(db.tbl.node(db.orbitOf(id), epochTime()))
+  let orbitalPrimary = int(db.tbl.node(db.orbitOf(id), epochTime()))
+  # Keep point reads bounded and fail closed. A previous owner may retain a
+  # handoff copy, but it cannot safely prove that a newer delete or update does
+  # not exist until mutation versions and tombstones are implemented.
+  var candidates = @[orbitalPrimary]
+  var redirectsLeft = 2
+  proc addTarget(node, at: int) =
+    if redirectsLeft > 0 and node >= 0 and node < n:
+      candidates.insert(node, at)
+      dec redirectsLeft
   proc landingRead(): tuple[hit: bool, deleted: bool, value: EncodedPayload] =
     let r = db.client.txGetIdReq(0, WireId(parent: id.parent, epoch: id.epoch,
       seq: id.seq, tWrite: id.tWrite, period: ri.period, head: ri.headAngle),
@@ -2118,9 +2127,13 @@ proc fetchClusterPayload(db: KoutenDb, id: KoutenId, selection: string,
     if pending.hit:
       return pending.value
     db.clearPendingLandingRead(id)
-  for node in [primary, (primary + n - 1) mod n, primary]:
+  var candidateIndex = 0
+  while candidateIndex < candidates.len:
+    let node = candidates[candidateIndex]
+    inc candidateIndex
     var r: tuple[found: bool, node: int, value: string, codec: PayloadCodec, forwarded: bool,
-                 newParent: uint64, newSeq: uint32, newTWrite: float]
+                 newParent: uint64, newSeq: uint32, newTWrite: float,
+                 targetNode: int]
     try:
       if selection.len == 0 and not needCodec:
         let raw = db.client.getValueReq(node, id.parent, id.seq, ri.period,
@@ -2128,15 +2141,16 @@ proc fetchClusterPayload(db: KoutenDb, id: KoutenId, selection: string,
         r = (found: raw.found, node: raw.node, value: raw.value,
              codec: pcRaw, forwarded: raw.forwarded,
              newParent: raw.newParent, newSeq: raw.newSeq,
-             newTWrite: raw.newTWrite)
+             newTWrite: raw.newTWrite, targetNode: raw.targetNode)
       else:
         r =
           if selection.len == 0:
-            db.client.getReq(node, id.parent, id.seq, ri.period, ri.headAngle, id.tWrite)
+            db.client.getReq(node, id.parent, id.seq, ri.period, ri.headAngle,
+                             id.tWrite)
           else:
             db.client.queryReq(node, id.parent, id.seq, ri.period, ri.headAngle,
                                id.tWrite, selection)
-    except IOError, OSError:
+    except IOError, OSError, TimeoutError:
       let pendingRetry = landingRead()
       if pendingRetry.deleted:
         raise newException(KeyError, "id は cluster tx landing intent で削除済み")
@@ -2146,6 +2160,11 @@ proc fetchClusterPayload(db: KoutenDb, id: KoutenId, selection: string,
     if r.found:
       return encodedPayload(r.value, r.codec)
     if r.forwarded:
+      if r.targetNode >= 0:
+        # Ownership changed after the client calculated orbitalPrimary. Follow
+        # the server's current target without probing unrelated nodes.
+        addTarget(r.targetNode, candidateIndex)
+        continue
       if fwdDepth >= 1:
         raise newException(KeyError, "FWD chain が長すぎる")
       if r.newParent notin db.rings:
